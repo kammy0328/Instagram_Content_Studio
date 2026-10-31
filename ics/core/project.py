@@ -68,7 +68,12 @@ class Project:
                     setattr(self.rec, k, info[k])
             self.state = EditState.from_dict(payload.get("state", {}))
             self.recovered = crashed
-        return {"crashed": crashed, "restored": bool(payload), "skipped": skipped}
+        return {
+            "crashed": crashed,
+            "restored": bool(payload),
+            "skipped": skipped,
+            "db_recovered": self.store.db_recovered,
+        }
 
     def close(self) -> None:
         if self._closed:

@@ -29,6 +29,10 @@ class ProjectStore:
     def __init__(self, path: Path):
         self.path = Path(path)
         self._lock = threading.Lock()
+        self.backup_path = self.path.with_name(self.path.name + ".backup.json")
+        self.backup_prev_path = self.path.with_name(self.path.name + ".backup.prev.json")
+        self.db_recovered: str | None = None  # 'backup'(백업으로 복구) | 'empty'(백업도 없어 빈 상태) | None
+        self.quarantined: Path | None = None
         self._session_lock = self.path.with_name(self.path.name + ".lock").open("a+b")
         try:
             if self._session_lock.seek(0, os.SEEK_END) == 0:
@@ -46,13 +50,75 @@ class ProjectStore:
                     fcntl.flock(self._session_lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             except OSError as err:
                 raise RuntimeError("이 프로젝트는 다른 실행에서 사용 중입니다. 먼저 해당 창을 닫아 주세요.") from err
-            self._conn = self._connect()
-            self._init()
+            self._open_db()
         except BaseException:
             if hasattr(self, "_conn"):
                 self._conn.close()
             self._session_lock.close()
             raise
+
+    def _open_db(self) -> None:
+        """DB 를 연다. 파일 전체가 손상됐으면(헤더/페이지) 손상본을 따로 보관하고 새 DB 를 만든 뒤 백업에서 복구한다."""
+        try:
+            self._conn = self._connect()
+            self._init()
+            ok = self._conn.execute("PRAGMA quick_check").fetchone()
+            if not ok or ok[0] != "ok":
+                raise sqlite3.DatabaseError("quick_check 실패")
+            return
+        except sqlite3.DatabaseError:
+            if hasattr(self, "_conn"):
+                try:
+                    self._conn.close()
+                except sqlite3.Error:
+                    pass
+                del self._conn
+        self._quarantine()
+        self._conn = self._connect()
+        self._init()
+        self.db_recovered = "empty"
+        payload = self._read_backup()
+        if payload is not None:
+            self.save(payload)
+            self.db_recovered = "backup"
+
+    def _quarantine(self) -> None:
+        """손상된 DB(와 WAL/SHM)를 지우지 않고 이름만 바꿔 보관한다 (나중에 수동 분석 가능)."""
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        self.quarantined = self.path.with_name(f"{self.path.name}.corrupt_{stamp}")
+        for suffix in ("", "-wal", "-shm"):
+            src = self.path.with_name(self.path.name + suffix)
+            if src.exists():
+                os.replace(src, self.quarantined.with_name(self.quarantined.name + suffix))
+
+    # ------------------------------------------------------------ 백업 (DB 전체 손상 대비)
+    def _write_backup(self, text: str, chk: str) -> None:
+        """최신 스냅샷을 DB 와 별개의 파일로도 남긴다: 임시 파일 -> fsync -> 원자적 교체. 직전 백업은 한 단계 보관."""
+        tmp = self.backup_path.with_name(self.backup_path.name + ".tmp")
+        try:
+            with tmp.open("w", encoding="utf-8") as f:
+                f.write(json.dumps({"checksum": chk, "data": text}, ensure_ascii=False))
+                f.flush()
+                os.fsync(f.fileno())
+            if self.backup_path.exists():
+                os.replace(self.backup_path, self.backup_prev_path)
+            os.replace(tmp, self.backup_path)
+        except OSError:
+            # 백업은 보조 수단: 실패해도 DB 저장은 이미 성공했으므로 저장 자체를 실패로 만들지 않는다
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    def _read_backup(self) -> dict | None:
+        for p in (self.backup_path, self.backup_prev_path):
+            try:
+                doc = json.loads(p.read_text(encoding="utf-8"))
+                if _checksum(doc["data"]) == doc["checksum"]:
+                    return json.loads(doc["data"])
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+        return None
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.path), timeout=10, check_same_thread=False, isolation_level=None)
@@ -103,13 +169,18 @@ class ProjectStore:
             except BaseException:
                 c.execute("ROLLBACK")
                 raise
-            return sid
+        self._write_backup(text, chk)
+        return sid
 
     def load_latest(self) -> tuple[dict | None, int]:
         """체크섬이 유효한 가장 최근 스냅샷. (payload, 건너뛴 손상 스냅샷 수)"""
         skipped = 0
-        with self._lock:
-            rows = self._conn.execute("SELECT id, checksum, data FROM snapshots ORDER BY id DESC").fetchall()
+        try:
+            with self._lock:
+                rows = self._conn.execute("SELECT id, checksum, data FROM snapshots ORDER BY id DESC").fetchall()
+        except sqlite3.DatabaseError:
+            rows = []  # 열 때는 멀쩡했지만 읽는 중 페이지 손상이 드러난 경우: 백업으로 대체
+            skipped = 1
         for _sid, chk, data in rows:
             if _checksum(data) == chk:
                 try:
@@ -117,6 +188,10 @@ class ProjectStore:
                 except json.JSONDecodeError:
                     pass
             skipped += 1
+        backup = self._read_backup()  # DB 에 쓸 만한 스냅샷이 없으면 별도 백업을 시도
+        if backup is not None:
+            self.db_recovered = self.db_recovered or "backup"
+            return backup, skipped
         return None, skipped
 
     def snapshot_count(self) -> int:

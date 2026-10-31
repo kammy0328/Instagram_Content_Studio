@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sqlite3
 import sys
 import time
 
@@ -26,9 +25,11 @@ def test_corrupt_database_open_releases_file_handle(tmp_path):
 
     path = tmp_path / "corrupt.sqlite"
     path.write_bytes(b"not a database" * 300)
-    with pytest.raises(sqlite3.DatabaseError):
-        ProjectStore(path)
-    path.unlink()
+    store = ProjectStore(path)  # 손상된 DB 는 따로 보관하고 새 DB 로 시작한다 (백업이 없으면 빈 상태)
+    assert store.db_recovered == "empty"
+    store.close()
+    for f in tmp_path.iterdir():  # 열었던 핸들이 모두 풀려 있어야 Windows 에서도 지울 수 있다
+        f.unlink()
 
 
 def test_project_close_failure_preserves_session_and_allows_retry(saved_project, monkeypatch):

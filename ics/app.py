@@ -149,7 +149,17 @@ class App:
         msgs = []
         if res["crashed"] and res["restored"]:
             msgs.append("이전 세션이 비정상 종료되어 마지막으로 정상 저장된 상태를 복구했습니다.")
-        if res["skipped"]:
+        if res.get("db_recovered") == "backup":
+            msgs.append(
+                "프로젝트 저장 파일(DB)이 손상되어 별도 백업에서 복구했습니다. 손상된 파일은 프로젝트 폴더에 "
+                "'.corrupt_날짜' 이름으로 보관했습니다. 마지막 편집 내용을 확인하세요."
+            )
+        elif res.get("db_recovered") == "empty":
+            msgs.append(
+                "프로젝트 저장 파일(DB)이 손상되었고 복구할 백업도 없어 빈 상태로 시작합니다. "
+                "손상된 파일은 프로젝트 폴더에 '.corrupt_날짜' 이름으로 보관했습니다."
+            )
+        if res["skipped"] and res.get("db_recovered") is None:
             msgs.append(f"손상된 저장본 {res['skipped']}개를 건너뛰고 이전 정상 저장본으로 복구했습니다.")
         if summ and (
             abs(summ.get("duration", 0) - info.duration) > 0.05
