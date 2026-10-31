@@ -50,13 +50,17 @@ class CloudScheduler:
             p["video_media_type"] = spec.settings["video_media_type"]
         return p
 
-    def submit(self, job_id: int) -> State:
+    def submit(self, job_id: int, min_lead: float = MIN_LEAD) -> State:
         e = self.engine
         job = e.store.get(job_id)
         if job.state is not State.SCHEDULED or job.schedule_at is None:
             raise ValueError("예약 시각이 정해진 승인 작업만 클라우드에 맡길 수 있습니다.")
-        if job.schedule_at - e.clock() < MIN_LEAD:
-            raise ValueError("예약 시각은 지금부터 2분 이상 뒤여야 합니다.")
+        if job.schedule_at - e.clock() < min_lead:
+            raise ValueError(
+                "예약 시각은 지금부터 2분 이상 뒤여야 합니다."
+                if min_lead >= MIN_LEAD
+                else "예약 시각이 너무 가깝습니다."
+            )
         reasons = e.verify_before_upload(job)  # 승인 이후 파일/계정/내용 변경 재검사
         if reasons:
             e.store.invalidate_approval(job_id, " / ".join(reasons))

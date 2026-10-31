@@ -224,6 +224,62 @@ def _check_audio(work: Path, qt_pump) -> str:
     return head + f" -> 기본 장치 '{dev.description()}' 재생 시작 OK (상태 {state})"
 
 
+def _check_publisher(work: Path) -> str:
+    """Publisher: 모듈이 번들에 들어갔는지, 비밀값 보관(Windows 에서는 실제 DPAPI), 저장소/수동 내보내기가 동작하는지."""
+    import importlib
+
+    for m in (
+        "adapter",
+        "capability",
+        "cloud",
+        "engine",
+        "models",
+        "relay",
+        "scheduler",
+        "secrets",
+        "service",
+        "store",
+        "transport",
+        "validate",
+    ):
+        importlib.import_module(f"ics.publisher.{m}")
+    from .publisher.models import Kind
+    from .publisher.secrets import default_secret_store
+    from .publisher.service import PublisherService
+
+    d = work / "publisher"
+    d.mkdir(parents=True, exist_ok=True)
+    sec = default_secret_store(d / "secrets.json")
+    sec.set("selftest", "IGQVJ_SELFTEST_VALUE_0123456789")
+    if sec.persistent:
+        if sec.get("selftest") != "IGQVJ_SELFTEST_VALUE_0123456789":
+            raise RuntimeError("DPAPI 복호화 결과가 다릅니다.")
+        if "SELFTEST_VALUE" in (d / "secrets.json").read_text("utf-8"):
+            raise RuntimeError("비밀값이 평문으로 저장되었습니다.")
+    sec.delete("selftest")
+
+    class _S:
+        def __init__(self):
+            self.v = {}
+
+        def get(self, k, default=""):
+            return self.v.get(k, default)
+
+        def set(self, k, v):
+            self.v[k] = v
+
+    svc = PublisherService(d, _S(), sec)
+    if len(svc.missing_setup()) != 4:
+        raise RuntimeError("설정 부족 점검이 동작하지 않습니다.")
+    root = work / "out" / "P"
+    for sub in ("STORY", "REELS", "FEED", "CAPTION"):
+        (root / sub).mkdir(parents=True, exist_ok=True)
+    (root / "STORY" / "P_STORY_01.mp4").write_bytes(b"\0\0\0\x18ftypmp42" + b"\0" * 16)
+    (root / "CAPTION" / "CAPTION.txt").write_text("본문", "utf-8")
+    files = svc.export_manual(root, work / "manual", {Kind.STORY})
+    return f"모듈 로드 OK, 비밀값 보관({'DPAPI' if sec.persistent else '메모리'}), 수동 내보내기 {len(files)}개"
+
+
 def run_selftest(outfile: str | None = None) -> int:
     target = Path(outfile) if outfile else Path(tempfile.gettempdir()) / "ics_selftest.txt"
     rep = _Report(target)
@@ -248,6 +304,7 @@ def run_selftest(outfile: str | None = None) -> int:
         rep.run("Qt 로드와 플랫폼 플러그인", _check_qt)
         rep.run("영상 생성 -> 분석 -> 렌더 -> 편집 창", lambda: _check_pipeline(work, pump))
         rep.run("소리: 재생용 WAV 생성과 출력 장치", lambda: _check_audio(work, pump))
+        rep.run("Publisher: 모듈/비밀값 보관/수동 내보내기", lambda: _check_publisher(work))
     except Exception:  # noqa: BLE001
         rep.failed += 1
         rep.add("[FAIL] 자체 점검 중 예외\n" + traceback.format_exc())

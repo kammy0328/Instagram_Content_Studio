@@ -1,6 +1,6 @@
 ; Inno Setup 6 스크립트 - PyInstaller 결과물(dist\InstagramContentStudio)을 설치 파일로 묶는다.
 #define MyAppName "Instagram Content Studio"
-#define MyAppVersion "1.0.6"
+#define MyAppVersion "1.1.0"
 #define MyAppExe "InstagramContentStudio.exe"
 
 [Setup]
@@ -35,6 +35,8 @@ Name: "desktopicon"; Description: "바탕 화면 아이콘 만들기"; Flags: un
 
 [Files]
 Source: "..\dist\InstagramContentStudio\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; 클라우드 중계(Cloudflare Worker) 소스: 사용자가 직접 배포한다 (README.md 의 설정 순서 참고)
+Source: "..\worker\*"; DestDir: "{app}\relay"; Excludes: "node_modules\*,.wrangler\*,test\*,.dev.vars"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"

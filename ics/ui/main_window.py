@@ -290,7 +290,9 @@ class EditorWindow(QMainWindow):
         br.clicked.connect(self.open_render)
         bu = QPushButton("업로드 준비…")
         bu.clicked.connect(self.open_ready)
-        for x in (bm, bs, bu, br):
+        bp = QPushButton("게시…")
+        bp.clicked.connect(self.open_publisher)
+        for x in (bm, bs, bu, bp, br):
             h.addWidget(x)
         return f
 
@@ -1137,6 +1139,18 @@ class EditorWindow(QMainWindow):
 
     def open_ready(self) -> None:
         ReadyDialog(self.project, self, self.toast).exec()
+
+    def open_publisher(self) -> None:
+        from .. import paths
+        from ..publisher.secrets import default_secret_store
+        from ..publisher.service import PublisherService
+        from .publisher_dialog import PublisherDialog
+
+        if getattr(self, "_pub_service", None) is None:
+            d = paths.app_data_dir() / "publisher"
+            d.mkdir(parents=True, exist_ok=True)
+            self._pub_service = PublisherService(d, self.settings, default_secret_store(d / "secrets.json"))
+        PublisherDialog(self.project, self._pub_service, self, self.toast).exec()
 
     # ================================================================ Undo/Redo
     def do_undo(self) -> None:

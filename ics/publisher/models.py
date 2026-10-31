@@ -153,7 +153,9 @@ class JobSpec:
 
 def snapshot_hash(account_id: str, username: str, spec: JobSpec, schedule_at: float | None = None) -> str:
     """승인 스냅샷 해시. 계정/유형/순서 포함 파일 해시/최종 텍스트/설정/프로젝트 출력 버전/예약 시각이 바뀌면 달라진다."""
-    doc = {"account": account_id, "username": username, "spec": spec.to_dict(), "schedule_at": schedule_at}
+    # 정수/실수 표기 차이(1234 vs 1234.0)로 해시가 달라지지 않도록 실수로 정규화한다 (DB 는 REAL 로 저장)
+    when = None if schedule_at is None else float(schedule_at)
+    doc = {"account": account_id, "username": username, "spec": spec.to_dict(), "schedule_at": when}
     return hashlib.sha256(json.dumps(doc, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
 
 

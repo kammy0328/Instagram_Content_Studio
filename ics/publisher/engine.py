@@ -130,7 +130,7 @@ class PublishEngine:
                     self.account.id,
                     self.account.username,
                     spec.project_id,
-                    spec.to_dict(),
+                    self._persisted(spec),
                     key,
                     self.simulation,
                 )
@@ -197,17 +197,28 @@ class PublishEngine:
             self.store.invalidate_approval(job_id, " / ".join(reasons))
             if job.state in (State.APPROVED, State.SCHEDULED, State.CLOUD_SCHEDULED):
                 self.store.set_state(
-                    job_id, State.AWAITING_APPROVAL, spec_json=json.dumps(spec.to_dict(), ensure_ascii=False)
+                    job_id, State.AWAITING_APPROVAL, spec_json=json.dumps(self._persisted(spec), ensure_ascii=False)
                 )
         return reasons
+
+    @staticmethod
+    def _persisted(spec: JobSpec) -> dict:
+        """DB 에 저장하는 형태: 승인 스냅샷(to_dict)에는 넣지 않는 파일 경로를 따로 보관해, 앱을 다시 켜도 이어서 진행할 수 있게 한다."""
+        return {**spec.to_dict(), "_paths": [a.path for a in spec.assets]}
 
     def _spec(self, job: JobRow) -> JobSpec:
         if job.id in self._specs:
             return self._specs[job.id]
         d = job.spec
+        paths = d.get("_paths", [])
         spec = JobSpec(
             Kind(d["kind"]),
-            [MediaAsset(a.get("path", ""), a["role"], a["sha256"], a["size"], a["order"]) for a in d["assets"]],
+            [
+                MediaAsset(
+                    a.get("path") or (paths[i] if i < len(paths) else ""), a["role"], a["sha256"], a["size"], a["order"]
+                )
+                for i, a in enumerate(d["assets"])
+            ],
             d["caption"],
             d["first_comment"],
             d["credits"],

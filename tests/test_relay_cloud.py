@@ -263,7 +263,14 @@ def test_cancel_and_missed_run_now_and_resolve(out):
 
 
 # ------------------------------------------------------------------ 실제 Worker 코드와의 계약 테스트
-@pytest.mark.skipif(shutil.which("node") is None, reason="node 없음")
+def _node_has_sqlite() -> bool:
+    if shutil.which("node") is None:
+        return False
+    r = subprocess.run(["node", "--no-warnings", "-e", "import('node:sqlite')"], capture_output=True, timeout=30)
+    return r.returncode == 0
+
+
+@pytest.mark.skipif(not _node_has_sqlite(), reason="node 22.5+ (node:sqlite) 없음")
 def test_contract_against_real_worker_code(out):
     proc = subprocess.Popen(
         ["node", "--no-warnings", str(WORKER / "test" / "serve.js")], stdout=subprocess.PIPE, text=True, cwd=str(WORKER)
