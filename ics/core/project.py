@@ -68,18 +68,24 @@ class Project:
                     setattr(self.rec, k, info[k])
             self.state = EditState.from_dict(payload.get("state", {}))
             self.recovered = crashed
-        return {"crashed": crashed, "restored": bool(payload), "skipped": skipped}
+        return {
+            "crashed": crashed,
+            "restored": bool(payload),
+            "skipped": skipped,
+            "db_recovered": self.store.db_recovered,
+        }
 
     def close(self) -> None:
         if self._closed:
             return
+        self.autosaver.request(self._payload())
+        if not self.autosaver.close():
+            raise RuntimeError(
+                "프로젝트를 저장하지 못했습니다. 공간/권한을 확인한 뒤 다시 시도하세요. " + self.autosaver.last_error
+            )
+        self.store.mark_closed()
+        self.store.close()
         self._closed = True
-        try:
-            self.autosaver.request(self._payload())
-            self.autosaver.close()
-        finally:
-            self.store.mark_closed()
-            self.store.close()
 
     def attach_media(self, info: MediaInfo, index: FrameIndex) -> None:
         self.media, self.index = info, index
@@ -254,6 +260,20 @@ class Project:
     def max_len_frames(self, which: str) -> int:
         return max_frames_for(self._limit_sec(which), self.fps)
 
+    def limited_end(self, start: int, seconds: int | float) -> int:
+        """PTS 실제 길이가 제한을 넘지 않는 마지막 배타적 Out을 구한다."""
+        deadline = self.index.time_of(start) + Fraction(str(seconds))
+        lo, hi = start, self.count
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if self.index.time_of(mid) <= deadline:
+                lo = mid
+            else:
+                hi = mid - 1
+        if lo <= start:
+            raise ValueError("현재 프레임 하나의 길이가 출력 시간 제한을 넘습니다.")
+        return lo
+
     def apply_preset(self, which: str, start: int, preset: str) -> str:
         """시작 지점 기준 프리셋 적용. 반환: 안내 메시지(없으면 '')."""
         sel = self._sel(which)
@@ -267,9 +287,8 @@ class Project:
             else:
                 sec = min(PRESET_SECONDS[preset], self._limit_sec(which))
             if sec is not None:
-                n = max_frames_for(sec, self.fps)
-                end = min(self.count, start + n)
-                if end - start < n:
+                end = self.limited_end(start, sec)
+                if self.index.time_of(self.count) < self.index.time_of(start) + Fraction(str(sec)):
                     msg = f"영상 끝까지 {self.seconds(start, end):.2f}초만 선택되었습니다."
             else:
                 end = max(start + 1, min(sel.end if sel.end > start else start + 1, self.count))
@@ -282,9 +301,9 @@ class Project:
         with self.edit(f"{which.upper()} In/Out", (which, "state")):
             start = self.index.clamp(start)
             end = max(start + 1, min(int(end), self.count))
-            n = self.max_len_frames(which)
-            if end - start > n:
-                end = start + n
+            max_end = self.limited_end(start, self._limit_sec(which))
+            if end > max_end:
+                end = max_end
                 msg = f"{which.upper()}는 최대 {int(self._limit_sec(which))}초까지 가능해 Out 을 조정했습니다."
             sel.enabled, sel.start, sel.end, sel.preset = True, start, end, "custom"
         return msg
@@ -342,9 +361,9 @@ class Project:
         with self.edit("피드 영상 추가", ("feed", "state")):
             start = self.index.clamp(start)
             end = max(start + 1, min(int(end), self.count))
-            n = max_frames_for(FEED_VIDEO_MAX_SEC, self.fps)
-            if end - start > n:
-                end = start + n
+            max_end = self.limited_end(start, FEED_VIDEO_MAX_SEC)
+            if end > max_end:
+                end = max_end
                 msg = f"피드 영상은 최대 {int(FEED_VIDEO_MAX_SEC)}초라 Out 을 조정했습니다."
             self.state.feed_seq += 1
             it = FeedItem(
@@ -368,9 +387,9 @@ class Project:
             else:
                 s = self.index.clamp(start)
                 e = max(s + 1, min(int(end), self.count))
-                n = max_frames_for(FEED_VIDEO_MAX_SEC, self.fps)
-                if e - s > n:
-                    e, msg = s + n, "피드 영상은 최대 60초입니다."
+                max_end = self.limited_end(s, FEED_VIDEO_MAX_SEC)
+                if e > max_end:
+                    e, msg = max_end, "피드 영상은 최대 60초입니다."
                 it.start, it.end = s, e
         return msg
 
@@ -392,6 +411,26 @@ class Project:
 
     def feed_ordered(self) -> list[FeedItem]:
         return sorted(self.state.feed, key=lambda f: f.sort_key())
+
+    def feed_kind(self) -> str:
+        """compute_geometry 에 넘기는 FEED 출력 종류: 'orig'(원본 비율) | '45'."""
+        return "45" if self.state.feed_ratio == "45" else "orig"
+
+    def cover_kind(self) -> str:
+        """REELS 커버의 compute_geometry 종류: 'orig'(원본 비율) | '916'."""
+        return "916" if self.state.cover_ratio == "916" else "orig"
+
+    def set_cover_ratio(self, ratio: str) -> None:
+        if ratio not in ("orig", "916"):
+            raise ValueError(ratio)
+        with self.edit("REELS 커버 비율", ("cover", "state")):
+            self.state.cover_ratio = ratio
+
+    def set_feed_ratio(self, ratio: str) -> None:
+        if ratio not in ("orig", "45"):
+            raise ValueError(ratio)
+        with self.edit("FEED 출력 비율", ("feed", "state")):
+            self.state.feed_ratio = ratio
 
     def feed_included(self) -> list[FeedItem]:
         return [f for f in self.feed_ordered() if f.included]
@@ -442,6 +481,20 @@ class Project:
     def unmerge_cut(self, cut_id: int) -> None:
         with self.edit("컷 병합 해제", ("cuts", "state")):
             self.state.cuts = cuts_mod.unmerge(self.state.cuts, cut_id)
+
+    def split_cut_at(self, frame: int) -> tuple[int, int]:
+        """frame(재생 헤드)에서 컷을 둘로 나눈다. frame 이 뒤쪽 컷의 첫 프레임이 된다. (앞 컷 id, 뒤 컷 id) 를 돌려준다.
+
+        컷 정보가 아직 없으면(XML 없이 편집) 영상 전체를 한 컷으로 보고 나눈다. 나눌 수 없으면 ValueError."""
+        frame = int(frame)
+        with self.edit("컷 나누기", ("cuts", "state")):
+            cuts = self.state.cuts
+            if not cuts:
+                cuts = [cuts_mod.Cut(1, 0, self.count, parts=[cuts_mod.Part(1, 0, self.count)])]
+            self.state.cuts = cuts_mod.split(cuts, frame)
+            i = cuts_mod.cut_index_at(self.state.cuts, frame)
+            assert i is not None and i > 0
+            return self.state.cuts[i - 1].id, self.state.cuts[i].id
 
     def restore_original_cuts(self) -> None:
         with self.edit("원래 컷 목록 복원", ("cuts", "state")):

@@ -52,7 +52,7 @@ def test_plan_names_and_folder_rules(proj):
     assert not plan.blocked
     root = Path(plan.root)
     assert " " not in root.name and "&" not in root.name  # 폴더명 공백/& 금지
-    rel = sorted(str(Path(j.out_path).relative_to(root)) for j in plan.jobs)
+    rel = sorted(Path(j.out_path).relative_to(root).as_posix() for j in plan.jobs)
     name = root.name
     assert f"STORY/{name}_STORY_01.mp4" in rel and f"REELS/{name}_REELS_01.mp4" in rel
     assert f"REELS/{name}_REELS_COVER.jpg" in rel and "CAPTION/CAPTION.txt" in rel

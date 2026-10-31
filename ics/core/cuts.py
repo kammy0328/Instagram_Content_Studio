@@ -63,13 +63,23 @@ def cut_index_at(cuts: list[Cut], frame: int) -> int | None:
     return None
 
 
+def merge_error(cuts: list[Cut], ids: list[int]) -> str | None:
+    """선택한 컷을 병합할 수 없는 이유(없으면 None). 메뉴 활성화 판단과 merge() 가 같은 규칙을 쓴다."""
+    want = set(ids)
+    order = [i for i, c in enumerate(cuts) if c.id in want]
+    if len(order) < 2:
+        return "병합하려면 컷을 2개 이상 선택하세요."
+    if order != list(range(order[0], order[-1] + 1)):
+        return "연속된 컷만 병합할 수 있습니다."
+    return None
+
+
 def merge(cuts: list[Cut], ids: list[int]) -> list[Cut]:
     """선택한 연속 컷을 하나의 논리 컷으로 병합 (첫 컷 시작 ~ 마지막 컷 종료)."""
+    err = merge_error(cuts, ids)
+    if err:
+        raise ValueError(err)
     order = [i for i, c in enumerate(cuts) if c.id in set(ids)]
-    if len(order) < 2:
-        raise ValueError("병합하려면 컷을 2개 이상 선택하세요.")
-    if order != list(range(order[0], order[-1] + 1)):
-        raise ValueError("연속된 컷만 병합할 수 있습니다.")
     sel = cuts[order[0] : order[-1] + 1]
     parts: list[Part] = []
     for c in sel:
@@ -98,13 +108,68 @@ def unmerge(cuts: list[Cut], cut_id: int) -> list[Cut]:
     c = cuts[idx]
     restored = []
     for k, p in enumerate(c.parts):
-        s, e = p.start, p.end
+        s, e = max(p.start, c.start), min(p.end, c.end)
         if k == 0:
             s = c.start  # 병합 컷의 바깥 경계 보정은 유지
         if k == len(c.parts) - 1:
             e = c.end
-        restored.append(Cut(p.id, s, e, p.name, [Part(p.id, p.start, p.end, p.name, p.meta)], manual=c.manual))
+        if e > s:
+            restored.append(Cut(p.id, s, e, p.name, [Part(p.id, s, e, p.name, copy.deepcopy(p.meta))], manual=c.manual))
     return cuts[:idx] + restored + cuts[idx + 1 :]
+
+
+def split_error(cuts: list[Cut], frame: int) -> str | None:
+    """frame 에서 컷을 나눌 수 없는 이유(없으면 None). frame 은 '뒤쪽 컷의 첫 프레임'이 된다."""
+    i = cut_index_at(cuts, frame)
+    if i is None:
+        return "재생 헤드가 컷 밖(빈 구간)에 있어 나눌 수 없습니다."
+    if frame == cuts[i].start:
+        return "재생 헤드가 컷의 첫 프레임입니다. 나눌 위치로 옮긴 뒤 다시 시도하세요."
+    return None
+
+
+def split(cuts: list[Cut], frame: int) -> list[Cut]:
+    """frame 을 경계로 컷을 둘로 나눈다. [start, frame) 은 앞 컷(기존 id 유지), [frame, end) 는 새 id 의 뒤 컷.
+
+    병합된 컷이면 파트도 경계에서 나뉜다. 경계에 걸친 파트는 둘로 쪼개고, 한쪽에 파트가 남지 않으면 그 구간을 덮는
+    파트를 하나 만든다. 사용자가 직접 나눈 컷이므로 양쪽 모두 manual 로 표시한다 (원래 컷 복원으로 되돌릴 수 있음).
+    """
+    err = split_error(cuts, frame)
+    if err:
+        raise ValueError(err)
+    i = cut_index_at(cuts, frame)
+    assert i is not None
+    c = cuts[i]
+    used = {x.id for x in cuts} | {p.id for x in cuts for p in x.parts}
+    nxt = max(used, default=0)
+
+    def new_id() -> int:
+        nonlocal nxt
+        nxt += 1
+        return nxt
+
+    left_parts: list[Part] = []
+    right_parts: list[Part] = []
+    for p in c.parts:
+        q = copy.deepcopy(p)
+        if p.end <= frame:
+            left_parts.append(q)
+        elif p.start >= frame:
+            right_parts.append(q)
+        else:  # 경계에 걸친 파트: 앞은 기존 id, 뒤는 새 id
+            tail = copy.deepcopy(p)
+            q.end = frame
+            tail.id, tail.start = new_id(), frame
+            left_parts.append(q)
+            right_parts.append(tail)
+    right_id = new_id()
+    if not left_parts:
+        left_parts = [Part(c.id, c.start, frame, c.name, {})]
+    if not right_parts:
+        right_parts = [Part(right_id, frame, c.end, c.name, {})]
+    left = Cut(c.id, c.start, frame, c.name, left_parts, manual=True)
+    right = Cut(right_id, frame, c.end, c.name, right_parts, manual=True)
+    return cuts[:i] + [left, right] + cuts[i + 1 :]
 
 
 def restore_original(orig: list[dict]) -> list[Cut]:

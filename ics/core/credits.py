@@ -10,7 +10,7 @@ from typing import Callable
 
 HANDLE_RE = re.compile(r"^[A-Za-z0-9._]{1,30}$")
 AT_RE = re.compile(r"@([^\s,;()\[\]&|<>/]+)")
-URL_RE = re.compile(r"(?:https?://)?(?:www\.)?instagram\.com/([A-Za-z0-9._]+)/?(?:\?[^\s)]*)?", re.I)
+URL_RE = re.compile(r"(?<![\w.-])(?:https?://)?(?:www\.)?instagram\.com/([A-Za-z0-9._]+)/?(?:\?[^\s)]*)?", re.I)
 RESERVED_IG_PATHS = {"p", "reel", "reels", "stories", "explore", "accounts", "tv", "direct", "about"}
 
 # 역할 어휘(방향 판정용). 사전에 없는 역할도 허용되지만, 약한 구분자(-, /)에서는 검토 대상이 된다.
@@ -168,9 +168,18 @@ def canon_role(role: str) -> tuple[str, bool]:
     return r, False
 
 
+# '|' 와 모양이 같아 구분자 대신 쓰이는 문자들 (한글 자모 ㅣ, 전각/박스 세로줄 등). 글자 자체가 구분자로만 쓰이므로 무조건 '|' 로 본다.
+_PIPE_LOOKALIKES = str.maketrans({"ㅣ": "|", "ǀ": "|", "│": "|", "┃": "|", "¦": "|", "∣": "|"})
+# 소문자 l / 대문자 I 는 글자이기도 해서, 앞뒤가 공백인 단독 글자이고 앞부분이 역할처럼 보일 때만 구분자로 본다.
+_LOOKALIKE_TOKEN = re.compile(r"(?<=\S)\s+([lI])\s+(?=\S)")
+# 그룹 제목 아래에 오는 '1st | ...', '2nd | ...' 처럼 서수만 있는 역할
+_ORDINAL_ONLY = re.compile(r"(?:\d{1,2}\s*(?:st|nd|rd|th)|first|second|third|fourth|\d{1,2}\s*(?:차|번째))", re.I)
+
+
 def _normalize_line(line: str) -> str:
     t = (
-        line.replace("：", ":")
+        line.translate(_PIPE_LOOKALIKES)
+        .replace("：", ":")
         .replace("｜", "|")
         .replace("＠", "@")
         .replace(" ", " ")
@@ -179,6 +188,29 @@ def _normalize_line(line: str) -> str:
     )
     t = re.sub(r"^\s*[-•·*▪●○■□▶▷>\d]+[.)]?\s+(?=\S)", "", t) if re.match(r"^\s*[•·*▪●○■□▶▷]", t) else t
     return t.strip()
+
+
+def _fix_lookalike_separator(line: str) -> tuple[str, str]:
+    """'|' 대신 단독 'l' / 'I' 를 구분자로 쓴 줄을 '|' 로 바꾼다. 반환: (줄, 안내 문구 또는 '').
+    더 앞에 '|' ':' 탭이 있으면 그쪽이 구분자이므로 건드리지 않는다. 대문자 I 는 영어 대명사일 수 있어
+    앞부분이 알려진 역할이거나 소문자 없는 제목(ALL CAPS)일 때만 인정한다."""
+    masked = URL_RE.sub(lambda m: "§" * len(m.group(0)), line)
+    m = _LOOKALIKE_TOKEN.search(masked)
+    if not m:
+        return line, ""
+    firsts = [i for i in (masked.find("|"), masked.find("\t"), masked.find(":")) if i >= 0]
+    if firsts and min(firsts) < m.start():
+        return line, ""
+    left = line[: m.start()].strip()
+    if not left or len(left) > 60:
+        return line, ""
+    tok = m.group(1)
+    known = canon_role(left)[1]
+    if tok == "I" and not known and re.search(r"[a-z]", left):
+        return line, ""
+    if tok == "l" and not known and len(left.split()) > 5:
+        return line, ""
+    return line[: m.start()] + " | " + line[m.end() :], f"구분자 '{tok}' 를 '|' 로 해석했습니다"
 
 
 def _split_role(line: str) -> tuple[str, str, str, bool] | None:
@@ -244,6 +276,18 @@ def _split_outside_parens(s: str, role_delim: str) -> list[tuple[str, str]]:
     return [(c.strip(), sep) for c, sep in chunks if c.strip()]
 
 
+def _balanced_brackets(s: str) -> bool:
+    stack: list[str] = []
+    pairs = {")": "(", "]": "["}
+    for ch in s:
+        if ch in "([":
+            stack.append(ch)
+        elif ch in ")]":
+            if not stack or stack.pop() != pairs[ch]:
+                return False
+    return not stack
+
+
 def _parse_chunk(chunk: str) -> Person | None:
     handles: list[str] = []
     problems: list[str] = []
@@ -259,7 +303,7 @@ def _parse_chunk(chunk: str) -> Person | None:
     rest = AT_RE.sub(take_at, chunk)
     rest = re.sub(r"\(\s*\)|\[\s*\]", " ", rest)
     rest = re.sub(r"(?i)\b(?:ig|insta(?:gram)?)\s*[:：]?\s*(?=$|\s)", " ", rest)
-    name = re.sub(r"[()\[\]]", " ", rest)
+    name = rest if _balanced_brackets(rest) else re.sub(r"[()\[\]]", " ", rest)  # '(Mu:E)' 같은 소속 표기는 보존
     name = re.sub(r"\s+", " ", name).strip(" ,;:-–—·|")
     if not name and not handles:
         return None
@@ -284,16 +328,36 @@ def parse_credits(
     """자유 텍스트 -> CreditRow 목록.
     lookup(name) -> [(name, handle), ...] : 로컬 ID 사전 조회 (없으면 None)."""
     rows: list[CreditRow] = []
-    by_role: dict[str, CreditRow] = {}
-    for original in raw.splitlines():
+    by_role: dict[tuple[int, str], CreditRow] = {}
+    lines = raw.splitlines()
+    # 같은 역할 줄은 같은 블록(빈 줄 / 그룹 제목으로 구분) 안에서만 합친다. 블록이 다르면 소속이 다른 사람일 수 있다
+    # (예: 스튜디오별 VFX Supervisor, 촬영일별 LIGHTING CREW 의 1st/2nd/3rd).
+    gid = 0
+    for idx, original in enumerate(lines):
         line = _normalize_line(original)
         if not line:
+            gid += 1
             continue
         if _norm_role_key(line.strip("[]():-=*# ")) in _HEADERS or re.fullmatch(r"[-=_*~#\s]{3,}", line):
             continue
+        line, sep_note = _fix_lookalike_separator(line)
+        if _split_role(line) is None and _next_line_is_ordinal(lines, idx):
+            gid += 1
+            rows.append(
+                CreditRow(
+                    role="",
+                    status="ok",
+                    raw_lines=[original],
+                    text=original.strip(),
+                    reasons=["그룹 제목으로 인식했습니다 (이어지는 1st/2nd/3rd 줄은 이 그룹에 속합니다)"],
+                )
+            )
+            continue
         row = _parse_line(line, original)
+        if sep_note:
+            row.reasons.insert(0, sep_note)
         if row.status == "ok":
-            key = row.role.casefold()
+            key = (gid, row.role.casefold())
             if key in by_role and by_role[key].status == "ok":
                 tgt = by_role[key]
                 existing = {(p.name.casefold(), (p.handle or "").casefold()) for p in tgt.people}
@@ -310,6 +374,15 @@ def parse_credits(
             _apply_dictionary(r, lookup, auto_apply_unique)
         finalize_row(r)
     return rows
+
+
+def _next_line_is_ordinal(lines: list[str], idx: int) -> bool:
+    """바로 다음 줄이 '1st | ...' 처럼 서수만 역할인 줄이면 현재 줄은 그룹 제목이다."""
+    if idx + 1 >= len(lines):
+        return False
+    nxt, _ = _fix_lookalike_separator(_normalize_line(lines[idx + 1]))
+    sp = _split_role(nxt) if nxt else None
+    return bool(sp and _ORDINAL_ONLY.fullmatch(sp[0].strip()))
 
 
 def _parse_line(line: str, original: str) -> CreditRow:
@@ -347,7 +420,7 @@ def _parse_line(line: str, original: str) -> CreditRow:
         p = _parse_chunk(chunk)
         if p is not None:
             people.append(p)
-            if sep in _AMBIG_SEPS and not p.handle:
+            if sep in _AMBIG_SEPS and (not p.handle or len(people) < 2 or not people[-2].handle):
                 ambiguous = True
     if ambiguous:
         status = "review"
@@ -385,7 +458,7 @@ def _apply_dictionary(row: CreditRow, lookup, auto_unique: bool) -> None:
 
 def finalize_row(row: CreditRow) -> None:
     """상태에 맞게 최종 텍스트 생성. review/edited 행은 사용자가 확정/수정하기 전까지 원문 유지."""
-    if row.status == "ok":
+    if row.status == "ok" and (row.role or row.people):  # 그룹 제목 줄은 원문 그대로
         row.text = format_row(row.role, row.people)
 
 

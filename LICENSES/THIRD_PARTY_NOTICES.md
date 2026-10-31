@@ -17,6 +17,9 @@ Instagram Content Studio 는 아래 소프트웨어를 사용합니다. 배포 �
 - libx264 가 포함된 FFmpeg 빌드는 GPL 입니다. 이 빌드를 설치 파일에 포함해 외부에 배포하면
   해당 FFmpeg 빌드의 소스 코드를 받을 수 있는 방법(배포처 링크 등)을 함께 안내해야 합니다.
 - 본 프로그램은 FFmpeg 를 별도 실행 파일로 호출합니다 (라이브러리로 링크하지 않음).
+- Windows 배포본(GitHub Actions 빌드)에는 BtbN FFmpeg-Builds 의 `win64-gpl-shared` 빌드(ffmpeg.exe, ffprobe.exe, DLL)가
+  포함됩니다. 빌드 스크립트와 소스: https://github.com/BtbN/FFmpeg-Builds , FFmpeg 소스: https://ffmpeg.org/download.html
+  (해당 빌드의 라이선스 전문은 설치 폴더의 `LICENSES/FFMPEG_LICENSE.txt` 에 함께 들어갑니다.)
 - 상업적 배포 계획이 있다면 법무 검토 후 LGPL 빌드 + 별도 H.264 인코더 사용 여부를 결정하세요.
 
 ## PySide6 (LGPL 3)

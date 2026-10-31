@@ -81,6 +81,7 @@ def make_video(
     audio: bool = True,
     vfr_drop: bool = False,
     tags: bool = True,
+    color_tags: tuple[str, str, str] = ("bt709", "bt709", "bt709"),
     full_range: bool = False,
     sar: str | None = None,
     extra: list[str] | None = None,
@@ -92,6 +93,13 @@ def make_video(
         make_audio(wav, frames / float(fps) + 0.5)
     rng = "pc" if full_range else "tv"
     vf = [f"scale=out_color_matrix=bt709:out_range={rng}:flags=accurate_rnd+full_chroma_int", f"format={pix_fmt}"]
+    # 색 태그는 프레임 속성(setparams)으로 명시한다. FFmpeg 7.1+ 는 scale 필터가 찍은 matrix/range 만 남기고 인코더 옵션의
+    # primaries/trc 를 무시하므로, 태그 유무가 FFmpeg 버전에 따라 달라지지 않게 한다 (tags=False 는 완전 무태그).
+    if tags:
+        m, pr, tr = color_tags
+        vf.append(f"setparams=colorspace={m}:color_primaries={pr}:color_trc={tr}:range={rng}")
+    else:
+        vf.append("setparams=colorspace=unknown:color_primaries=unknown:color_trc=unknown:range=unknown")
     if vfr_drop:
         vf.insert(0, "select='not(eq(mod(n\\,5)\\,3))'")
     cmd = [
@@ -125,7 +133,8 @@ def make_video(
         cmd += ["-c:v", "libx265", "-crf", "14", "-preset", "veryfast"]
     cmd += ["-pix_fmt", pix_fmt]
     if tags:
-        cmd += ["-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", rng]
+        m, pr, tr = color_tags
+        cmd += ["-colorspace", m, "-color_primaries", pr, "-color_trc", tr, "-color_range", rng]
     if sar:
         cmd += ["-vf", ",".join(vf) + f",setsar={sar}"]
         # 마지막 -vf 가 우선

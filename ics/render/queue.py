@@ -217,23 +217,71 @@ class RenderQueue:
             tmp.write_text(json.dumps({"runs": prev[-20:]}, ensure_ascii=False, indent=1), "utf-8")
             os.replace(tmp, log_path)
             if self.project_snapshot:
-                for name, data in self.project_snapshot.items():
-                    t = d / name
-                    t.write_text(json.dumps(data, ensure_ascii=False, indent=1), "utf-8")
+                replace_files_atomically(
+                    d,
+                    {
+                        name: json.dumps(data, ensure_ascii=False, indent=1)
+                        for name, data in self.project_snapshot.items()
+                    },
+                )
         except OSError:
             pass
 
 
+def replace_files_atomically(target_dir: Path, files: dict[str, str], remove_glob: str | None = None) -> None:
+    """여러 텍스트 파일을 '전부 새 내용 또는 전부 이전 내용' 으로 교체한다.
+    1) 모든 새 내용을 같은 폴더의 임시 파일에 쓰고 fsync  2) 하나씩 os.replace  3) 중간에 실패하면 이미 바꾼 파일을 되돌린다.
+    remove_glob 에 맞는 기존 파일 중 새 목록에 없는 것(예: 줄어든 COMMENT_NN)은 교체가 끝난 뒤 지우며, 실패하면 함께 복원한다."""
+    target_dir.mkdir(parents=True, exist_ok=True)
+    old: dict[str, bytes | None] = {}
+    for name in files:
+        f = target_dir / name
+        old[name] = f.read_bytes() if f.exists() else None
+    stale = [f for f in target_dir.glob(remove_glob) if f.name not in files] if remove_glob else []
+    stale_old = {f.name: f.read_bytes() for f in stale}
+    tmps: dict[str, Path] = {}
+    done: list[str] = []
+    try:
+        for name, text in files.items():
+            tmp = target_dir / (name + ".new")
+            tmps[name] = tmp  # 쓰는 도중 실패해도 finally 에서 지울 수 있게 먼저 등록
+            with tmp.open("w", encoding="utf-8", newline="") as fh:
+                fh.write(text)
+                fh.flush()
+                os.fsync(fh.fileno())
+        for name, tmp in tmps.items():
+            os.replace(tmp, target_dir / name)
+            done.append(name)
+        for f in stale:
+            f.unlink()
+    except BaseException:
+        for name in done:  # 이미 바꾼 파일을 이전 내용으로 되돌린다
+            f = target_dir / name
+            try:
+                if old[name] is None:
+                    f.unlink(missing_ok=True)
+                else:
+                    f.write_bytes(old[name])
+            except OSError:
+                pass
+        for fname, data in stale_old.items():
+            try:
+                (target_dir / fname).write_bytes(data)
+            except OSError:
+                pass
+        raise
+    finally:
+        for tmp in tmps.values():
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
 def write_caption_files(cdir: Path, caption: str, comments: list[str], credits_raw: str) -> dict:
-    cdir.mkdir(parents=True, exist_ok=True)
-    written = []
-    (cdir / "CAPTION.txt").write_text(caption, "utf-8")
-    written.append("CAPTION.txt")
-    for old in cdir.glob("COMMENT_*.txt"):
-        old.unlink()
+    files = {"CAPTION.txt": caption}
     for i, c in enumerate(comments, start=1):
-        (cdir / f"COMMENT_{i:02d}.txt").write_text(c, "utf-8")
-        written.append(f"COMMENT_{i:02d}.txt")
-    (cdir / "CREDITS_ORIGINAL.txt").write_text(credits_raw, "utf-8")
-    written.append("CREDITS_ORIGINAL.txt")
-    return {"files": written, "path": str(cdir)}
+        files[f"COMMENT_{i:02d}.txt"] = c
+    files["CREDITS_ORIGINAL.txt"] = credits_raw
+    replace_files_atomically(cdir, files, remove_glob="COMMENT_*.txt")
+    return {"files": list(files), "path": str(cdir)}

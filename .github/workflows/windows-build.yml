@@ -1,0 +1,161 @@
+name: Windows build
+
+# Windows 에서 pytest 를 돌리고, PyInstaller 로 exe 를 만들고, 만든 exe 를 --selftest 로 점검한 뒤,
+# (가능하면) Inno Setup 설치 파일까지 만들어 artifact 로 올린다.
+on:
+  workflow_dispatch:
+  push:
+    branches: ["feature/windows_build", "fix/**"]
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - ics.spec
+      - installer/**
+      - requirements*.txt
+      - .github/workflows/windows-build.yml
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+
+      - name: FFmpeg 내려받기 (BtbN GPL shared 빌드)
+        run: |
+          $base = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest"
+          $names = @("ffmpeg-n8.1-latest-win64-gpl-shared-8.1.zip", "ffmpeg-master-latest-win64-gpl-shared.zip")
+          $zip = Join-Path $env:RUNNER_TEMP "ffmpeg.zip"
+          $ok = $false
+          foreach ($n in $names) {
+            for ($i = 1; $i -le 3 -and -not $ok; $i++) {
+              try {
+                Write-Host "download $n (try $i)"
+                Invoke-WebRequest -Uri "$base/$n" -OutFile $zip -UseBasicParsing
+                $ok = $true
+                Write-Host "using $n"
+              } catch { Write-Host "failed: $_"; Start-Sleep -Seconds 5 }
+            }
+            if ($ok) { break }
+          }
+          if (-not $ok) { throw "FFmpeg 를 내려받지 못했습니다" }
+          $dir = Join-Path $env:RUNNER_TEMP "ffmpeg_x"
+          Expand-Archive -Path $zip -DestinationPath $dir -Force
+          $bin = Get-ChildItem -Path $dir -Recurse -Filter ffmpeg.exe | Select-Object -First 1 | ForEach-Object { $_.DirectoryName }
+          $dest = "vendor/ffmpeg"
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          Get-ChildItem -Path $bin -File | Where-Object { ($_.Extension -in @(".exe", ".dll")) -and ($_.Name -ne "ffplay.exe") } | Copy-Item -Destination $dest
+          $lic = Get-ChildItem -Path $dir -Recurse -Filter LICENSE.txt | Select-Object -First 1
+          if ($lic) { Copy-Item $lic.FullName "LICENSES/FFMPEG_LICENSE.txt" }
+          & "$dest/ffmpeg.exe" -hide_banner -version | Select-Object -First 3
+          & "$dest/ffmpeg.exe" -hide_banner -encoders | Select-String -Pattern "libx264 |prores_ks|aac "
+          Get-ChildItem $dest | Select-Object Name, @{n="MB";e={[math]::Round($_.Length/1MB,1)}}
+
+      - name: 의존성 설치
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-build.txt
+
+      - name: pytest (Windows)
+        env:
+          QT_QPA_PLATFORM: offscreen
+          PYTHONUTF8: "1"
+        run: |
+          python -m pytest tests -q -p no:cacheprovider --junitxml=pytest-windows.xml 2>&1 | Tee-Object -FilePath pytest-windows.log
+          exit $LASTEXITCODE
+
+      - name: 색 태그 진단 (테스트 실패 시에만, FFmpeg 버전별 차이 확인)
+        if: failure()
+        env:
+          PYTHONUTF8: "1"
+        run: |
+          python .github/scripts/diag_color.py 2>&1 | Tee-Object -FilePath diag-color.log
+
+      - name: PyInstaller 빌드
+        run: |
+          pyinstaller --noconfirm ics.spec
+          Get-ChildItem dist/InstagramContentStudio | Select-Object -First 20 Name
+          $size = (Get-ChildItem dist/InstagramContentStudio -Recurse -File | Measure-Object Length -Sum).Sum / 1MB
+          Write-Host ("dist size: {0:N0} MB" -f $size)
+
+      - name: exe 자체 점검 (--selftest)
+        run: |
+          $exe = (Resolve-Path "dist/InstagramContentStudio/InstagramContentStudio.exe").Path
+          $out = Join-Path $env:RUNNER_TEMP "selftest.txt"
+          $p = Start-Process -FilePath $exe -ArgumentList "--selftest", "`"$out`"" -Wait -PassThru
+          if (Test-Path $out) { Get-Content $out -Encoding UTF8 } else { Write-Host "결과 파일이 없습니다" }
+          Copy-Item $out selftest-windows.txt -ErrorAction SilentlyContinue
+          Write-Host "exit code: $($p.ExitCode)"
+          if ($p.ExitCode -ne 0) { exit 1 }
+
+      - name: exe 실행 스모크 (창이 뜨고 8초간 살아있는지 + 스크린샷)
+        run: |
+          $exe = (Resolve-Path "dist/InstagramContentStudio/InstagramContentStudio.exe").Path
+          $p = Start-Process -FilePath $exe -PassThru
+          Start-Sleep -Seconds 8
+          try {
+            Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+            $b = [System.Windows.Forms.SystemInformation]::VirtualScreen
+            $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $g.CopyFromScreen($b.Left, $b.Top, 0, 0, $bmp.Size)
+            $bmp.Save("smoke-screenshot.png")
+          } catch { Write-Host "screenshot failed: $_" }
+          $p.Refresh()
+          if ($p.HasExited) { Write-Host "프로세스가 종료됨: exit $($p.ExitCode)"; exit 1 }
+          Write-Host "프로세스 실행 중: $($p.MainWindowTitle)"
+          Stop-Process -Id $p.Id -Force
+
+      - name: 설치 파일 생성 (Inno Setup)
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress; }
+          if (-not (Test-Path $iscc)) { throw "Inno Setup 설치 실패" }
+          # 한국어 번역(비공식)이 기본 설치에 없으면 내려받아 본다. 실패해도 영어 UI 로 계속한다.
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\Languages\Korean.isl")) {
+            foreach ($u in @(
+              "https://raw.githubusercontent.com/jrsoftware/issrc/main/Files/Languages/Unofficial/Korean.isl",
+              "https://raw.githubusercontent.com/jrsoftware/issrc/main/Files/Languages/Korean.isl")) {
+              try { Invoke-WebRequest -Uri $u -OutFile installer/Korean.isl -UseBasicParsing; Write-Host "Korean.isl: $u"; break } catch { Write-Host "skip $u" }
+            }
+          }
+          & $iscc installer/ics_installer.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC 실패" }
+          Get-ChildItem installer/Output | Select-Object Name, @{n="MB";e={[math]::Round($_.Length/1MB,1)}}
+
+      - name: 포터블 zip 만들기
+        run: |
+          New-Item -ItemType Directory -Force -Path release | Out-Null
+          Compress-Archive -Path "dist/InstagramContentStudio" -DestinationPath "release/InstagramContentStudio_portable.zip" -CompressionLevel Optimal
+          Copy-Item installer/Output/InstagramContentStudio_Setup.exe release/
+          Get-ChildItem release | Select-Object Name, @{n="MB";e={[math]::Round($_.Length/1MB,1)}}
+
+      - name: 점검 결과 업로드
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-reports
+          path: |
+            pytest-windows.log
+            pytest-windows.xml
+            diag-color.log
+            selftest-windows.txt
+            smoke-screenshot.png
+          if-no-files-found: ignore
+
+      - name: 설치 파일/포터블 업로드
+        uses: actions/upload-artifact@v4
+        with:
+          name: InstagramContentStudio_Windows
+          path: release/*
+          compression-level: 0
+          retention-days: 14

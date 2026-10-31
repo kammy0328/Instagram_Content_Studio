@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..core.layout import compute_geometry
-from ..core.model import FEED_MAX_FINAL, FEED_VIDEO_MAX_SEC, REELS_MAX_SEC, STORY_MAX_SEC, max_frames_for
+from ..core.model import FEED_MAX_FINAL, FEED_VIDEO_MAX_SEC, REELS_MAX_SEC, STORY_MAX_SEC
 from ..core.project import Project
 
 
@@ -102,7 +102,7 @@ def plan_render(project: Project, include_original_stills: bool = True) -> Rende
         dur = project.seconds(s.start, s.end)
         if s.length < 1:
             plan.issues.append(PlanIssue("error", "STORY 구간이 비어 있습니다."))
-        elif s.length > max_frames_for(STORY_MAX_SEC, project.fps):
+        elif index.time_of(s.end) - index.time_of(s.start) > STORY_MAX_SEC:
             plan.issues.append(PlanIssue("error", f"STORY 길이가 {dur:.2f}초로 60초를 넘습니다."))
         else:
             geo = compute_geometry(info.display_w, info.display_h, "916", s.layout)
@@ -122,7 +122,7 @@ def plan_render(project: Project, include_original_stills: bool = True) -> Rende
         dur = project.seconds(s.start, s.end)
         if s.length < 1:
             plan.issues.append(PlanIssue("error", "REELS 구간이 비어 있습니다."))
-        elif s.length > max_frames_for(REELS_MAX_SEC, project.fps):
+        elif index.time_of(s.end) - index.time_of(s.start) > REELS_MAX_SEC:
             plan.issues.append(PlanIssue("error", f"REELS 길이가 {dur:.2f}초로 180초를 넘습니다."))
         else:
             geo = compute_geometry(info.display_w, info.display_h, "916", s.layout)
@@ -136,7 +136,7 @@ def plan_render(project: Project, include_original_stills: bool = True) -> Rende
             if geo.tier_note:
                 plan.issues.append(PlanIssue("info", f"REELS: {geo.tier_note}"))
     if st.cover.frame is not None:
-        geo = compute_geometry(info.display_w, info.display_h, "916", st.cover.layout)
+        geo = compute_geometry(info.display_w, info.display_h, project.cover_kind(), st.cover.layout)
         add(
             "reels_cover",
             "REELS 커버",
@@ -157,11 +157,22 @@ def plan_render(project: Project, include_original_stills: bool = True) -> Rende
         )
     else:
         done_orig: set[int] = set()
+        feed_kind = project.feed_kind()
+        if feed_kind == "orig" and included:
+            ar = info.display_w / info.display_h
+            if not (0.8 - 1e-3 <= ar <= 1.91 + 1e-3):
+                plan.issues.append(
+                    PlanIssue(
+                        "warn",
+                        f"FEED 원본 비율({info.display_w}:{info.display_h})이 인스타그램 피드 허용 범위(4:5 ~ 1.91:1)를 "
+                        "벗어납니다. 인스타그램이 피드에서 가장자리를 잘라 보여 줄 수 있습니다.",
+                    )
+                )
         for n, it in enumerate(included, start=1):
-            geo = compute_geometry(info.display_w, info.display_h, "45", it.layout)
+            geo = compute_geometry(info.display_w, info.display_h, feed_kind, it.layout)
             if it.kind == "video":
                 dur = project.seconds(it.start, it.end)
-                if it.end - it.start > max_frames_for(FEED_VIDEO_MAX_SEC, project.fps):
+                if index.time_of(it.end) - index.time_of(it.start) > FEED_VIDEO_MAX_SEC:
                     plan.issues.append(PlanIssue("error", f"피드 #{n} 영상이 {dur:.1f}초로 60초를 넘습니다."))
                     continue
                 add(

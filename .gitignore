@@ -44,3 +44,10 @@ ics_media/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Windows 빌드 산출물
+vendor/ffmpeg/*.dll
+LICENSES/FFMPEG_LICENSE.txt
+installer/Output/
+installer/Korean.isl
+release/

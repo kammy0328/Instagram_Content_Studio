@@ -25,7 +25,11 @@ from .ui.settings import Settings
 class App:
     def __init__(self, argv=None):
         QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
-        self.qt = QApplication(argv or sys.argv)
+        self.qt = QApplication.instance() or QApplication(argv or sys.argv)
+        # 편집 창 <-> 프로젝트 목록 전환 중에는 열린 창이 잠시 없다. 기본값(True)이면 그 순간 앱이 통째로 종료되므로
+        # 자동 종료를 끄고, 사용자가 편집 창을 닫거나 프로젝트 목록을 취소할 때만 명시적으로 종료한다.
+        self.qt.setQuitOnLastWindowClosed(False)
+        self._switching = False
         self.qt.setApplicationName(APP_NAME)
         self.qt.setStyleSheet(theme.STYLE)
         self.settings = Settings()
@@ -56,19 +60,23 @@ class App:
         QTimer.singleShot(0, self.show_projects)
         return self.qt.exec()
 
+    def _quit(self) -> None:
+        self.qt.quit()
+
     def show_projects(self) -> None:
         if self.window is not None:
             return
+        self._switching = False
         dlg = ProjectListDialog(self.library)
         if not dlg.exec():
-            self.qt.quit()
+            self._quit()
             return
         if dlg.new_requested:
             self.new_project()
         elif dlg.chosen:
             self.open_record(dlg.chosen)
         else:
-            self.qt.quit()
+            self._quit()
 
     def new_project(self) -> None:
         dlg = NewProjectDialog(None, self.settings.get("last_output", ""))
@@ -120,7 +128,12 @@ class App:
             QTimer.singleShot(0, self.show_projects)
             return
         prog.close()
-        project = Project(rec, self.library)
+        try:
+            project = Project(rec, self.library)
+        except RuntimeError as err:
+            QMessageBox.warning(None, "프로젝트 열기 실패", str(err))
+            QTimer.singleShot(0, self.show_projects)
+            return
         res = project.open()
         project.attach_media(info, index)
         # 원본이 바뀐 경우(크기/수정시간/길이) 경고
@@ -131,11 +144,22 @@ class App:
         win = EditorWindow(project, self.settings, self.iddict, cache)
         self.window = win
         win.requestProjects.connect(self._back_to_projects)
+        win.closed.connect(self._on_window_closed)
         win.show()
         msgs = []
         if res["crashed"] and res["restored"]:
             msgs.append("이전 세션이 비정상 종료되어 마지막으로 정상 저장된 상태를 복구했습니다.")
-        if res["skipped"]:
+        if res.get("db_recovered") == "backup":
+            msgs.append(
+                "프로젝트 저장 파일(DB)이 손상되어 별도 백업에서 복구했습니다. 손상된 파일은 프로젝트 폴더에 "
+                "'.corrupt_날짜' 이름으로 보관했습니다. 마지막 편집 내용을 확인하세요."
+            )
+        elif res.get("db_recovered") == "empty":
+            msgs.append(
+                "프로젝트 저장 파일(DB)이 손상되었고 복구할 백업도 없어 빈 상태로 시작합니다. "
+                "손상된 파일은 프로젝트 폴더에 '.corrupt_날짜' 이름으로 보관했습니다."
+            )
+        if res["skipped"] and res.get("db_recovered") is None:
             msgs.append(f"손상된 저장본 {res['skipped']}개를 건너뛰고 이전 정상 저장본으로 복구했습니다.")
         if summ and (
             abs(summ.get("duration", 0) - info.duration) > 0.05
@@ -148,13 +172,27 @@ class App:
         if msgs:
             QTimer.singleShot(400, lambda: QMessageBox.information(win, "프로젝트 열기", "\n\n".join(msgs)))
 
+    def _on_window_closed(self) -> None:
+        if not self._switching:  # 사용자가 편집 창을 직접 닫음 -> 프로그램 종료
+            self._quit()
+
     def _back_to_projects(self) -> None:
-        w, self.window = self.window, None
-        if w:
-            w.close()
-            w.deleteLater()
+        w = self.window
+        if w is None:
+            return
+        self._switching = True
+        if not w.close():  # 렌더링 중 '취소하고 종료' 를 거절한 경우 등: 그대로 편집을 계속한다
+            self._switching = False
+            return
+        self.window = None
+        w.deleteLater()
         QTimer.singleShot(0, self.show_projects)
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    args = list(sys.argv[1:] if argv is None else argv)
+    if args and args[0] == "--selftest":  # 배포본 점검: 창 없이 결과 파일만 쓰고 종료
+        from .selftest import run_selftest
+
+        return run_selftest(args[1] if len(args) > 1 else None)
     return App().run()
