@@ -30,13 +30,25 @@ libx264 와 AAC 인코더가 들어 있는 빌드가 필요합니다 (`vendor/ff
 
 ### Windows 설치 파일 만들기
 
-Windows PC 에서 `build_windows.bat` 를 실행합니다. 테스트 → PyInstaller 빌드 → (Inno Setup 6 이 있으면) 설치 파일 생성까지 진행합니다.
+**방법 A. GitHub Actions (권장, Windows PC 없이도 가능)**
+
+저장소의 Actions 탭에서 `Windows build` 를 실행하면(`workflow_dispatch`, 또는 `v*` 태그 푸시) Windows 러너에서 아래를 자동으로 수행합니다.
+
+1. FFmpeg(BtbN GPL shared 빌드) 내려받기 → `vendor/ffmpeg` 에 배치
+2. Windows 에서 pytest 전체 실행 (실패하면 중단)
+3. PyInstaller 빌드 → **빌드된 exe 를 `--selftest` 로 점검** (번들 FFmpeg, Qt 플러그인, 영상 생성 → 분석 → 렌더 → 편집 창, 출력 색 태그)
+4. exe 를 실제로 실행해 8초간 살아있는지 확인하고 화면 캡처를 남김
+5. Inno Setup 설치 파일 생성
+6. artifact `InstagramContentStudio_Windows` (설치 파일 `InstagramContentStudio_Setup.exe`, 포터블 `InstagramContentStudio_portable.zip`)와 `windows-reports` (테스트 로그, 점검 결과, 화면 캡처) 업로드
+
+**방법 B. Windows PC 에서 직접**
+
+`build_windows.bat` 를 실행합니다. 테스트 → PyInstaller 빌드 → (Inno Setup 6 이 있으면) 설치 파일 생성까지 진행합니다.
 
 - 결과물: `dist\InstagramContentStudio\InstagramContentStudio.exe`
 - 설치 파일: `installer\Output\InstagramContentStudio_Setup.exe`
 
-> 이 패키지는 Linux 환경에서 개발·검증했기 때문에 Windows 설치 파일(.exe)은 포함되어 있지 않습니다.
-> 대신 동일한 `ics.spec` 로 Linux 빌드가 성공하고 빌드된 앱이 정상 기동하는 것까지 확인했습니다.
+배포본 점검만 따로 하려면: `InstagramContentStudio.exe --selftest 결과.txt` (창 없이 결과 파일을 쓰고, 통과 시 종료 코드 0).
 
 ### 테스트와 코드 품질
 
@@ -113,7 +125,7 @@ PROJECT_NAME/
 
 | 항목 | 제약 | 대안 / 현재 처리 | 검증 방법 |
 |---|---|---|---|
-| Windows 설치 파일 | Linux 개발 환경에서는 `.exe` 를 만들 수 없음 | `ics.spec`, `build_windows.bat`, `installer/ics_installer.iss` 제공. Linux 빌드와 기동은 확인 | Windows 에서 `build_windows.bat` 실행 후 아래 체크리스트 수행 |
+| Windows 설치 파일 | Linux 개발 환경에서는 `.exe` 를 직접 만들 수 없음 | GitHub Actions Windows 러너에서 빌드. 러너에서 pytest 전체 통과, 빌드된 exe 의 `--selftest` 통과, 실행 후 창 표시(화면 캡처)까지 자동 확인 | 사람이 직접 설치해 아래 체크리스트 수행 (오디오 재생, 실제 XML 등은 자동 검증 불가) |
 | FFmpeg 라이선스 | libx264 포함 GPL 빌드를 같이 배포하면 GPL 의무 발생 | `LICENSES/THIRD_PARTY_NOTICES.md` 에 정리. 별도 실행 파일 호출 방식 | 배포 전 법무/라이선스 검토 |
 | 캡션 글자 수 | 인스타그램의 실제 계산 방식은 공개 규격이 없고 변경될 수 있음 | 기본은 UTF-16 코드 유닛(가장 보수적)이며 코드포인트/글자 단위 표시와 전환 가능 | 이모지·한글·복합 이모지가 섞인 2200자 근처 캡션을 실제 앱에 붙여 넣어 확인 |
 | XML 호환성 | 파서는 공개 포맷 명세와 샘플 기준으로 작성함. 실제 Premiere/FCP 내보내기 파일로는 아직 검증 못 함 | 시퀀스/트랙 선택, 오프셋, TC/길이 불일치 경고, 수동 보정 제공 | 사용 중인 실제 XML 3~5개로 컷 개수·경계 확인 (지시서도 샘플 확보를 요구) |
@@ -126,7 +138,7 @@ PROJECT_NAME/
 
 ## 6. Windows 실기 검증 체크리스트
 
-1. `build_windows.bat` 가 테스트 통과 후 설치 파일을 만든다.
+1. Actions 의 `Windows build` 가 성공하고(또는 `build_windows.bat` 가 테스트 통과 후) 설치 파일이 만들어진다.
 2. 설치 후 실행 → 새 프로젝트 → 4K/1080p MOV(ProRes), H.264 MP4 각각 열기 → 분석 정보 확인.
 3. 재생(소리 포함), J/K/L, 프레임 이동, 스크럽 시 화면이 프레임 번호와 일치.
 4. 실제 Premiere XML / FCPXML 불러오기 → 컷 수와 경계 확인 → 병합/해제/드래그 보정.
