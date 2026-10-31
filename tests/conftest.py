@@ -108,7 +108,7 @@ def hdr_pq(media_dir) -> Path:
         pix_fmt="yuv420p",
         frames=20,
         audio=False,
-        extra=["-color_trc", "smpte2084", "-color_primaries", "bt2020", "-colorspace", "bt2020nc"],
+        color_tags=("bt2020nc", "bt2020", "smpte2084"),
     )
 
 

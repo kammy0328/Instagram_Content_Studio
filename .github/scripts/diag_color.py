@@ -30,14 +30,14 @@ show(
     helpers.make_video(d / "c.mp4", vcodec="h264", pix_fmt="yuv420p", frames=10, audio=False, tags=False),
 )
 show(
-    "h264 hdr(extra opts)",
+    "h264 hdr",
     helpers.make_video(
         d / "d.mp4",
         vcodec="h264",
         pix_fmt="yuv420p",
         frames=10,
         audio=False,
-        extra=["-color_trc", "smpte2084", "-color_primaries", "bt2020", "-colorspace", "bt2020nc"],
+        color_tags=("bt2020nc", "bt2020", "smpte2084"),
     ),
 )
 show(

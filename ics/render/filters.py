@@ -23,6 +23,9 @@ def output_fps(info: MediaInfo, vfr_avg: Fraction | None = None) -> Fraction:
     return f
 
 
+OUTPUT_TAGS_FILTER = "setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv"
+
+
 def video_filter(info: MediaInfo, geo: Geometry, fps_out: Fraction | None, pix_fmt: str = "yuv420p") -> str:
     """원본 디코딩 프레임 -> (디인터레이스) -> [크롭] -> 스케일(+색변환, 디더) -> pad(검정) -> setsar=1."""
     parts: list[str] = pre_filters(info)
@@ -47,6 +50,9 @@ def video_filter(info: MediaInfo, geo: Geometry, fps_out: Fraction | None, pix_f
     parts.append("setsar=1")
     if fps_out is not None:
         parts.append(f"fps=fps={fps_out.numerator}/{fps_out.denominator}:round=near")
+    # 출력 색 태그를 프레임 속성으로도 명시한다. FFmpeg 7.1+ 는 인코더 옵션(-color_primaries/-color_trc)보다 프레임 속성을
+    # 우선해서 기록하므로, 이 줄이 없으면 primaries/trc 태그가 비어 나온다 (Windows 번들 FFmpeg 8.1 에서 확인).
+    parts.append(OUTPUT_TAGS_FILTER)
     return ",".join(parts)
 
 
