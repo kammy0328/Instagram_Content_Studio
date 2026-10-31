@@ -1,6 +1,6 @@
 [project]
 name = "instagram-content-studio"
-version = "1.0.2"
+version = "1.0.3"
 description = "마스터링 영상 1개를 인스타그램 STORY / REELS / FEED 콘텐츠로 변환하는 Windows 데스크톱 프로그램"
 requires-python = ">=3.11"
 readme = "README.md"

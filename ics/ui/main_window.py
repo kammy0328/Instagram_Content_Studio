@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -24,6 +25,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..core import cuts as cuts_mod
 from ..core.layout import LayoutParams, compute_geometry
 from ..core.model import FEED_MAX_FINAL
 from ..render import engine
@@ -180,13 +182,14 @@ class EditorWindow(QMainWindow):
         # ---- 서비스
         self.decoder = Decoder(info, index)
         self.frames = FrameService(self.decoder)
-        self.thumbs = ThumbService(self.decoder, cache_dir, info)
+        self.thumbs = ThumbService(self.decoder, cache_dir, info, coarse=False)  # 타임라인 전체 썸네일 줄이 없다
         # 컷 스트립용: 타임라인 썸네일보다 크고 거친 격자는 만들지 않는다 (보이는 컷만 생성)
         self.cut_thumbs = ThumbService(self.decoder, cache_dir, info, height=72, subdir="cut_thumbs", coarse=False)
         self.playback = PlaybackEngine(self.decoder, self.frames)
         self.proxy = ProxyBuilder(info, cache_dir)
         self.render_queue: RenderQueue | None = None
         self.render_dialog: RenderDialog | None = None
+        self._audio_notices: set[str] = set()
         self.tab = "story"
         self.playhead = max(0, min(project.state.playhead, max(0, index.count - 1)))
         self.cover_mode = False
@@ -210,9 +213,13 @@ class EditorWindow(QMainWindow):
         self.queueFinished.connect(self._on_queue_finished)
         self.proxy.progress.connect(lambda p: self.proxy_lbl.setText(f"프록시 생성 {int(p * 100)}%"))
         self.proxy.finished.connect(self._on_proxy_done)
+        self.proxy.audioReady.connect(self._on_audio_ready)
+        self.proxy.audioFailed.connect(self._on_audio_failed)
         self.preview.set_source_size(info.display_w, info.display_h)
         self.carousel.pw.set_source_size(info.display_w, info.display_h)
-        self.proxy.start() if not self.proxy.ready() else self._on_proxy_done(True, "")
+        self._init_audio_ui()
+        # 이미 만들어 둔 프록시가 있어도 항상 시작한다: 없는 것만 만들고, 소리 연결과 프록시 색인 로드를 같은 경로로 처리한다
+        self.proxy.start()
         self._apply_ui_state()
         self.goto(self.playhead)
         self._refresh()
@@ -333,6 +340,7 @@ class EditorWindow(QMainWindow):
         self.transport.frameEntered.connect(self.goto)
         self.transport.viewToggled.connect(lambda _v: self._update_preview_layout())
         self.transport.safe.toggled.connect(self._safe_toggled)
+        self.transport.muteToggled.connect(self.set_muted)
         cv.addWidget(self.transport)
         top.addWidget(center)
         # --- 우측 인스펙터
@@ -360,14 +368,16 @@ class EditorWindow(QMainWindow):
         self.cut_strip = CutStrip(self.project, self.cut_thumbs)
         self.cut_strip.selectionIdsChanged.connect(self._strip_selected)
         self.cut_strip.cutActivated.connect(self.goto)
+        self.cut_strip.contextRequested.connect(self._show_cut_menu)
         bv.addWidget(self.cut_strip)
         self.timeline = TimelineWidget(self.project, self.thumbs)
         self.timeline.playheadRequested.connect(self.goto)
         self.timeline.cutSelectionChanged.connect(self._timeline_selected)
+        self.timeline.cutContextRequested.connect(self._show_cut_menu)
         self.timeline.feedItemClicked.connect(self._feed_clicked)
         bv.addWidget(self.timeline)
         sp.addWidget(bottom)
-        sp.setSizes([520, 420])
+        sp.setSizes([600, 340])
         sp.setStretchFactor(0, 1)
         # --- 패널 연결
         for which, panel in (("story", self.story_panel), ("reels", self.reels_panel)):
@@ -423,8 +433,17 @@ class EditorWindow(QMainWindow):
             return b
 
         btn("XML 불러오기", self.import_xml, "Premiere/FCP7 XML · FCPXML · EDL 컷 정보 (선택 사항)")
-        btn("병합 (M)", self.merge_selected, "Shift+클릭으로 선택한 연속 컷을 하나의 논리 컷으로 병합")
+        btn(
+            "병합 (M)",
+            self.merge_selected,
+            "Shift+클릭으로 선택한 연속 컷을 하나의 논리 컷으로 병합 (오른쪽 클릭 메뉴에서도 가능)",
+        )
         btn("병합 해제", self.unmerge_selected)
+        btn(
+            "컷 나누기 (C)",
+            self.split_at_playhead,
+            "현재 재생 헤드 위치에서 컷을 둘로 나눔 (재생 헤드 프레임이 뒤쪽 컷의 첫 프레임)",
+        )
         btn("원래 컷 복원", self.restore_cuts)
         btn("선택 컷 → In/Out", self.cuts_to_inout, "선택한 (병합) 컷 범위를 현재 탭의 In/Out 으로 지정")
         self.mode_btn = btn("편집: 롤", self.toggle_mode, "롤: 맞닿은 두 경계를 함께 이동 / 트림: 한쪽 경계만 이동 (R)")
@@ -471,6 +490,8 @@ class EditorWindow(QMainWindow):
             "add_still": self.add_still,
             "add_video": self.add_video,
             "merge_cuts": self.merge_selected,
+            "split_cut": self.split_at_playhead,
+            "toggle_mute": lambda: self.transport.mute_btn.toggle() if self.transport.mute_btn.isEnabled() else None,
             "toggle_view": lambda: self.transport.view_btn.toggle(),
             "toggle_mode": self.toggle_mode,
             "toggle_snap": self.toggle_snap,
@@ -605,6 +626,7 @@ class EditorWindow(QMainWindow):
             start = loop[0]
         self.rate_level = 1
         self.playback.play(start, 1.0, loop)
+        self._notify_audio_problem()
 
     def play_range(self) -> None:
         r = self._active_range()
@@ -853,6 +875,91 @@ class EditorWindow(QMainWindow):
         finally:
             self.project.end_group()
         self._set_cut_selection([])
+
+    def split_at_playhead(self) -> None:
+        """현재 재생 헤드 위치에서 컷을 나눈다. 재생 헤드 프레임이 뒤쪽 컷의 첫 프레임이 된다."""
+        frame = self.playhead
+        cs = self.project.state.cuts
+        i = cuts_mod.cut_index_at(cs, frame)
+        cid = cs[i].id if i is not None else None
+        try:
+            left, right = self.project.split_cut_at(frame)
+        except ValueError as e:
+            self.toast(str(e))
+            return
+        sel = list(self.timeline.sel_ids)
+        if cid is not None and cid in sel:  # 나눈 컷이 선택돼 있었다면 두 조각을 함께 선택해 둔다
+            k = sel.index(cid)
+            sel[k : k + 1] = [left, right]
+            self._set_cut_selection(sel)
+        else:
+            self.cut_strip.refresh(self.timeline.sel_ids)
+            self.timeline.update()
+        n = next(k for k, c in enumerate(self.project.state.cuts) if c.id == right) + 1
+        self.toast(f"{self.project.tc(frame)} 에서 컷을 나눴습니다 (#{n - 1} | #{n})")
+
+    def _build_cut_menu(self) -> QMenu:
+        """컷 위 오른쪽 클릭 메뉴. 지금 선택/재생 헤드 상태에 맞게 항목을 켜고 끈다."""
+        cs = self.project.state.cuts
+        ids = list(self.timeline.sel_ids)
+        sel = [c for c in cs if c.id in ids]
+        sc = self.settings.shortcut
+
+        def add(menu, key, text, fn, enabled=True, why=""):
+            a = menu.addAction(text)
+            a.setObjectName(key)
+            a.setEnabled(enabled)
+            if why and not enabled:
+                a.setToolTip(why)
+            a.triggered.connect(lambda _=False: fn())
+            return a
+
+        m = QMenu(self)
+        m.setToolTipsVisible(True)
+        err = cuts_mod.merge_error(cs, ids)
+        label = f"선택한 {len(sel)}개 컷 병합" if len(sel) >= 2 else "병합 (컷을 2개 이상 선택하세요)"
+        add(m, "merge", f"{label}\t{sc('merge_cuts')}", self.merge_selected, err is None, err or "")
+        merged = [c for c in sel if c.merged]
+        add(m, "unmerge", "병합 해제", self.unmerge_selected, bool(merged), "병합된 컷을 선택하세요.")
+        m.addSeparator()
+        serr = cuts_mod.split_error(cs, self.playhead)
+        add(
+            m,
+            "split",
+            f"현재 위치({self.project.tc(self.playhead)})에서 컷 나누기\t{sc('split_cut')}",
+            self.split_at_playhead,
+            serr is None,
+            serr or "",
+        )
+        m.addSeparator()
+        if self.tab in ("story", "reels"):
+            add(
+                m,
+                "to_inout",
+                f"{self.tab.upper()} 구간(In/Out)으로 지정",
+                self.cuts_to_inout,
+                bool(sel),
+                "컷을 선택하세요.",
+            )
+        elif self.tab == "feed":
+            add(m, "to_inout", "FEED 영상 구간으로 지정", self.cuts_to_inout, bool(sel), "컷을 선택하세요.")
+            add(
+                m,
+                "add_video",
+                f"FEED 에 영상으로 추가\t{sc('add_video')}",
+                self.add_video,
+                bool(sel),
+                "컷을 선택하세요.",
+            )
+        return m
+
+    def _show_cut_menu(self, global_pos) -> None:
+        menu = self._build_cut_menu()
+        self._popup(menu, global_pos)
+        menu.deleteLater()
+
+    def _popup(self, menu: QMenu, global_pos) -> None:
+        menu.exec(global_pos)  # 메뉴가 닫힐 때까지 기다린다 (테스트에서는 이 메서드를 대체해 항목만 확인)
 
     def restore_cuts(self) -> None:
         if not self.project.state.orig_cuts:
@@ -1111,12 +1218,55 @@ class EditorWindow(QMainWindow):
         if status == "error":
             self.toast(msg or "저장에 실패했습니다. 디스크 공간/권한을 확인하세요.", 6000)
 
+    # ================================================================ 소리
+    def _init_audio_ui(self) -> None:
+        has = bool(self.project.media.has_audio)
+        muted = bool(self.settings.get("audio_muted", False))
+        self.playback.audio_enabled = not muted
+        self.transport.set_audio_available(has)
+        self.transport.set_muted(muted)
+        if has:
+            self.transport.set_audio_status("소리 준비 중…", "재생용 소리 파일을 만들고 있습니다.")
+
+    def set_muted(self, muted: bool) -> None:
+        """미리보기 소리 끄기/켜기. 설정에 저장하고, 재생 중이면 바로 반영한다 (렌더링 결과에는 영향 없음)."""
+        self.settings.set("audio_muted", bool(muted))
+        self.playback.set_audio_enabled(not muted)
+        self.transport.set_muted(muted)
+        self.toast("소리를 껐습니다 (미리보기만 해당)" if muted else "소리를 켰습니다")
+        if not muted:
+            self._notify_audio_problem()
+
+    def _on_audio_ready(self, wav: str) -> None:
+        self.playback.set_audio(wav)
+        if self.playback.audio.ok:
+            self.transport.set_audio_status("")
+        else:
+            self._on_audio_failed(self.playback.audio.error)
+
+    def _on_audio_failed(self, why: str) -> None:
+        self.transport.set_audio_status("⚠ 소리를 낼 수 없음", why)
+
+    def _notify_audio_problem(self) -> None:
+        """소리를 내야 하는데 못 내는 경우, 재생을 시작할 때 사유를 한 번 알린다 (조용히 무음이 되지 않도록)."""
+        if not self.project.media.has_audio or not self.playback.audio_enabled:
+            return
+        a = self.playback.audio
+        why = a.error if (not a.ok or a.error) else ""
+        if not a.ok and not why:
+            why = "소리 파일을 아직 준비하고 있습니다. 잠시 후 다시 재생하세요."
+        if why:
+            self.transport.set_audio_status("⚠ 소리를 낼 수 없음", why)
+            if why not in self._audio_notices:
+                self._audio_notices.add(why)
+                self.toast(why, 6000)
+        elif self.transport.audio_lbl.text():
+            self.transport.set_audio_status("")
+
     def _on_proxy_done(self, ok: bool, err: str) -> None:
         if ok and self.proxy.index is not None:
             self.decoder.set_proxy(str(self.proxy.video_path), self.proxy.index)
             self.frames.clear_cache()
-            if self.proxy.audio_path.is_file():
-                self.playback.set_audio(str(self.proxy.audio_path))
             self.proxy_lbl.setText("프록시 준비됨 (재생 전용 · 최종 렌더링은 항상 원본)")
             self._request_display_frame()
         elif ok:

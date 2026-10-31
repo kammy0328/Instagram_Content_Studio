@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -64,6 +64,7 @@ class TransportBar(QWidget):
     loopToggled = Signal(bool)
     viewToggled = Signal(bool)
     frameEntered = Signal(int)
+    muteToggled = Signal(bool)  # True = 소리 끔
 
     def __init__(self, project):
         super().__init__()
@@ -86,6 +87,15 @@ class TransportBar(QWidget):
         self.rate_lbl = QLabel("")
         self.rate_lbl.setObjectName("muted")
         lay.addWidget(self.rate_lbl)
+        self.mute_btn = QPushButton()
+        self.mute_btn.setCheckable(True)
+        self.mute_btn.toggled.connect(self.muteToggled.emit)
+        lay.addWidget(self.mute_btn)
+        self.audio_lbl = QLabel("")
+        self.audio_lbl.setObjectName("muted")
+        lay.addWidget(self.audio_lbl)
+        self._has_audio = True
+        self.set_muted(False)
         lay.addStretch(1)
         self.loop = QCheckBox("구간 반복")
         self.loop.toggled.connect(self.loopToggled.emit)
@@ -113,6 +123,34 @@ class TransportBar(QWidget):
 
     def set_playing(self, playing: bool) -> None:
         self.b_play.setText("⏸" if playing else "▶")
+
+    def set_muted(self, muted: bool) -> None:
+        """버튼 표시만 맞춘다 (muteToggled 는 내보내지 않는다)."""
+        self.mute_btn.blockSignals(True)
+        self.mute_btn.setChecked(muted)
+        self.mute_btn.blockSignals(False)
+        self._refresh_mute_btn()
+
+    def set_audio_available(self, has_audio: bool) -> None:
+        self._has_audio = has_audio
+        self._refresh_mute_btn()
+
+    def set_audio_status(self, text: str, tip: str = "") -> None:
+        """소리 준비 중 / 사용 불가 사유를 보여 준다 (정상일 때는 빈 문자열)."""
+        self.audio_lbl.setText(text)
+        self.audio_lbl.setToolTip(tip)
+
+    def _refresh_mute_btn(self) -> None:
+        muted = self.mute_btn.isChecked()
+        self.mute_btn.setEnabled(self._has_audio)
+        if not self._has_audio:
+            self.mute_btn.setText("🔇 소리 없음")
+            self.mute_btn.setToolTip("이 영상에는 오디오 트랙이 없습니다.")
+            return
+        self.mute_btn.setText("🔇 소리 꺼짐" if muted else "🔊 소리 켜짐")
+        self.mute_btn.setToolTip(
+            "소리 켜기/끄기 (Shift+M)\n미리보기 재생 소리만 끕니다. 렌더링 결과물의 소리에는 영향이 없습니다."
+        )
 
 
 def slider(minv, maxv, val) -> QSlider:
@@ -387,6 +425,12 @@ class FeedPanel(QWidget):
     def __init__(self, project, thumbs):
         super().__init__()
         self.project, self.thumbs = project, thumbs
+        self._thumb_frames: set[int] = set()
+        self._thumb_timer = QTimer(self)
+        self._thumb_timer.setSingleShot(True)
+        self._thumb_timer.setInterval(250)
+        self._thumb_timer.timeout.connect(self.refresh)
+        thumbs.thumbReady.connect(lambda n: self._thumb_timer.start() if n in self._thumb_frames else None)
         v = QVBoxLayout(self)
         v.setContentsMargins(6, 6, 6, 6)
         t = QLabel("<b>FEED</b> (캐러셀)")
@@ -496,6 +540,8 @@ class FeedPanel(QWidget):
         self._block = True
         self.list.clear()
         items = p.feed_ordered()
+        self._thumb_frames = {it.start for it in items}
+        self.thumbs.ensure(sorted(self._thumb_frames))  # 타임라인 전체 썸네일 줄이 없으므로 필요한 프레임을 직접 요청
         n = 0
         for it in items:
             if it.included:

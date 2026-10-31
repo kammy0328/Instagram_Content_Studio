@@ -31,6 +31,8 @@ DEFAULT_SHORTCUTS = {
     "add_still": ("피드 스틸 추가", "S"),
     "add_video": ("피드 영상 추가", "V"),
     "merge_cuts": ("선택 컷 병합", "M"),
+    "split_cut": ("현재 위치에서 컷 나누기", "C"),
+    "toggle_mute": ("소리 끄기/켜기", "Shift+M"),
     "toggle_view": ("소스/출력 미리보기 전환", "Tab"),
     "toggle_mode": ("롤/트림 전환", "R"),
     "toggle_snap": ("스냅 켜기/끄기", "N"),

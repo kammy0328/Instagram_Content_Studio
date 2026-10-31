@@ -291,3 +291,362 @@ def test_closing_the_editor_window_still_quits_the_app(qapp, prores_2398, tmp_pa
     app.window.close()
     pump(qapp, 100)
     assert calls == {"list": 0, "quit": 1}
+
+
+# ---------------------------------------------------------------- 우클릭 메뉴 / 컷 나누기 / 타임라인 정리
+def _right_click(widget, pos):
+    """위젯(뷰포트)에 오른쪽 클릭의 컨텍스트 메뉴 이벤트를 보낸다."""
+    from PySide6.QtGui import QContextMenuEvent
+
+    ev = QContextMenuEvent(QContextMenuEvent.Reason.Mouse, pos, widget.mapToGlobal(pos))
+    QApplication.sendEvent(widget, ev)
+
+
+@pytest.fixture()
+def menu_log(win, monkeypatch):
+    """메뉴를 화면에 띄우지 않고(블로킹 방지) 메뉴가 떴을 때의 항목 상태를 기록하며, 원하는 항목을 눌러 준다."""
+    log = {"shown": [], "pick": None}
+
+    def fake_popup(menu, _pos):
+        acts = {x.objectName(): x for x in menu.actions() if x.objectName()}
+        log["shown"].append({k: (v.isEnabled(), v.text()) for k, v in acts.items()})
+        pick = log["pick"]
+        if pick and acts[pick].isEnabled():
+            acts[pick].trigger()
+
+    monkeypatch.setattr(win, "_popup", fake_popup)
+    return log
+
+
+def test_right_click_on_shift_selected_cuts_offers_merge_and_merges(qapp, win, menu_log):
+    p, strip = win.project, win.cut_strip
+    p.import_cuts(CUTS, {})
+    pump(qapp, 200)
+    _click_tile(qapp, strip, 2)
+    _click_tile(qapp, strip, 4, Qt.KeyboardModifier.ShiftModifier)  # #3 ~ #5 선택
+    menu_log["pick"] = "merge"
+    strip.scrollToItem(strip.item(3))
+    pump(qapp, 30)
+    _right_click(strip.viewport(), _tile_center(strip, 3))  # 선택 범위 안의 타일을 오른쪽 클릭 -> 선택 유지
+    shown = menu_log["shown"][-1]
+    assert shown["merge"][0] and "3개 컷 병합" in shown["merge"][1]
+    assert not shown["unmerge"][0]
+    merged = [c for c in p.state.cuts if c.merged]
+    assert len(merged) == 1 and (merged[0].start, merged[0].end) == (CUTS[2][0], CUTS[4][1])
+    assert strip.count() == len(CUTS) - 2
+    assert win.timeline.sel_ids == [merged[0].id]  # 합쳐진 컷이 선택된다
+
+
+def test_right_click_on_unselected_cut_selects_it_first_and_merge_is_disabled(qapp, win, menu_log):
+    win.project.import_cuts(CUTS, {})
+    pump(qapp, 200)
+    strip, cuts = win.cut_strip, win.project.state.cuts
+    _click_tile(qapp, strip, 0)
+    _click_tile(qapp, strip, 1, Qt.KeyboardModifier.ShiftModifier)
+    assert len(win.timeline.sel_ids) == 2
+    _right_click(strip.viewport(), _tile_center(strip, 4))  # 선택 밖의 컷
+    assert win.timeline.sel_ids == [cuts[4].id] and strip.selected_ids() == [cuts[4].id]
+    enabled, text = menu_log["shown"][-1]["merge"]
+    assert not enabled and "2개 이상" in text
+    # 병합된 컷을 오른쪽 클릭하면 '병합 해제' 가 켜진다
+    win.timeline.sel_ids = [cuts[0].id, cuts[1].id]
+    win.merge_selected()
+    pump(qapp, 100)
+    merged = [c for c in win.project.state.cuts if c.merged][0]
+    menu_log["pick"] = "unmerge"
+    row = [c.id for c in win.project.state.cuts].index(merged.id)
+    _right_click(strip.viewport(), _tile_center(strip, row))
+    assert menu_log["shown"][-1]["unmerge"][0]
+    assert not any(c.merged for c in win.project.state.cuts)
+
+
+def test_right_click_on_timeline_cut_lane_shows_the_same_menu(qapp, win, menu_log):
+    from ics.ui import timeline as T
+
+    p, tl = win.project, win.timeline
+    p.import_cuts(CUTS, {})
+    pump(qapp, 200)
+    tl.fit()
+    pump(qapp, 100)
+    y = T.Y_CUT + 12
+    QTest.mouseClick(tl, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(int(tl.x_of(60)), y))
+    QTest.mouseClick(tl, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.ShiftModifier, QPoint(int(tl.x_of(200)), y))
+    assert len(tl.sel_ids) == 2  # 컷 #5(41~150) ~ #6(150~240)
+    menu_log["pick"] = "merge"
+    _right_click(tl, QPoint(int(tl.x_of(60)), y))
+    assert menu_log["shown"][-1]["merge"][0]
+    assert any(c.merged for c in p.state.cuts)
+    n = len(menu_log["shown"])
+    _right_click(tl, QPoint(int(tl.x_of(60)), T.Y_CUT - 5))  # 눈금자 위에서는 메뉴가 없다
+    assert len(menu_log["shown"]) == n
+
+
+def test_context_menu_split_entry_follows_the_playhead_and_feed_tab_has_add_video(qapp, win, menu_log):
+    p = win.project
+    p.import_cuts(CUTS, {})
+    pump(qapp, 200)
+    _click_tile(qapp, win.cut_strip, 4)  # 컷 #5 41~150 (재생 헤드는 41 = 컷의 첫 프레임)
+    _right_click(win.cut_strip.viewport(), _tile_center(win.cut_strip, 4))
+    assert not menu_log["shown"][-1]["split"][0]  # 컷의 첫 프레임에서는 나눌 수 없다
+    assert "to_inout" in menu_log["shown"][-1] and "add_video" not in menu_log["shown"][-1]  # STORY 탭
+    win.goto(100)
+    menu_log["pick"] = "split"
+    _right_click(win.cut_strip.viewport(), _tile_center(win.cut_strip, 4))
+    assert menu_log["shown"][-1]["split"][0]
+    assert [(c.start, c.end) for c in p.state.cuts][4:6] == [(41, 100), (100, 150)]
+    win.set_tab("feed")
+    menu_log["pick"] = None
+    _right_click(win.cut_strip.viewport(), _tile_center(win.cut_strip, 4))
+    assert menu_log["shown"][-1]["add_video"][0]
+
+
+def test_split_at_playhead_button_shortcut_undo_and_selection(qapp, win):
+    from PySide6.QtWidgets import QPushButton
+
+    p, strip = win.project, win.cut_strip
+    p.import_cuts(CUTS, {})
+    pump(qapp, 200)
+    assert strip.count() == 6
+    _click_tile(qapp, strip, 4)  # #5 선택 (41~150)
+    sel_before = win.timeline.sel_ids[0]
+    win.goto(100)
+    btn = next(b for b in win.findChildren(QPushButton) if b.text().startswith("컷 나누기"))
+    btn.click()  # 툴바 버튼
+    pump(qapp, 100)
+    assert [(c.start, c.end) for c in p.state.cuts] == [
+        (0, 1),
+        (1, 2),
+        (2, 40),
+        (40, 41),
+        (41, 100),
+        (100, 150),
+        (150, 240),
+    ]
+    assert strip.count() == 7
+    assert win.timeline.sel_ids == [p.state.cuts[4].id, p.state.cuts[5].id] and p.state.cuts[4].id == sel_before
+    assert strip.selected_ids() == win.timeline.sel_ids  # 나눈 컷이 선택돼 있었으면 두 조각이 함께 선택된다
+    assert "에서 컷을 나눴습니다" in win.toast_lbl.text()
+    # 단축키(C) 액션 - 같은 위치에서 또 나누면 거절(첫 프레임), 상태는 그대로
+    win.actions["split_cut"].trigger()
+    assert len(p.state.cuts) == 7 and "첫 프레임" in win.toast_lbl.text()
+    win.goto(20)
+    win.actions["split_cut"].trigger()
+    assert len(p.state.cuts) == 8
+    win.do_undo()
+    win.do_undo()
+    assert len(p.state.cuts) == 6
+
+
+def test_split_works_without_xml_and_in_a_gap(qapp, win):
+    p = win.project
+    assert p.state.cuts == []
+    win.goto(100)
+    win.split_at_playhead()
+    pump(qapp, 100)
+    assert [(c.start, c.end) for c in p.state.cuts] == [(0, 100), (100, p.count)]
+    assert win.cut_strip.count() == 2
+    p.import_cuts([(0, 50, "a", {}), (80, 120, "b", {})], {})  # 50~80 은 컷 없는 구간
+    win.goto(60)
+    win.split_at_playhead()
+    assert len(p.state.cuts) == 2 and "빈 구간" in win.toast_lbl.text()
+
+
+def test_timeline_no_longer_has_a_full_length_thumbnail_row(qapp, win):
+    from ics.ui import timeline as T
+
+    assert not hasattr(T, "THUMB_H") and not hasattr(T.TimelineWidget, "_paint_thumbs")
+    assert T.Y_CUT == T.RULER_H  # 눈금자 바로 아래가 컷 레인
+    win.project.import_cuts(CUTS, {})
+    pump(qapp, 300)
+    assert not win.timeline.grab().isNull()
+    assert not list(win.thumbs._low), "전체 영상 거친 격자를 더 이상 미리 만들지 않는다"
+    # 눈금자를 눌러 이동하는 동작은 그대로
+    QTest.mouseClick(win.timeline, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(300, 5))
+    assert win.playhead > 0
+
+
+def test_feed_thumbnails_are_requested_without_the_timeline_thumbnail_row(qapp, win):
+    win.set_tab("feed")
+    win.goto(70)
+    win.add_still()
+    t = time.time()
+    while win.thumbs.get(70) is None and time.time() - t < 15:
+        pump(qapp, 100)
+    assert win.thumbs.get(70) is not None
+    pump(qapp, 500)
+    assert not win.feed_panel.list.item(0).icon().isNull()  # 썸네일이 만들어진 뒤 목록 아이콘이 갱신된다
+
+
+# ---------------------------------------------------------------- 소리: 끄기 / 장치 문제 알림 / 캐시된 프록시에서 다시 열기
+class FakeAudio:
+    """실제 오디오 장치 없이 PlaybackEngine 이 소리를 언제 켜고 끄는지만 기록한다."""
+
+    def __init__(self, wav=None):
+        self.ok, self.error, self.wav, self.calls = True, "", wav, []
+
+    def play(self, seconds):
+        self.calls.append(("play", seconds))
+
+    def stop(self):
+        self.calls.append(("stop",))
+
+
+def _wait(qapp, cond, timeout=30):
+    t = time.time()
+    while not cond() and time.time() - t < timeout:
+        pump(qapp, 100)
+    return cond()
+
+
+def test_mute_button_shortcut_and_setting(qapp, win):
+    assert win.transport.mute_btn.isEnabled() and "소리 켜짐" in win.transport.mute_btn.text()
+    win.actions["toggle_mute"].trigger()  # Shift+M
+    assert not win.playback.audio_enabled and win.settings.get("audio_muted") is True
+    assert win.transport.mute_btn.isChecked() and "소리 꺼짐" in win.transport.mute_btn.text()
+    win.transport.mute_btn.click()  # 버튼으로 다시 켠다
+    assert win.playback.audio_enabled and win.settings.get("audio_muted") is False
+    # 저장된 설정은 다음에 창을 열 때 적용된다
+    win.settings.set("audio_muted", True)
+    win.playback.audio_enabled = True
+    win._init_audio_ui()
+    assert not win.playback.audio_enabled and win.transport.mute_btn.isChecked()
+
+
+def test_mute_stops_sound_and_unmute_resumes_at_the_current_position(qapp, win):
+    fake = win.playback.audio = FakeAudio()
+    win.playback.play(48, 1.0)  # 약 2.0초 지점에서 정배속 재생
+    assert fake.calls[-1][0] == "play" and fake.calls[-1][1] == pytest.approx(2.0, abs=0.1)
+    win.set_muted(True)
+    assert fake.calls[-1] == ("stop",)
+    pump(qapp, 400)
+    win.set_muted(False)  # 켜면 처음이 아니라 지금 재생 위치부터 소리가 이어진다
+    assert fake.calls[-1][0] == "play" and fake.calls[-1][1] > 2.3
+    win.playback.pause()
+    n = len(fake.calls)
+    win.set_muted(True)
+    win.set_muted(False)  # 정지 중에는 켜도 소리를 내지 않는다
+    assert not [c for c in fake.calls[n:] if c[0] == "play"]
+    win.playback.play(10, 2.0)  # 배속 재생은 소리 없음 (기존 동작)
+    assert fake.calls[-1] == ("stop",)
+    win.playback.pause()
+
+
+def test_sound_prepared_late_joins_a_running_playback(qapp, win, monkeypatch):
+    from ics.ui import services
+
+    monkeypatch.setattr(services, "AudioPlayer", FakeAudio)
+    win.playback.play(24, 1.0)
+    win.playback.set_audio("late.wav")
+    assert win.playback.audio.wav == "late.wav" and win.playback.audio.calls[0][0] == "play"
+    win.set_muted(True)
+    win.playback.set_audio("later.wav")  # 끈 상태에서는 새로 연결돼도 소리가 나지 않는다
+    assert not win.playback.audio.calls
+    win.playback.pause()
+
+
+def test_audio_player_reports_why_there_is_no_sound(qapp, prores_2398, tmp_path, monkeypatch):
+    from ics.core import media
+    from ics.ui import services
+    from ics.ui.services import AudioPlayer, ProxyBuilder
+
+    info = media.analyze(str(prores_2398))
+    pb = ProxyBuilder(info, tmp_path / "pc")
+    (tmp_path / "pc").mkdir()
+    assert pb.build_audio() == "" and pb.audio_path.is_file()
+    assert not list((tmp_path / "pc").glob("*.part"))
+    assert pb.audio_path.stat().st_size == pytest.approx(info.duration * 48000 * 4, rel=0.1)
+    a = AudioPlayer(str(pb.audio_path))
+    assert a.ok and a._offset > 0
+    a.play(0.0)  # 출력 장치가 없으면(테스트 기본값) 조용히 넘어가지 않고 사유를 남긴다
+    assert "출력 장치" in a.error and a._sink is None and a.ok
+    a.stop()
+    # Qt Multimedia 를 불러올 수 없는 경우(번들 누락 등)도 사유가 남는다
+    monkeypatch.setattr(services, "default_audio_output", lambda: (_ for _ in ()).throw(ImportError("QtMultimedia")))
+    a.play(0.0)
+    assert "소리를 재생하지 못했습니다" in a.error and "QtMultimedia" in a.error
+    # 없는 파일 / 깨진 파일
+    assert not AudioPlayer(str(tmp_path / "nope.wav")).ok and AudioPlayer(str(tmp_path / "nope.wav")).error
+    bad = tmp_path / "bad.wav"
+    bad.write_bytes(b"not a wav at all")
+    assert not AudioPlayer(str(bad)).ok and "형식" in AudioPlayer(str(bad)).error
+    # 오디오 추출이 실패하면 사유를 돌려주고 찌꺼기(.part)를 남기지 않는다
+    import copy
+
+    broken = copy.copy(info)
+    broken.path = str(tmp_path / "missing_source.mov")
+    pb2 = ProxyBuilder(broken, tmp_path / "pc2")
+    (tmp_path / "pc2").mkdir()
+    err = pb2.build_audio()
+    assert err.startswith("오디오 추출 실패") and not list((tmp_path / "pc2").iterdir())
+
+
+def test_play_tells_the_user_when_no_output_device_instead_of_staying_silent(qapp, win):
+    assert _wait(qapp, lambda: win.playback.audio.ok), win.playback.audio.error  # 재생용 소리 파일이 준비될 때까지
+    assert win.transport.audio_lbl.text() == ""
+    win.toggle_play()  # 출력 장치 없음 (테스트 기본값)
+    assert "출력 장치" in win.toast_lbl.text() and "소리를 낼 수 없음" in win.transport.audio_lbl.text()
+    win.toggle_play()
+    # 소리를 꺼 둔 상태에서는 장치가 없어도 알리지 않는다
+    win.transport.audio_lbl.setText("")
+    win.set_muted(True)
+    win.toast_lbl.setText("")
+    win.toggle_play()
+    assert win.toast_lbl.text() in ("", "소리를 껐습니다 (미리보기만 해당)") and win.transport.audio_lbl.text() == ""
+    win.toggle_play()
+
+
+def _open_editor(qapp, lib, rec, prores_2398):
+    from ics import paths
+    from ics.core import frameindex, media
+    from ics.core.iddict import IdDictionary
+    from ics.core.project import Project
+    from ics.ui.main_window import EditorWindow
+    from ics.ui.settings import Settings
+
+    info = media.analyze(str(prores_2398))
+    idx = frameindex.build_frame_index(info, paths.cache_dir(rec.id))
+    p = Project(rec, lib)
+    p.open()
+    p.attach_media(info, idx)
+    w = EditorWindow(p, Settings(), IdDictionary(), paths.cache_dir(rec.id))
+    w.show()
+    return w
+
+
+def test_sound_and_proxy_are_connected_when_the_proxy_is_already_cached(qapp, prores_2398, tmp_path, monkeypatch):
+    """프로젝트를 다시 열면 프록시가 이미 캐시에 있다. 예전에는 이 경로에서 소리 연결과 프록시 색인 로드가 빠져 무음이었다."""
+    from ics.core.store import Library
+
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes))
+    lib = Library()
+    rec = lib.create("CACHED_PROXY", "A", "T", str(prores_2398), str(tmp_path / "out"))
+    w1 = _open_editor(qapp, lib, rec, prores_2398)
+    assert _wait(qapp, lambda: w1.decoder.proxy_path is not None and w1.playback.audio.ok)
+    assert w1.proxy.ready()
+    w1.close()
+    pump(qapp, 200)
+    w2 = _open_editor(qapp, lib, rec, prores_2398)  # 같은 캐시 폴더로 다시 열기
+    try:
+        assert _wait(qapp, lambda: w2.decoder.proxy_path is not None), "캐시된 프록시를 쓰지 않음"
+        assert _wait(qapp, lambda: w2.playback.audio.ok), "캐시된 프록시인데 소리가 연결되지 않음"
+        assert w2.transport.audio_lbl.text() == ""
+    finally:
+        w2.close()
+        pump(qapp, 200)
+
+
+def test_video_without_audio_disables_the_mute_button(qapp, vfr_h264, tmp_path, monkeypatch):
+    from ics.core.store import Library
+
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes))
+    lib = Library()
+    rec = lib.create("NO_AUDIO", "A", "T", str(vfr_h264), str(tmp_path / "out"))
+    w = _open_editor(qapp, lib, rec, vfr_h264)
+    try:
+        assert not w.transport.mute_btn.isEnabled() and "소리 없음" in w.transport.mute_btn.text()
+        assert w.transport.audio_lbl.text() == ""  # 오디오가 원래 없는 영상은 '소리 준비 중' 같은 문구도 없다
+        w.actions["toggle_mute"].trigger()  # 눌러도 아무 일도 없다
+        assert w.playback.audio_enabled
+    finally:
+        w.close()
+        pump(qapp, 200)

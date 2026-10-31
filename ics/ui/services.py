@@ -42,6 +42,8 @@ class ProxyBuilder(QObject):
 
     progress = Signal(float)
     finished = Signal(bool, str)
+    audioReady = Signal(str)  # 소리용 WAV 가 준비됨 (영상 프록시보다 먼저 끝나므로 바로 소리를 낼 수 있다)
+    audioFailed = Signal(str)  # 오디오 트랙이 있는데 WAV 를 만들지 못함 (사유)
 
     def __init__(self, info: MediaInfo, cache_dir: Path):
         super().__init__()
@@ -52,6 +54,7 @@ class ProxyBuilder(QObject):
         self._cancel = threading.Event()
         self._thread: threading.Thread | None = None
         self.index: FrameIndex | None = None
+        self.audio_error = ""
 
     def ready(self) -> bool:
         return self.video_path.is_file() and (self.audio_path.is_file() or not self.info.has_audio)
@@ -63,9 +66,39 @@ class ProxyBuilder(QObject):
     def cancel(self) -> None:
         self._cancel.set()
 
+    def build_audio(self) -> str:
+        """소리용 WAV(48kHz 스테레오 16bit)를 만든다. 이미 있으면 건너뛴다. 성공하면 '', 실패하면 사유를 돌려준다."""
+        if not self.info.has_audio or self.audio_path.is_file():
+            return ""
+        part = self.audio_path.with_name(self.audio_path.name + ".part")
+        cmd = [
+            ffbin.ffmpeg(), "-y", "-nostdin", "-v", "error",
+            "-i", self.info.path, "-map", "0:a:0", "-vn",
+            "-ac", "2", "-ar", "48000", "-c:a", "pcm_s16le", "-f", "wav", str(part),
+        ]  # fmt: skip
+        try:
+            p = ffbin.run(cmd)
+        except Exception as e:  # noqa: BLE001
+            return f"오디오 추출을 시작하지 못했습니다: {e}"
+        if p.returncode != 0 or not part.is_file() or part.stat().st_size <= 44:
+            try:
+                part.unlink()
+            except OSError:
+                pass
+            tail = (p.stderr or b"").decode("utf-8", "replace").strip()[-300:]
+            return "오디오 추출 실패" + (f": {tail}" if tail else "")
+        os.replace(part, self.audio_path)
+        return ""
+
     def _run(self) -> None:
         info = self.info
         try:
+            # 소리는 영상 프록시보다 훨씬 빨리 끝나므로 먼저 만들어 바로 쓸 수 있게 한다 (실패해도 영상 프록시는 계속)
+            self.audio_error = self.build_audio()
+            if self.audio_error:
+                self.audioFailed.emit(self.audio_error)
+            elif info.has_audio:
+                self.audioReady.emit(str(self.audio_path))
             if not self.video_path.is_file():
                 w, h = preview_size(info, 1280)
                 vf = ",".join(
@@ -111,33 +144,6 @@ class ProxyBuilder(QObject):
                 if rc != 0:
                     raise RuntimeError(err or "프록시 생성 실패")
                 os.replace(part, self.video_path)
-            if info.has_audio and not self.audio_path.is_file():
-                part = self.audio_path.with_name(self.audio_path.name + ".part")
-                p = ffbin.run(
-                    [
-                        ffbin.ffmpeg(),
-                        "-y",
-                        "-nostdin",
-                        "-v",
-                        "error",
-                        "-i",
-                        info.path,
-                        "-map",
-                        "0:a:0",
-                        "-vn",
-                        "-ac",
-                        "2",
-                        "-ar",
-                        "48000",
-                        "-c:a",
-                        "pcm_s16le",
-                        "-f",
-                        "wav",
-                        str(part),
-                    ]
-                )
-                if p.returncode == 0:
-                    os.replace(part, self.audio_path)
             pinfo = analyze(str(self.video_path))
             self.index = build_frame_index(pinfo, self.cache_dir)
             self.progress.emit(1.0)
@@ -268,7 +274,7 @@ class FrameService(QObject):
 
 # ======================================================================= 썸네일
 class ThumbService(QObject):
-    """타임라인 썸네일: 디스크 캐시 재사용, 보이는 영역 우선, 유휴 시 전체 영상 거친 격자를 백그라운드 생성."""
+    """썸네일: 디스크 캐시 재사용, 보이는 영역 우선. coarse=True 면 유휴 시 전체 영상의 거친 격자도 백그라운드로 만든다."""
 
     thumbReady = Signal(int)
     THUMB_H = 54
@@ -334,6 +340,17 @@ class ThumbService(QObject):
     def request_visible(self, frames: list[int]) -> None:
         with self._cv:
             self._high = collections.deque(f for f in frames if not self._path(f).is_file() and f not in self._mem)
+            self._cv.notify()
+
+    def ensure(self, frames: list[int]) -> None:
+        """보이는 영역과 무관하게 필요한 프레임(피드 항목 등)을 낮은 우선순위로 만들어 둔다.
+        request_visible 은 우선 큐를 통째로 바꾸므로, 다른 화면이 요청하는 프레임을 덮어쓰지 않도록 따로 둔다."""
+        with self._cv:
+            queued = set(self._low)
+            for f in frames:
+                if f not in queued and f not in self._mem and not self._path(f).is_file():
+                    self._low.append(f)
+                    queued.add(f)
             self._cv.notify()
 
     def _run(self) -> None:
@@ -408,32 +425,55 @@ class FramePipe(threading.Thread):
             pass
 
 
+def default_audio_output():
+    """지금의 기본 소리 출력 장치(QAudioDevice). 없으면 None.
+
+    장치 조회를 이 함수 하나로 모아 둔다: 테스트가 실제 오디오 시스템(PipeWire/WASAPI)에 닿지 않도록 대체할 수 있고,
+    Qt Multimedia 가 없거나 로드에 실패하면 예외가 그대로 올라가 호출한 쪽이 사유를 화면에 알린다."""
+    from PySide6.QtMultimedia import QMediaDevices
+
+    dev = QMediaDevices.defaultAudioOutput()
+    return None if dev.isNull() else dev
+
+
+def audio_output_names() -> list[str]:
+    """사용 가능한 소리 출력 장치 이름들 (진단용)."""
+    from PySide6.QtMultimedia import QMediaDevices
+
+    return [d.description() for d in QMediaDevices.audioOutputs()]
+
+
 class AudioPlayer:
-    """프록시 WAV 를 QAudioSink 로 재생(정배속 전용). 오디오 장치가 없으면 조용히 비활성."""
+    """프록시 WAV(48kHz 스테레오 16bit)를 QAudioSink 로 재생한다(정배속 전용).
+
+    재생을 시작할 때마다 '지금의' 기본 출력 장치로 싱크를 새로 만든다. 프로그램을 켠 뒤에 블루투스/USB 헤드셋을 연결하거나
+    기본 장치를 바꿔도 소리가 나도록 하기 위해서다. 소리를 내지 못하는 경우에는 조용히 넘어가지 않고 사유를 error 에 남겨
+    화면에 알릴 수 있게 한다 (오디오 장치는 CI 에서 확인할 수 없으므로 현장에서 원인을 바로 알아야 한다).
+    """
+
+    RATE, CHANNELS, SAMPLE_BYTES = 48000, 2, 2
 
     def __init__(self, wav_path: str | None):
-        self.ok = False
+        self.ok = False  # WAV 를 읽을 수 있는가 (출력 장치 문제는 재생 시점에 error 로만 알린다)
+        self.error = ""
         self._sink = None
         self._file = None
         self._offset = 0
         self._path = wav_path
-        if not wav_path or not os.path.isfile(wav_path):
+        if not wav_path:
+            return
+        if not os.path.isfile(wav_path):
+            self.error = "소리 파일이 아직 없습니다."
             return
         try:
-            from PySide6.QtMultimedia import QAudioFormat, QAudioSink, QMediaDevices
-
-            dev = QMediaDevices.defaultAudioOutput()
-            if dev.isNull():
-                return
-            fmt = QAudioFormat()
-            fmt.setSampleRate(48000)
-            fmt.setChannelCount(2)
-            fmt.setSampleFormat(QAudioFormat.SampleFormat.Int16)
-            self._sink = QAudioSink(dev, fmt)
             self._offset = self._data_offset(wav_path)
-            self.ok = self._offset > 0
-        except Exception:  # noqa: BLE001
-            self.ok = False
+        except OSError as e:
+            self.error = f"소리 파일을 열 수 없습니다: {e}"
+            return
+        if self._offset <= 0:
+            self.error = "소리 파일 형식을 읽을 수 없습니다."
+            return
+        self.ok = True
 
     @staticmethod
     def _data_offset(path: str) -> int:
@@ -453,26 +493,43 @@ class AudioPlayer:
                 pos += 8 + sz + (sz & 1)
 
     def play(self, seconds: float) -> None:
+        """seconds 위치부터 재생. 실패하면 error 에 사유를 남기고 소리 없이 계속한다."""
         if not self.ok:
             return
+        self.stop()
+        self.error = ""
         try:
             from PySide6.QtCore import QFile, QIODevice
 
-            self.stop()
+            dev = default_audio_output()
+            if dev is None:
+                self.error = "소리를 낼 출력 장치(스피커/헤드폰)를 찾지 못했습니다. Windows 소리 설정에서 출력 장치를 확인하세요."
+                return
+            from PySide6.QtMultimedia import QAudio, QAudioFormat, QAudioSink
+
+            fmt = QAudioFormat()
+            fmt.setSampleRate(self.RATE)
+            fmt.setChannelCount(self.CHANNELS)
+            fmt.setSampleFormat(QAudioFormat.SampleFormat.Int16)
             f = QFile(self._path)
             if not f.open(QIODevice.OpenModeFlag.ReadOnly):
+                self.error = "소리 파일을 열 수 없습니다."
                 return
-            byte = int(max(0.0, seconds) * 48000) * 4
-            f.seek(self._offset + byte)
-            self._file = f
-            self._sink.start(f)
-        except Exception:  # noqa: BLE001
-            self.ok = False
+            frame_bytes = self.CHANNELS * self.SAMPLE_BYTES
+            f.seek(self._offset + int(max(0.0, seconds) * self.RATE) * frame_bytes)
+            sink = QAudioSink(dev, fmt)
+            sink.start(f)
+            self._sink, self._file = sink, f
+            if sink.error() != QAudio.Error.NoError:
+                self.error = f"소리 출력 오류({sink.error().name}) - 출력 장치: {dev.description()}"
+        except Exception as e:  # noqa: BLE001
+            self.error = f"소리를 재생하지 못했습니다: {e}"
 
     def stop(self) -> None:
         try:
             if self._sink is not None:
                 self._sink.stop()
+                self._sink = None
             if self._file is not None:
                 self._file.close()
                 self._file = None
@@ -506,8 +563,30 @@ class PlaybackEngine(QObject):
         self._last_shown = -1
         self._pending = None
 
+    def audio_time(self) -> float:
+        """지금 재생 위치(초). 소리를 중간에 켜거나 늦게 준비된 소리를 붙일 때 영상과 맞추는 데 쓴다."""
+        t = self._base_time + Fraction((time.perf_counter() - self._base_wall) * self.rate).limit_denominator(100000)
+        return float(max(Fraction(0), t))
+
+    def _audio_should_play(self) -> bool:
+        return self.playing and self.rate == 1.0 and self.audio_enabled
+
     def set_audio(self, wav: str | None) -> None:
+        """소리 파일을 (다시) 연결한다. 이미 재생 중이면 현재 위치부터 소리를 바로 이어 붙인다."""
+        self.audio.stop()
         self.audio = AudioPlayer(wav)
+        if self._audio_should_play():
+            self.audio.play(self.audio_time())
+
+    def set_audio_enabled(self, enabled: bool) -> None:
+        """미리보기 소리 켜기/끄기 (렌더링 결과에는 영향 없음). 재생 중이면 즉시 반영한다."""
+        self.audio_enabled = bool(enabled)
+        if not self.playing:
+            return
+        if self._audio_should_play():
+            self.audio.play(self.audio_time())
+        else:
+            self.audio.stop()
 
     def play(self, start: int, rate: float = 1.0, loop: tuple[int, int] | None = None) -> None:
         self.stop_pipe()

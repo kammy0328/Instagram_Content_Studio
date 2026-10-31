@@ -443,6 +443,20 @@ class Project:
         with self.edit("컷 병합 해제", ("cuts", "state")):
             self.state.cuts = cuts_mod.unmerge(self.state.cuts, cut_id)
 
+    def split_cut_at(self, frame: int) -> tuple[int, int]:
+        """frame(재생 헤드)에서 컷을 둘로 나눈다. frame 이 뒤쪽 컷의 첫 프레임이 된다. (앞 컷 id, 뒤 컷 id) 를 돌려준다.
+
+        컷 정보가 아직 없으면(XML 없이 편집) 영상 전체를 한 컷으로 보고 나눈다. 나눌 수 없으면 ValueError."""
+        frame = int(frame)
+        with self.edit("컷 나누기", ("cuts", "state")):
+            cuts = self.state.cuts
+            if not cuts:
+                cuts = [cuts_mod.Cut(1, 0, self.count, parts=[cuts_mod.Part(1, 0, self.count)])]
+            self.state.cuts = cuts_mod.split(cuts, frame)
+            i = cuts_mod.cut_index_at(self.state.cuts, frame)
+            assert i is not None and i > 0
+            return self.state.cuts[i - 1].id, self.state.cuts[i].id
+
     def restore_original_cuts(self) -> None:
         with self.edit("원래 컷 목록 복원", ("cuts", "state")):
             self.state.cuts = cuts_mod.restore_original(self.state.orig_cuts)
