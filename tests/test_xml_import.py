@@ -82,7 +82,8 @@ def test_fcpxml_excludes_disabled_or_audio_only_clips(tmp_path, attributes):
         '<project><sequence format="f" duration="2s"><spine>'
         f'<asset-clip ref="a" offset="0s" duration="1s" {attributes}/>'
         '<asset-clip ref="a" name="visible" offset="1s" duration="1s"/>'
-        '</spine></sequence></project></fcpxml>', encoding="utf-8"
+        "</spine></sequence></project></fcpxml>",
+        encoding="utf-8",
     )
     clips = X.parse_file(str(p)).sequences[0].best_track().clips
     assert [(c.start, c.end, c.name) for c in clips] == [(25, 50, "visible")]
@@ -91,10 +92,11 @@ def test_fcpxml_excludes_disabled_or_audio_only_clips(tmp_path, attributes):
 def test_xmeml_excludes_disabled_video_track(tmp_path):
     p = tmp_path / "disabled.xml"
     p.write_text(
-        '<xmeml><sequence><rate><timebase>25</timebase></rate><media><video>'
-        '<track><enabled>FALSE</enabled><clipitem><start>0</start><end>25</end></clipitem></track>'
-        '<track><clipitem><name>visible</name><start>25</start><end>50</end></clipitem></track>'
-        '</video></media></sequence></xmeml>', encoding="utf-8"
+        "<xmeml><sequence><rate><timebase>25</timebase></rate><media><video>"
+        "<track><enabled>FALSE</enabled><clipitem><start>0</start><end>25</end></clipitem></track>"
+        "<track><clipitem><name>visible</name><start>25</start><end>50</end></clipitem></track>"
+        "</video></media></sequence></xmeml>",
+        encoding="utf-8",
     )
     seq = X.parse_file(str(p)).sequences[0]
     assert [t.label for t in seq.tracks] == ["V2"]
