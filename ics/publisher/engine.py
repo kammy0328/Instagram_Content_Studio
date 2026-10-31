@@ -93,6 +93,7 @@ class PublishEngine:
         self.store, self.t, self.host, self.profile, self.account = store, transport, host, profile, account
         self.clock, self.sleep, self.probe = clock, sleep, probe_media
         self.simulation = bool(getattr(transport, "is_simulation", False))
+        self.cloud = None  # CloudScheduler 가 연결되면 설정된다 (수정 시 원격 취소 훅)
         self._specs: dict[int, JobSpec] = {}
         self._urls: dict[int, list[str]] = {}
 
@@ -185,12 +186,16 @@ class PublishEngine:
     def update_spec(self, job_id: int, spec: JobSpec) -> list[str]:
         """승인 뒤 내용이 바뀌면 승인을 무효화하고 변경 사유를 돌려준다. 재승인 전에는 게시하지 않는다."""
         job = self.store.get(job_id)
-        self._specs[job_id] = spec
         ap = self.store.active_approval(job_id)
         reasons = diff_specs(ap[1], spec.to_dict()) if ap else []
+        if ap and reasons and job.state is State.CLOUD_SCHEDULED and self.cloud is not None:
+            self.cloud.cancel_remote(
+                job_id
+            )  # 취소를 보장할 수 없으면 예외로 수정 자체를 막는다 (옛 내용이 게시되는 사고 방지)
+        self._specs[job_id] = spec
         if ap and reasons:
             self.store.invalidate_approval(job_id, " / ".join(reasons))
-            if job.state in (State.APPROVED, State.SCHEDULED):
+            if job.state in (State.APPROVED, State.SCHEDULED, State.CLOUD_SCHEDULED):
                 self.store.set_state(
                     job_id, State.AWAITING_APPROVAL, spec_json=json.dumps(spec.to_dict(), ensure_ascii=False)
                 )
