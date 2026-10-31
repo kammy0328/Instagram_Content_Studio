@@ -15,5 +15,7 @@ def test_generated_media_has_requested_color_tags(tmp_path, tags):
 
 
 def test_generated_hdr_has_pq_tag(tmp_path):
-    src = make_video(tmp_path / "pq.mp4", frames=2, audio=False, vcodec="h264", extra=["-color_trc", "smpte2084"])
+    src = make_video(
+        tmp_path / "pq.mp4", frames=2, audio=False, vcodec="h264", color_tags=("bt2020nc", "bt2020", "smpte2084")
+    )
     assert ffbin.probe_json(str(src), "-show_streams")["streams"][0].get("color_transfer") == "smpte2084"
