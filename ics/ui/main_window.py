@@ -31,6 +31,7 @@ from ..render.planner import plan_render
 from ..render.queue import RenderQueue
 from . import theme
 from .credits_page import CreditsPage
+from .cutstrip import CutStrip
 from .dialogs import (
     FeedManagerDialog,
     IdDictionaryDialog,
@@ -167,6 +168,7 @@ class EditorWindow(QMainWindow):
     requestProjects = Signal()
     jobSignal = Signal(object)
     queueFinished = Signal()
+    closed = Signal()  # 창이 실제로 닫혔을 때 (렌더 중 취소한 경우는 발생하지 않음)
 
     def __init__(self, project, settings: Settings, iddict, cache_dir: Path):
         super().__init__()
@@ -179,6 +181,8 @@ class EditorWindow(QMainWindow):
         self.decoder = Decoder(info, index)
         self.frames = FrameService(self.decoder)
         self.thumbs = ThumbService(self.decoder, cache_dir, info)
+        # 컷 스트립용: 타임라인 썸네일보다 크고 거친 격자는 만들지 않는다 (보이는 컷만 생성)
+        self.cut_thumbs = ThumbService(self.decoder, cache_dir, info, height=72, subdir="cut_thumbs", coarse=False)
         self.playback = PlaybackEngine(self.decoder, self.frames)
         self.proxy = ProxyBuilder(info, cache_dir)
         self.render_queue: RenderQueue | None = None
@@ -186,6 +190,7 @@ class EditorWindow(QMainWindow):
         self.tab = "story"
         self.playhead = max(0, min(project.state.playhead, max(0, index.count - 1)))
         self.cover_mode = False
+        self._range_source = "manual"  # FEED 영상 추가 구간의 출처: 'cuts'(선택한 컷) | 'manual'(In/Out 직접 지정)
         self.rate_level = 0
         self._refresh_pending = False
         self._layout_group = False
@@ -352,13 +357,17 @@ class EditorWindow(QMainWindow):
         bv.setContentsMargins(0, 0, 0, 0)
         bv.setSpacing(0)
         bv.addWidget(self._cut_toolbar())
+        self.cut_strip = CutStrip(self.project, self.cut_thumbs)
+        self.cut_strip.selectionIdsChanged.connect(self._strip_selected)
+        self.cut_strip.cutActivated.connect(self.goto)
+        bv.addWidget(self.cut_strip)
         self.timeline = TimelineWidget(self.project, self.thumbs)
         self.timeline.playheadRequested.connect(self.goto)
-        self.timeline.cutSelectionChanged.connect(lambda _ids: self._update_cut_info())
+        self.timeline.cutSelectionChanged.connect(self._timeline_selected)
         self.timeline.feedItemClicked.connect(self._feed_clicked)
         bv.addWidget(self.timeline)
         sp.addWidget(bottom)
-        sp.setSizes([640, 290])
+        sp.setSizes([520, 420])
         sp.setStretchFactor(0, 1)
         # --- 패널 연결
         for which, panel in (("story", self.story_panel), ("reels", self.reels_panel)):
@@ -526,6 +535,7 @@ class EditorWindow(QMainWindow):
         self.playhead = n
         self.project.set_playhead(n)
         self.timeline.set_playhead(n, follow=True)
+        self.cut_strip.set_playhead(n)
         self.transport.set_frame(n)
         if request:
             self._request_display_frame()
@@ -566,6 +576,7 @@ class EditorWindow(QMainWindow):
         self.playhead = n
         self.project.set_playhead(n)
         self.timeline.set_playhead(n, follow=True)
+        self.cut_strip.set_playhead(n)
         self.transport.set_frame(n)
 
     def _active_range(self) -> tuple[int, int] | None:
@@ -650,6 +661,7 @@ class EditorWindow(QMainWindow):
             )
             self._warn(p.set_range(self.tab, self.playhead, end))
         elif self.tab == "feed":
+            self._adopt_cut_range()
             p.set_ui("feed_in", self.playhead)
             if p.state.ui.get("feed_out", 0) <= self.playhead:
                 p.set_ui("feed_out", min(p.count, self.playhead + 1))
@@ -664,16 +676,46 @@ class EditorWindow(QMainWindow):
             start = sel.start if sel.enabled and sel.start < end else max(0, end - 1)
             self._warn(p.set_range(self.tab, start, end))
         elif self.tab == "feed":
+            self._adopt_cut_range()
             p.set_ui("feed_out", end)
             if p.state.ui.get("feed_in", 0) >= end:
                 p.set_ui("feed_in", max(0, end - 1))
             self._update_feed_pending()
 
+    def _feed_pending_range(self) -> tuple[int, int] | None:
+        """FEED 영상 추가가 사용할 구간. 컷을 가장 최근에 선택했다면 선택한 컷들의 시작~끝(Shift 다중 선택이면 그 범위 전체),
+        In/Out 을 직접 지정했다면 그 값이다. 예전에 남은 In/Out 이 새로 선택한 컷보다 우선하지 않도록 출처를 구분한다."""
+        p = self.project
+        if self._range_source == "cuts" and self.timeline.sel_ids:
+            want = set(self.timeline.sel_ids)
+            cs = [c for c in p.state.cuts if c.id in want]
+            if cs:
+                return min(c.start for c in cs), max(c.end for c in cs)
+        ui = p.state.ui
+        a, b = ui.get("feed_in"), ui.get("feed_out")
+        if a is not None and b is not None and b > a:
+            return int(a), int(b)
+        return None
+
+    def _adopt_cut_range(self) -> None:
+        """선택한 컷 범위를 In/Out 값으로 확정한다 (이후 I/O 로 한쪽만 고쳐도 나머지는 컷 범위를 유지)."""
+        if self._range_source == "cuts":
+            r = self._feed_pending_range()
+            if r:
+                self.project.set_ui("feed_in", r[0])
+                self.project.set_ui("feed_out", r[1])
+            self._range_source = "manual"
+
     def _update_feed_pending(self) -> None:
+        r = self._feed_pending_range()
+        if r:
+            self.feed_panel.set_pending(*r)
+            return
         ui = self.project.state.ui
         self.feed_panel.set_pending(ui.get("feed_in", self.playhead), ui.get("feed_out", self.playhead + 1))
 
     def _feed_inout_entered(self, a: int, b: int) -> None:
+        self._range_source = "manual"
         self.project.set_ui("feed_in", a)
         self.project.set_ui("feed_out", max(a + 1, b))
         self._update_feed_pending()
@@ -689,15 +731,11 @@ class EditorWindow(QMainWindow):
 
     def add_video(self) -> None:
         p = self.project
-        ui = p.state.ui
-        a, b = ui.get("feed_in"), ui.get("feed_out")
-        sel = self.timeline.sel_ids
-        if (a is None or b is None or b <= a) and sel:
-            cs = [c for c in p.state.cuts if c.id in sel]
-            a, b = min(c.start for c in cs), max(c.end for c in cs)
-        if a is None or b is None or b <= a:
+        r = self._feed_pending_range()
+        if r is None:
             self.toast("In/Out 을 지정하세요 (I / O) 또는 컷을 선택하세요.")
             return
+        a, b = r
         was = len(p.feed_included())
         it, msg = p.add_feed_video(a, b)
         self._warn(msg)
@@ -766,6 +804,31 @@ class EditorWindow(QMainWindow):
             self.toast(f"컷 {len(self.project.state.cuts)}개를 불러왔습니다.")
             self.timeline.update()
 
+    def _set_cut_selection(self, ids: list[int]) -> None:
+        """컷 선택을 타임라인과 컷 스트립에 함께 반영한다."""
+        self.timeline.sel_ids = list(ids)
+        self.timeline.anchor_id = ids[0] if ids else None
+        self.cut_strip.refresh()  # 병합 직후처럼 컷 목록이 방금 바뀐 경우를 위해 타일을 먼저 맞춘다
+        self.cut_strip.set_selected_ids(ids)
+        self.timeline.update()
+        self._on_cut_selection()
+
+    def _strip_selected(self, ids: list) -> None:
+        self.timeline.sel_ids = list(ids)
+        self.timeline.anchor_id = ids[0] if ids else None
+        self.timeline.update()
+        self._on_cut_selection()
+
+    def _timeline_selected(self, ids: list) -> None:
+        self.cut_strip.set_selected_ids(ids)
+        self._on_cut_selection()
+
+    def _on_cut_selection(self) -> None:
+        if self.timeline.sel_ids:
+            self._range_source = "cuts"
+        self._update_cut_info()
+        self._update_feed_pending()
+
     def merge_selected(self) -> None:
         ids = self.timeline.sel_ids
         try:
@@ -775,8 +838,7 @@ class EditorWindow(QMainWindow):
             return
         new = self.project.state.cuts
         merged = [c for c in new if c.merged]
-        self.timeline.sel_ids = [merged[-1].id] if merged else []
-        self.timeline.update()
+        self._set_cut_selection([merged[-1].id] if merged else [])
         self.toast("컷을 병합했습니다 (원본/XML 은 변경되지 않음)")
 
     def unmerge_selected(self) -> None:
@@ -790,8 +852,7 @@ class EditorWindow(QMainWindow):
                 self.project.unmerge_cut(c.id)
         finally:
             self.project.end_group()
-        self.timeline.sel_ids = []
-        self.timeline.update()
+        self._set_cut_selection([])
 
     def restore_cuts(self) -> None:
         if not self.project.state.orig_cuts:
@@ -807,7 +868,7 @@ class EditorWindow(QMainWindow):
             == QMessageBox.StandardButton.Yes
         ):
             self.project.restore_original_cuts()
-            self.timeline.sel_ids = []
+            self._set_cut_selection([])
 
     def cuts_to_inout(self) -> None:
         cs = [c for c in self.project.state.cuts if c.id in self.timeline.sel_ids]
@@ -818,6 +879,7 @@ class EditorWindow(QMainWindow):
         if self.tab in ("story", "reels"):
             self._warn(self.project.set_range(self.tab, a, b))
         elif self.tab == "feed":
+            self._range_source = "manual"
             self.project.set_ui("feed_in", a)
             self.project.set_ui("feed_out", b)
             self._update_feed_pending()
@@ -844,7 +906,8 @@ class EditorWindow(QMainWindow):
             return
         sel = [c for c in cs if c.id in self.timeline.sel_ids]
         iss = self.project.cut_issues()
-        txt = f"컷 {len(cs)}개"
+        xml_name = Path(str(self.project.state.xml_meta.get("file", ""))).name
+        txt = f"컷 {len(cs)}개" + (f" · XML {xml_name}" if xml_name else "") + " (STORY/REELS/FEED 공용)"
         if sel:
             nums = [cs.index(c) + 1 for c in sel]
             txt += f" · 선택 #{min(nums)}~#{max(nums)} ({len(sel)}개, {self.project.seconds(min(c.start for c in sel), max(c.end for c in sel)):.2f}s)"
@@ -1005,6 +1068,7 @@ class EditorWindow(QMainWindow):
         self._update_feed_pending()
         self._update_preview_layout()
         self.timeline.update()
+        self.cut_strip.refresh(self.timeline.sel_ids)
         self._update_cut_info()
         self.b_undo.setEnabled(self.project.can_undo())
         self.b_redo.setEnabled(self.project.can_redo())
@@ -1092,5 +1156,7 @@ class EditorWindow(QMainWindow):
         self.proxy.cancel()
         self.frames.stop()
         self.thumbs.stop()
+        self.cut_thumbs.stop()
         self.project.close()
         super().closeEvent(e)
+        self.closed.emit()

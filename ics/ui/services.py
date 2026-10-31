@@ -273,12 +273,21 @@ class ThumbService(QObject):
     thumbReady = Signal(int)
     THUMB_H = 54
 
-    def __init__(self, decoder: Decoder, cache_dir: Path, info: MediaInfo):
+    def __init__(
+        self,
+        decoder: Decoder,
+        cache_dir: Path,
+        info: MediaInfo,
+        height: int | None = None,
+        subdir: str = "thumbs",
+        coarse: bool = True,
+    ):
+        """height/subdir: 용도별 별도 크기·캐시 폴더(컷 스트립용 큰 썸네일). coarse=False 면 거친 격자를 미리 만들지 않는다."""
         super().__init__()
         self.decoder = decoder
-        self.dir = Path(cache_dir) / "thumbs" / _cache_key(info)
+        self.dir = Path(cache_dir) / subdir / _cache_key(info)
         self.dir.mkdir(parents=True, exist_ok=True)
-        self.th = self.THUMB_H
+        self.th = height or self.THUMB_H
         self.tw = max(8, int(round(self.th * info.display_w / info.display_h)))
         self._mem: collections.OrderedDict[int, QImage] = collections.OrderedDict()
         self._lock = threading.Lock()
@@ -290,7 +299,8 @@ class ThumbService(QObject):
         self._thread.start()
         n = decoder.index.count
         step = max(1, n // 120)
-        self._low.extend(range(0, n, step))
+        if coarse:
+            self._low.extend(range(0, n, step))
 
     def _path(self, n: int) -> Path:
         return self.dir / f"{n:08d}.jpg"
