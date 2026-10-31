@@ -122,6 +122,8 @@ def _parse_xmeml(root: ET.Element, path: str) -> XmlDoc:
         )
         vtracks = s.findall("./media/video/track")
         for ti, tr in enumerate(vtracks, start=1):
+            if (_txt(tr, "enabled", "TRUE") or "").upper() == "FALSE":
+                continue
             track = XmlTrack(ti, f"V{ti}")
             items = [e for e in tr if e.tag in ("clipitem", "generatoritem", "transitionitem")]
             raw: list[dict] = []
@@ -208,6 +210,8 @@ def _parse_fcpxml(root: ET.Element, path: str) -> XmlDoc:
         if spine is not None:
             for el in spine:
                 if el.tag not in clip_tags:
+                    continue
+                if el.get("enabled", "1") == "0" or el.get("srcEnable", "all") == "audio":
                     continue
                 off, dur = _fcp_time(el.get("offset")), _fcp_time(el.get("duration"))
                 if off is None or dur is None:
