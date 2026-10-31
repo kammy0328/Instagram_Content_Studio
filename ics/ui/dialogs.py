@@ -8,7 +8,7 @@ import sys
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QSize, Qt, QUrl, Signal
+from PySide6.QtCore import QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QIcon, QKeySequence, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -453,6 +453,13 @@ class FeedManagerDialog(QDialog):
     def __init__(self, project, thumbs, parent=None):
         super().__init__(parent)
         self.project, self.thumbs = project, thumbs
+        self._thumb_frames: set[int] = set()
+        self._thumb_timer = QTimer(self)
+        self._thumb_timer.setSingleShot(True)
+        self._thumb_timer.setInterval(250)
+        self._thumb_timer.timeout.connect(self.refresh)
+        thumbs.thumbReady.connect(self._on_thumb)
+        self.finished.connect(lambda _r: thumbs.thumbReady.disconnect(self._on_thumb))  # 닫힌 뒤에는 갱신하지 않는다
         self.setWindowTitle("FEED 관리 - 최종 출력 항목 선택")
         self.resize(760, 560)
         v = QVBoxLayout(self)
@@ -481,10 +488,16 @@ class FeedManagerDialog(QDialog):
         self._block = False
         self.refresh()
 
+    def _on_thumb(self, n: int) -> None:
+        if n in self._thumb_frames:
+            self._thumb_timer.start()
+
     def refresh(self):
         p = self.project
         self._block = True
         items = p.feed_ordered()
+        self._thumb_frames = {it.start for it in items}
+        self.thumbs.ensure(sorted(self._thumb_frames))
         self.table.setRowCount(len(items))
         n = 0
         for i, it in enumerate(items):

@@ -163,3 +163,38 @@ def test_selection_layout_is_independent_per_item(env):
     p.set_feed_layout(a.id, LayoutParams("fill", 1.5, 0.2, 0.3))
     assert p.get_feed(a.id).layout.mode == "fill" and p.get_feed(b.id).layout.mode == "fit"
     p.close()
+
+
+def test_split_cut_at_playhead_is_undoable_and_persisted(env):
+    _, _, make = env
+    p = make()
+    p.import_cuts([(0, 100, "a", {}), (100, 240, "b", {})], {"format": "x"})
+    left, right = p.split_cut_at(150)
+    assert [(c.start, c.end) for c in p.state.cuts] == [(0, 100), (100, 150), (150, 240)]
+    assert p.state.cuts[1].id == left and p.state.cuts[2].id == right
+    with pytest.raises(ValueError):
+        p.split_cut_at(150)  # 이제 150 은 뒤쪽 컷의 첫 프레임
+    assert len(p.state.cuts) == 3  # 실패한 시도는 상태를 바꾸지 않는다
+    assert p.can_undo() and p.undo_label() == "컷 나누기"
+    p.undo()
+    assert [(c.start, c.end) for c in p.state.cuts] == [(0, 100), (100, 240)]
+    p.redo()
+    assert len(p.state.cuts) == 3
+    p.close()
+    q = make()
+    assert [(c.start, c.end) for c in q.state.cuts] == [(0, 100), (100, 150), (150, 240)]
+    q.close()
+
+
+def test_split_cut_without_xml_starts_from_whole_video(env):
+    _, _, make = env
+    p = make()
+    assert p.state.cuts == []
+    left, right = p.split_cut_at(30)
+    assert [(c.start, c.end) for c in p.state.cuts] == [(0, 30), (30, p.count)]
+    p.undo()
+    assert p.state.cuts == []
+    with pytest.raises(ValueError):
+        p.split_cut_at(0)  # 첫 프레임에서는 나눌 수 없다
+    assert p.state.cuts == []
+    p.close()

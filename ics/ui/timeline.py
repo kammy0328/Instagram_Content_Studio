@@ -1,18 +1,19 @@
-"""프레임 정확도 타임라인: 눈금자·썸네일·컷 레인(Shift 범위선택, 경계 드래그: 롤/트림)·STORY/REELS/FEED 레인."""
+"""프레임 정확도 타임라인: 눈금자·컷 레인(Shift 범위선택, 경계 드래그: 롤/트림)·STORY/REELS/FEED 레인.
+
+전체 길이 썸네일 줄은 두지 않는다 (컷 썸네일은 컷 스트립이 보여 준다)."""
 
 from __future__ import annotations
 
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import QScrollBar, QToolTip, QWidget
 
 from ..core.timecode import frame_to_tc
 from . import theme
 
-RULER_H, THUMB_H, CUT_H, SEL_H, FEED_H = 24, 58, 42, 18, 26
+RULER_H, CUT_H, SEL_H, FEED_H = 24, 42, 18, 26
 Y_RULER = 0
-Y_THUMB = RULER_H
-Y_CUT = Y_THUMB + THUMB_H
+Y_CUT = Y_RULER + RULER_H
 Y_STORY = Y_CUT + CUT_H + 4
 Y_REELS = Y_STORY + SEL_H + 2
 Y_FEED = Y_REELS + SEL_H + 2
@@ -26,6 +27,7 @@ class TimelineWidget(QWidget):
     playheadRequested = Signal(int)
     cutSelectionChanged = Signal(list)
     feedItemClicked = Signal(str)
+    cutContextRequested = Signal(QPoint)  # 컷 레인에서 오른쪽 클릭: 화면 좌표 (선택은 이미 맞춰진 뒤)
     status = Signal(str)
 
     def __init__(self, project, thumbs):
@@ -167,7 +169,6 @@ class TimelineWidget(QWidget):
         p.fillRect(self.rect(), theme.C["PANEL"])
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         self._paint_ruler(p)
-        self._paint_thumbs(p)
         self._paint_cuts(p)
         self._paint_ranges(p)
         self._paint_feed(p)
@@ -191,28 +192,6 @@ class TimelineWidget(QWidget):
             for f in range(f0, min(f1, self.count + step), sub):
                 x = self.x_of(f)
                 p.drawLine(QPointF(x, Y_RULER + 17), QPointF(x, Y_RULER + RULER_H))
-
-    def _paint_thumbs(self, p: QPainter) -> None:
-        p.fillRect(0, Y_THUMB, self.width(), THUMB_H, QColor("#101216"))
-        tw = self.thumbs.tw
-        step = next((s for s in NICE_STEPS if s * self.ppf >= tw * 0.9), NICE_STEPS[-1])
-        f0 = int(max(0, self.f_of(-tw)) // step * step)
-        f1 = int(self.f_of(self.width()))
-        want = []
-        for f in range(f0, min(f1 + 1, self.count), step):
-            want.append(f)
-            x = self.x_of(f)
-            w = max(tw, step * self.ppf) if step * self.ppf < tw * 1.5 else step * self.ppf
-            img = self.thumbs.get(f)
-            r = QRectF(x, Y_THUMB + 2, min(w, tw) if step * self.ppf >= tw else step * self.ppf, THUMB_H - 4)
-            if img is not None:
-                src = QRectF(0, 0, min(img.width(), r.width()), img.height())
-                p.drawImage(QRectF(x, Y_THUMB + 2, src.width(), THUMB_H - 4), img, src)
-            else:
-                p.fillRect(r.adjusted(0, 0, -1, 0), QColor("#1a1d24"))
-        c = self.f_of(self.width() / 2)
-        want.sort(key=lambda f: abs(f - c))
-        self.thumbs.request_visible(want[:60])
 
     def _cut_color(self, i: int, selected: bool) -> QColor:
         if selected:
@@ -472,6 +451,22 @@ class TimelineWidget(QWidget):
                 }
                 self.update()
             return
+
+    def contextMenuEvent(self, e) -> None:  # noqa: N802
+        """컷 레인 오른쪽 클릭: 선택 밖의 컷이면 그 컷만 선택하고, 메뉴는 창(EditorWindow)이 띄운다."""
+        x, y = e.pos().x(), e.pos().y()
+        if not (Y_CUT <= y < Y_STORY - 2) or self.project.count == 0:
+            return
+        f = int(self.f_of(x))
+        hit = next((c for c in self.project.state.cuts if c.start <= f < c.end), None)
+        if hit is None:
+            return
+        if hit.id not in self.sel_ids:
+            self.sel_ids, self.anchor_id = [hit.id], hit.id
+            self.cutSelectionChanged.emit(list(self.sel_ids))
+            self.update()
+        self.cutContextRequested.emit(e.globalPos())
+        e.accept()
 
     def _scrub(self, x: float) -> None:
         f = max(0, min(self.count - 1, int(round(self.f_of(x)))))

@@ -4,7 +4,8 @@
 없으므로 결과를 파일로 쓰고, 모두 통과하면 종료 코드 0, 하나라도 실패하면 1 을 돌려준다.
 
 점검 내용: 번들된 FFmpeg/FFprobe 탐색과 인코더, Qt 플랫폼 플러그인, 짧은 영상 생성 -> 분석 -> 프로젝트 ->
-STORY/FEED 렌더 -> 결과 검증, 편집 창 생성. 사용자 데이터는 건드리지 않도록 임시 폴더에서만 동작한다.
+STORY/FEED 렌더 -> 결과 검증, 편집 창 생성, 소리 경로(재생용 WAV 생성과 출력 장치). 사용자 데이터는 건드리지 않도록
+임시 폴더에서만 동작한다. 점검이 도중에 비정상 종료해도 흔적이 남도록 항목이 끝날 때마다 결과 파일을 갱신한다.
 """
 
 from __future__ import annotations
@@ -20,9 +21,21 @@ from pathlib import Path
 
 
 class _Report:
-    def __init__(self) -> None:
+    def __init__(self, path: Path | None = None) -> None:
         self.lines: list[str] = []
         self.failed = 0
+        self.path = path
+
+    def flush(self, final: bool = False) -> None:
+        if self.path is None:
+            return
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.path.write_text(
+                self.text() if final else "\n".join([*self.lines, "", "(진행 중)", ""]), encoding="utf-8"
+            )
+        except OSError:
+            pass
 
     def add(self, text: str) -> None:
         self.lines.append(text)
@@ -36,6 +49,7 @@ class _Report:
             self.failed += 1
             self.add(f"[FAIL] {name}: {e}")
             self.add("".join("    " + ln for ln in traceback.format_exc().splitlines(keepends=True)))
+        self.flush()
 
     def text(self) -> str:
         status = "ALL PASSED" if not self.failed else f"{self.failed} FAILED"
@@ -168,8 +182,51 @@ def _check_pipeline(work: Path, qt_pump) -> str:
         proj.close()
 
 
+def _check_audio(work: Path, qt_pump) -> str:
+    """소리 경로: 번들 FFmpeg 로 재생용 WAV 가 만들어지는지, Qt Multimedia 가 로드되는지, 출력 장치가 있으면 재생이 시작되는지.
+
+    출력 장치가 없는 환경(CI, 서버)은 정상으로 본다. 장치가 있는데 재생을 시작하지 못하면 실패로 본다."""
+    from PySide6.QtCore import QLibraryInfo
+
+    from .core import media
+    from .ui import services
+
+    clip = work / "audio_clip.mp4"
+    _make_clip(clip)
+    info = media.analyze(str(clip))
+    cache = work / "audio_cache"
+    cache.mkdir(exist_ok=True)
+    pb = services.ProxyBuilder(info, cache)
+    err = pb.build_audio()
+    if err:
+        raise RuntimeError(err)
+    size = pb.audio_path.stat().st_size
+    want = 3.0 * 48000 * 4  # 3초, 48kHz, 스테레오, 16bit
+    if not 0.8 * want <= size <= 1.2 * want:
+        raise RuntimeError(f"재생용 WAV 크기가 예상과 다릅니다: {size} (예상 약 {int(want)})")
+    player = services.AudioPlayer(str(pb.audio_path))
+    if not player.ok:
+        raise RuntimeError(player.error)
+    plugins = Path(QLibraryInfo.path(QLibraryInfo.LibraryPath.PluginsPath)) / "multimedia"
+    found = sorted(p.name for p in plugins.glob("*")) if plugins.is_dir() else []
+    outs = services.audio_output_names()
+    dev = services.default_audio_output()
+    head = f"WAV {size // 1024}KB 생성 OK, multimedia 플러그인={found}, 출력 장치 {len(outs)}개 {outs}"
+    if dev is None:
+        return head + " -> 기본 출력 장치 없음 (CI/서버에서는 정상)"
+    player.play(0.0)
+    qt_pump(400)
+    state = player._sink.state().name if player._sink is not None else "-"
+    err = player.error
+    player.stop()
+    if err:
+        raise RuntimeError(f"{head} | 재생 시작 실패: {err}")
+    return head + f" -> 기본 장치 '{dev.description()}' 재생 시작 OK (상태 {state})"
+
+
 def run_selftest(outfile: str | None = None) -> int:
-    rep = _Report()
+    target = Path(outfile) if outfile else Path(tempfile.gettempdir()) / "ics_selftest.txt"
+    rep = _Report(target)
     work = Path(tempfile.mkdtemp(prefix="ics_selftest_"))
     os.environ["ICS_DATA_DIR"] = str(work / "appdata")
     os.environ["ICS_CACHE_DIR"] = str(work / "cache")
@@ -190,6 +247,7 @@ def run_selftest(outfile: str | None = None) -> int:
         rep.run("FFmpeg/FFprobe 탐색과 인코더", _check_ffmpeg)
         rep.run("Qt 로드와 플랫폼 플러그인", _check_qt)
         rep.run("영상 생성 -> 분석 -> 렌더 -> 편집 창", lambda: _check_pipeline(work, pump))
+        rep.run("소리: 재생용 WAV 생성과 출력 장치", lambda: _check_audio(work, pump))
     except Exception:  # noqa: BLE001
         rep.failed += 1
         rep.add("[FAIL] 자체 점검 중 예외\n" + traceback.format_exc())
@@ -197,12 +255,7 @@ def run_selftest(outfile: str | None = None) -> int:
         shutil.rmtree(work, ignore_errors=True)
 
     text = rep.text()
-    target = Path(outfile) if outfile else Path(tempfile.gettempdir()) / "ics_selftest.txt"
-    try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(text, encoding="utf-8")
-    except OSError:
-        pass
+    rep.flush(final=True)
     if sys.stdout is not None:
         try:
             sys.stdout.write(text)

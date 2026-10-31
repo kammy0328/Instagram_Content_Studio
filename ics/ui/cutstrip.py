@@ -94,6 +94,7 @@ class _TileDelegate(QStyledItemDelegate):
 class CutStrip(QListWidget):
     selectionIdsChanged = Signal(list)  # 사용자가 선택을 바꿨을 때 (컷 id 목록, 화면 순서)
     cutActivated = Signal(int)  # 수정키 없이 컷을 눌렀을 때: 그 컷의 시작 프레임으로 이동
+    contextRequested = Signal(QPoint)  # 컷 위에서 오른쪽 클릭: 화면 좌표 (선택은 이미 맞춰진 뒤)
 
     def __init__(self, project, thumbs):
         super().__init__()
@@ -116,7 +117,9 @@ class CutStrip(QListWidget):
         self.setFixedHeight(STRIP_H)
         self.setItemDelegate(_TileDelegate(self))
         self.setSpacing(0)
-        self.setToolTip("컷 목록 (길이와 무관하게 같은 크기). 클릭: 선택 / Shift+클릭: 범위 / Ctrl+클릭: 추가·해제")
+        self.setToolTip(
+            "컷 목록 (길이와 무관하게 같은 크기). 클릭: 선택 / Shift+클릭: 범위 / Ctrl+클릭: 추가·해제 / 오른쪽 클릭: 메뉴 (병합 등)"
+        )
         self.itemSelectionChanged.connect(self._on_selection)
         self.clicked.connect(self._on_clicked)
         self.horizontalScrollBar().valueChanged.connect(lambda _v: self._request_visible())
@@ -214,6 +217,18 @@ class CutStrip(QListWidget):
         d = index.data(DATA)
         if d:
             self.cutActivated.emit(d["start"])
+
+    def contextMenuEvent(self, e) -> None:  # noqa: N802
+        """오른쪽 클릭: 선택되지 않은 컷을 누르면 그 컷만 선택하고(Shift 로 고른 범위 안이면 선택 유지) 메뉴를 요청한다."""
+        idx = self.indexAt(e.pos())
+        if not idx.isValid():
+            return
+        if not self.isSelected(idx):
+            cid = idx.data(DATA)["id"]
+            self.set_selected_ids([cid], scroll=False)
+            self.selectionIdsChanged.emit([cid])
+        self.contextRequested.emit(e.globalPos())
+        e.accept()
 
     # ------------------------------------------------------------ 썸네일 요청
     def _request_visible(self) -> None:
