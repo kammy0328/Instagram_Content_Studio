@@ -1,20 +1,19 @@
-"""프레임 정확도 타임라인: 눈금자·컷 레인(Shift 범위선택, 경계 드래그: 롤/트림)·STORY/REELS/FEED 레인.
+"""프레임 정확도 타임라인: 눈금자(클릭/드래그로 재생 헤드 이동)·STORY/REELS/FEED 레인.
 
-전체 길이 썸네일 줄은 두지 않는다 (컷 썸네일은 컷 스트립이 보여 준다)."""
+컷 레인과 컷 경계 드래그는 두지 않는다. 컷 보기/선택/병합/나누기는 컷 스트립이 맡는다."""
 
 from __future__ import annotations
 
-from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPen, QPolygonF
-from PySide6.QtWidgets import QScrollBar, QToolTip, QWidget
+from PySide6.QtWidgets import QScrollBar, QWidget
 
 from ..core.timecode import frame_to_tc
 from . import theme
 
-RULER_H, CUT_H, SEL_H, FEED_H = 24, 42, 18, 26
+RULER_H, SEL_H, FEED_H = 24, 18, 26
 Y_RULER = 0
-Y_CUT = Y_RULER + RULER_H
-Y_STORY = Y_CUT + CUT_H + 4
+Y_STORY = Y_RULER + RULER_H + 4
 Y_REELS = Y_STORY + SEL_H + 2
 Y_FEED = Y_REELS + SEL_H + 2
 TOTAL_H = Y_FEED + FEED_H + 14
@@ -25,9 +24,7 @@ NICE_STEPS = [1, 2, 5, 10, 15, 24, 30, 60, 120, 300, 600, 1200, 1800, 3600, 7200
 
 class TimelineWidget(QWidget):
     playheadRequested = Signal(int)
-    cutSelectionChanged = Signal(list)
     feedItemClicked = Signal(str)
-    cutContextRequested = Signal(QPoint)  # 컷 레인에서 오른쪽 클릭: 화면 좌표 (선택은 이미 맞춰진 뒤)
     status = Signal(str)
 
     def __init__(self, project, thumbs):
@@ -38,15 +35,11 @@ class TimelineWidget(QWidget):
         self.ppf = 1.0
         self.offset = 0.0
         self.playhead = 0
-        self.edit_mode = "roll"  # 'roll' | 'trim'
         self.snap_on = True
         self.active = "story"
-        self.sel_ids: list[int] = []
-        self.anchor_id: int | None = None
         self.sel_feed: str | None = None
         self.loop_range: tuple[int, int] | None = None
         self._drag: dict | None = None
-        self._hover_boundary: tuple | None = None
         self.sb = QScrollBar(Qt.Orientation.Horizontal, self)
         self.sb.valueChanged.connect(self._on_scroll)
         self._fit_pending = True
@@ -169,7 +162,6 @@ class TimelineWidget(QWidget):
         p.fillRect(self.rect(), theme.C["PANEL"])
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         self._paint_ruler(p)
-        self._paint_cuts(p)
         self._paint_ranges(p)
         self._paint_feed(p)
         self._paint_playhead(p)
@@ -192,70 +184,6 @@ class TimelineWidget(QWidget):
             for f in range(f0, min(f1, self.count + step), sub):
                 x = self.x_of(f)
                 p.drawLine(QPointF(x, Y_RULER + 17), QPointF(x, Y_RULER + RULER_H))
-
-    def _cut_color(self, i: int, selected: bool) -> QColor:
-        if selected:
-            return QColor(76, 157, 255, 150)
-        return QColor("#2a303c") if i % 2 == 0 else QColor("#323947")
-
-    def _paint_cuts(self, p: QPainter) -> None:
-        st = self.project.state
-        p.fillRect(0, Y_CUT, self.width(), CUT_H, QColor("#14161b"))
-        p.setFont(QFont(self.font().family(), 8))
-        want = []
-        for i, c in enumerate(st.cuts):
-            x0, x1 = self.x_of(c.start), self.x_of(c.end)
-            if x1 < -2 or x0 > self.width() + 2:
-                continue
-            sel = c.id in self.sel_ids
-            r = QRectF(x0, Y_CUT + 2, max(1.0, x1 - x0 - 1), CUT_H - 4)
-            p.fillRect(r, self._cut_color(i, sel))
-            if r.width() > 70:
-                want.append(c.start)
-                img = self.thumbs.get(c.start)
-                if img is not None:
-                    th = r.height() - 4
-                    tw_ = img.width() * th / img.height()
-                    p.drawImage(QRectF(r.x() + 2, r.y() + 2, tw_, th), img)
-            p.setPen(QPen(theme.C["ACCENT"] if sel else theme.C["BORDER"], 2 if sel else 1))
-            p.drawRect(r)
-            label = f"#{i + 1}" + (f" ⛓{len(c.parts)}" if c.merged else "") + (" ●" if c.manual else "")
-            if r.width() > 28:
-                p.setPen(theme.C["TEXT"])
-                tx = r.x() + 4 + (self.thumbs.tw * (r.height() - 4) / self.thumbs.th if r.width() > 70 else 0)
-                p.drawText(QPointF(tx, r.y() + 13), label)
-        if want:
-            self.thumbs.request_visible(want)
-        # 겹침 / 빈 구간 표시
-        for iss in self.project.cut_issues():
-            a, b = st.cuts[iss["index"]], st.cuts[iss["index"] + 1]
-            lo, hi = (a.end, b.start) if iss["kind"] == "gap" else (b.start, a.end)
-            r = QRectF(self.x_of(lo), Y_CUT, max(2.0, self.x_of(hi) - self.x_of(lo)), CUT_H)
-            col = QColor(theme.ERR) if iss["kind"] == "gap" else QColor(theme.WARN)
-            brush = QBrush(col, Qt.BrushStyle.BDiagPattern)
-            p.fillRect(r, brush)
-            p.setPen(QPen(col, 1))
-            p.drawRect(r)
-            if r.width() > 40:
-                p.drawText(
-                    QPointF(r.x() + 2, Y_CUT + CUT_H - 4),
-                    f"{'빈 구간' if iss['kind'] == 'gap' else '겹침'} {iss['frames']}f",
-                )
-        # 경계 핸들 (호버/드래그)
-        hb = self._hover_boundary if not self._drag else self._drag.get("boundary")
-        if hb is not None:
-            idx, side = hb[0], hb[1]
-            if 0 <= idx < len(st.cuts):
-                c = st.cuts[idx]
-                f = c.end if side == "end" else c.start
-                x = self.x_of(f)
-                col = QColor(theme.ACCENT2)
-                p.setPen(QPen(col, 2))
-                if self.edit_mode == "trim":
-                    y0, y1 = (Y_CUT, Y_CUT + CUT_H / 2) if side == "end" else (Y_CUT + CUT_H / 2, Y_CUT + CUT_H)
-                else:
-                    y0, y1 = Y_CUT, Y_CUT + CUT_H
-                p.drawLine(QPointF(x, y0), QPointF(x, y1))
 
     def _paint_ranges(self, p: QPainter) -> None:
         st = self.project.state
@@ -332,27 +260,6 @@ class TimelineWidget(QWidget):
         p.setBrush(Qt.BrushStyle.NoBrush)
 
     # ============================================================ 마우스
-    def _cut_boundary_at(self, x: float, y: float) -> tuple[int, str] | None:
-        st = self.project.state
-        best, bd = None, HIT + 1
-        for i, c in enumerate(st.cuts):
-            for side, f in (("start", c.start), ("end", c.end)):
-                d = abs(self.x_of(f) - x)
-                if d >= bd:
-                    continue
-                if self.edit_mode == "trim":
-                    upper = y < Y_CUT + CUT_H / 2
-                    if side == "end" and not upper:
-                        continue
-                    if side == "start" and upper:
-                        continue
-                else:
-                    # 롤: 맞닿은 경계는 앞 컷의 end 로 통일
-                    if side == "start" and i > 0 and abs(st.cuts[i - 1].end - c.start) <= 1:
-                        continue
-                best, bd = (i, side), d
-        return best
-
     def _range_hit(self, sel, x: float) -> str | None:
         if not sel.enabled:
             return None
@@ -385,38 +292,9 @@ class TimelineWidget(QWidget):
         x, y = e.position().x(), e.position().y()
         if e.button() != Qt.MouseButton.LeftButton or self.project.count == 0:
             return
-        mods = e.modifiers()
-        if y < Y_CUT:
+        if y < Y_STORY - 2:
             self._drag = {"kind": "scrub"}
             self._scrub(x)
-            return
-        if y < Y_STORY - 2:
-            hb = self._cut_boundary_at(x, y)
-            if hb is not None:
-                self.project.begin_group("컷 경계 보정")
-                self._drag = {"kind": "boundary", "boundary": hb}
-                return
-            st = self.project.state
-            f = int(self.f_of(x))
-            hit = next((c for c in st.cuts if c.start <= f < c.end), None)
-            if hit is None:
-                self.sel_ids, self.anchor_id = [], None
-            elif mods & Qt.KeyboardModifier.ShiftModifier and self.anchor_id is not None:
-                ids = [c.id for c in st.cuts]
-                a, b = ids.index(self.anchor_id) if self.anchor_id in ids else ids.index(hit.id), ids.index(hit.id)
-                lo, hi = min(a, b), max(a, b)
-                self.sel_ids = ids[lo : hi + 1]
-            elif mods & Qt.KeyboardModifier.ControlModifier:
-                if hit.id in self.sel_ids:
-                    self.sel_ids.remove(hit.id)
-                else:
-                    self.sel_ids.append(hit.id)
-                self.anchor_id = hit.id
-            else:
-                self.sel_ids, self.anchor_id = [hit.id], hit.id
-                self.playheadRequested.emit(hit.start)
-            self.cutSelectionChanged.emit(list(self.sel_ids))
-            self.update()
             return
         st = self.project.state
         for sel, ylane, which in ((st.story, Y_STORY, "story"), (st.reels, Y_REELS, "reels")):
@@ -452,22 +330,6 @@ class TimelineWidget(QWidget):
                 self.update()
             return
 
-    def contextMenuEvent(self, e) -> None:  # noqa: N802
-        """컷 레인 오른쪽 클릭: 선택 밖의 컷이면 그 컷만 선택하고, 메뉴는 창(EditorWindow)이 띄운다."""
-        x, y = e.pos().x(), e.pos().y()
-        if not (Y_CUT <= y < Y_STORY - 2) or self.project.count == 0:
-            return
-        f = int(self.f_of(x))
-        hit = next((c for c in self.project.state.cuts if c.start <= f < c.end), None)
-        if hit is None:
-            return
-        if hit.id not in self.sel_ids:
-            self.sel_ids, self.anchor_id = [hit.id], hit.id
-            self.cutSelectionChanged.emit(list(self.sel_ids))
-            self.update()
-        self.cutContextRequested.emit(e.globalPos())
-        e.accept()
-
     def _scrub(self, x: float) -> None:
         f = max(0, min(self.count - 1, int(round(self.f_of(x)))))
         if self.snap_on:
@@ -485,15 +347,6 @@ class TimelineWidget(QWidget):
         k = d["kind"]
         if k == "scrub":
             self._scrub(x)
-        elif k == "boundary":
-            idx, side = d["boundary"]
-            f = self.snap(self.f_of(x), exclude={("cut", idx, side)})
-            self.project.move_boundary(idx, side, f, self.edit_mode)
-            QToolTip.showText(
-                e.globalPosition().toPoint(),
-                f"{'롤' if self.edit_mode == 'roll' else '트림'} · {frame_to_tc(f, self.project.fps)} (f{f})",
-            )
-            self.update()
         elif k == "range":
             self._drag_range(d, x)
         elif k == "feed":
@@ -544,49 +397,27 @@ class TimelineWidget(QWidget):
 
     def mouseReleaseEvent(self, e):
         d, self._drag = self._drag, None
-        if d and d["kind"] in ("boundary", "range", "feed"):
+        if d and d["kind"] in ("range", "feed"):
             self.project.end_group()
             self.status.emit("")
         self.update()
 
-    def mouseDoubleClickEvent(self, e):
-        x, y = e.position().x(), e.position().y()
-        if Y_CUT <= y < Y_STORY - 2:
-            f = int(self.f_of(x))
-            hit = next((c for c in self.project.state.cuts if c.start <= f < c.end), None)
-            if hit:
-                self.zoom_to_range(hit.start, hit.end)
-
     def _update_hover(self, x: float, y: float) -> None:
-        hb = None
         cursor = Qt.CursorShape.ArrowCursor
-        if Y_CUT <= y < Y_STORY - 2:
-            hb = self._cut_boundary_at(x, y)
-            if hb:
-                cursor = Qt.CursorShape.SplitHCursor
-        else:
-            st = self.project.state
-            for sel, ylane in ((st.story, Y_STORY), (st.reels, Y_REELS)):
-                if ylane <= y < ylane + SEL_H:
-                    h = self._range_hit(sel, x)
-                    cursor = (
-                        Qt.CursorShape.SplitHCursor
-                        if h in ("start", "end")
-                        else (Qt.CursorShape.SizeAllCursor if h == "move" else cursor)
-                    )
-            if Y_FEED <= y < Y_FEED + FEED_H:
-                h = self._feed_hit(x)
-                if h:
-                    cursor = Qt.CursorShape.SplitHCursor if h[1] in ("start", "end") else Qt.CursorShape.SizeAllCursor
+        st = self.project.state
+        for sel, ylane in ((st.story, Y_STORY), (st.reels, Y_REELS)):
+            if ylane <= y < ylane + SEL_H:
+                h = self._range_hit(sel, x)
+                cursor = (
+                    Qt.CursorShape.SplitHCursor
+                    if h in ("start", "end")
+                    else (Qt.CursorShape.SizeAllCursor if h == "move" else cursor)
+                )
+        if Y_FEED <= y < Y_FEED + FEED_H:
+            h = self._feed_hit(x)
+            if h:
+                cursor = Qt.CursorShape.SplitHCursor if h[1] in ("start", "end") else Qt.CursorShape.SizeAllCursor
         self.setCursor(cursor)
-        if hb != self._hover_boundary:
-            self._hover_boundary = hb
-            self.update()
-
-    def leaveEvent(self, _e):
-        if self._hover_boundary is not None:
-            self._hover_boundary = None
-            self.update()
 
     def wheelEvent(self, e):
         dy = e.angleDelta().y()

@@ -101,7 +101,7 @@ def test_feed_add_still_video_and_carousel(qapp, win):
     assert win.center_stack.currentIndex() == 0
 
 
-def test_timeline_cut_selection_merge_and_boundary_drag(qapp, win):
+def test_timeline_has_no_cut_lane_but_scrubbing_the_playhead_still_works(qapp, win):
     from ics.ui import timeline as T
 
     p, tl = win.project, win.timeline
@@ -109,28 +109,21 @@ def test_timeline_cut_selection_merge_and_boundary_drag(qapp, win):
     pump(qapp)
     tl.fit()
     pump(qapp, 100)
-    y = T.Y_CUT + 12
-
-    def click(frame, mods=Qt.KeyboardModifier.NoModifier):
-        QTest.mouseClick(tl, Qt.MouseButton.LeftButton, mods, QPoint(int(tl.x_of(frame)), y))
-        pump(qapp, 30)
-
-    click(60)
-    click(120, Qt.KeyboardModifier.ShiftModifier)
-    assert len(tl.sel_ids) == 2
-    win.merge_selected()
-    assert [(c.start, c.end, c.merged) for c in p.state.cuts] == [(0, 40, False), (40, 150, True), (150, 240, False)]
-    win.do_undo()
-    assert len(p.state.cuts) == 4
-    tl.snap_on = False
+    assert not hasattr(T, "Y_CUT") and not hasattr(tl, "edit_mode") and not hasattr(tl, "cutContextRequested")
+    assert T.Y_STORY == T.RULER_H + 4  # 눈금자 바로 아래가 STORY 레인
+    before = [(c.start, c.end) for c in p.state.cuts]
     n0 = len(p._undo)
+    y = 5
     QTest.mousePress(tl, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(int(tl.x_of(90)), y))
-    for i in range(1, 7):
-        QTest.mouseMove(tl, QPoint(int(tl.x_of(90) + (tl.x_of(110) - tl.x_of(90)) * i / 6), y))
+    for i in range(1, 7):  # 드래그해도 컷 경계는 움직이지 않고 재생 헤드만 따라온다
+        QTest.mouseMove(tl, QPoint(int(tl.x_of(90) + (tl.x_of(130) - tl.x_of(90)) * i / 6), y))
         pump(qapp, 10)
-    QTest.mouseRelease(tl, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(int(tl.x_of(110)), y))
-    assert [(c.start, c.end) for c in p.state.cuts][1:3] == [(40, 110), (110, 150)]  # 롤: 두 경계 함께 이동
-    assert len(p._undo) == n0 + 1  # 드래그 전체가 Undo 1회
+    QTest.mouseRelease(tl, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(int(tl.x_of(130)), y))
+    assert abs(win.playhead - 130) <= 2
+    assert [(c.start, c.end) for c in p.state.cuts] == before and len(p._undo) == n0
+    # 컷 레인이 있던 자리(예전 Y_CUT)를 눌러도 선택/경계 편집은 일어나지 않고 재생 헤드만 이동
+    QTest.mouseClick(tl, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(int(tl.x_of(60)), 15))
+    assert abs(win.playhead - 60) <= 2 and win.sel_ids == []
 
 
 def test_playback_advances_and_pauses(qapp, win):
@@ -202,19 +195,18 @@ def test_cut_strip_shows_every_cut_at_the_same_size_with_number_and_thumbnail(qa
 def test_cut_strip_selection_syncs_with_timeline_and_moves_playhead(qapp, win):
     win.project.import_cuts(CUTS, {})
     pump(qapp, 200)
-    strip, tl, cuts = win.cut_strip, win.timeline, win.project.state.cuts
+    strip, cuts = win.cut_strip, win.project.state.cuts
     _click_tile(qapp, strip, 2)
-    assert tl.sel_ids == [cuts[2].id] and win.playhead == cuts[2].start
+    assert win.sel_ids == [cuts[2].id] and win.playhead == cuts[2].start
     _click_tile(qapp, strip, 4, Qt.KeyboardModifier.ShiftModifier)  # Shift: 범위 선택, 재생 헤드는 그대로
-    assert tl.sel_ids == [c.id for c in cuts[2:5]] and win.playhead == cuts[2].start
-    # 타임라인에서 바꾸면 스트립에도 반영
-    tl.sel_ids = [cuts[0].id, cuts[1].id]
-    tl.cutSelectionChanged.emit(list(tl.sel_ids))
-    assert strip.selected_ids() == [cuts[0].id, cuts[1].id]
+    assert win.sel_ids == [c.id for c in cuts[2:5]] and win.playhead == cuts[2].start
+    strip.set_selected_ids([cuts[0].id, cuts[1].id])
+    strip.selectionIdsChanged.emit(strip.selected_ids())
+    assert win.sel_ids == [cuts[0].id, cuts[1].id]
     # 병합하면 합쳐진 컷이 양쪽에서 선택된다
     win.merge_selected()
     merged = [c for c in win.project.state.cuts if c.merged][0]
-    assert tl.sel_ids == [merged.id] and strip.selected_ids() == [merged.id] and strip.count() == len(CUTS) - 1
+    assert win.sel_ids == [merged.id] and strip.selected_ids() == [merged.id] and strip.count() == len(CUTS) - 1
 
 
 def test_feed_add_video_uses_exactly_the_selected_cuts_not_a_stale_in_out(qapp, win):
@@ -334,7 +326,7 @@ def test_right_click_on_shift_selected_cuts_offers_merge_and_merges(qapp, win, m
     merged = [c for c in p.state.cuts if c.merged]
     assert len(merged) == 1 and (merged[0].start, merged[0].end) == (CUTS[2][0], CUTS[4][1])
     assert strip.count() == len(CUTS) - 2
-    assert win.timeline.sel_ids == [merged[0].id]  # 합쳐진 컷이 선택된다
+    assert win.sel_ids == [merged[0].id]  # 합쳐진 컷이 선택된다
 
 
 def test_right_click_on_unselected_cut_selects_it_first_and_merge_is_disabled(qapp, win, menu_log):
@@ -343,13 +335,13 @@ def test_right_click_on_unselected_cut_selects_it_first_and_merge_is_disabled(qa
     strip, cuts = win.cut_strip, win.project.state.cuts
     _click_tile(qapp, strip, 0)
     _click_tile(qapp, strip, 1, Qt.KeyboardModifier.ShiftModifier)
-    assert len(win.timeline.sel_ids) == 2
+    assert len(win.sel_ids) == 2
     _right_click(strip.viewport(), _tile_center(strip, 4))  # 선택 밖의 컷
-    assert win.timeline.sel_ids == [cuts[4].id] and strip.selected_ids() == [cuts[4].id]
+    assert win.sel_ids == [cuts[4].id] and strip.selected_ids() == [cuts[4].id]
     enabled, text = menu_log["shown"][-1]["merge"]
     assert not enabled and "2개 이상" in text
     # 병합된 컷을 오른쪽 클릭하면 '병합 해제' 가 켜진다
-    win.timeline.sel_ids = [cuts[0].id, cuts[1].id]
+    win.sel_ids = [cuts[0].id, cuts[1].id]
     win.merge_selected()
     pump(qapp, 100)
     merged = [c for c in win.project.state.cuts if c.merged][0]
@@ -360,25 +352,20 @@ def test_right_click_on_unselected_cut_selects_it_first_and_merge_is_disabled(qa
     assert not any(c.merged for c in win.project.state.cuts)
 
 
-def test_right_click_on_timeline_cut_lane_shows_the_same_menu(qapp, win, menu_log):
-    from ics.ui import timeline as T
-
-    p, tl = win.project, win.timeline
-    p.import_cuts(CUTS, {})
-    pump(qapp, 200)
-    tl.fit()
+def test_cut_strip_scrolls_to_center_the_cut_under_the_playhead(qapp, win):
+    p, strip = win.project, win.cut_strip
+    p.import_cuts([(i * 4, i * 4 + 4, f"c{i}", {}) for i in range(60)], {})
+    pump(qapp, 300)
+    win.resize(900, 700)
     pump(qapp, 100)
-    y = T.Y_CUT + 12
-    QTest.mouseClick(tl, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(int(tl.x_of(60)), y))
-    QTest.mouseClick(tl, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.ShiftModifier, QPoint(int(tl.x_of(200)), y))
-    assert len(tl.sel_ids) == 2  # 컷 #5(41~150) ~ #6(150~240)
-    menu_log["pick"] = "merge"
-    _right_click(tl, QPoint(int(tl.x_of(60)), y))
-    assert menu_log["shown"][-1]["merge"][0]
-    assert any(c.merged for c in p.state.cuts)
-    n = len(menu_log["shown"])
-    _right_click(tl, QPoint(int(tl.x_of(60)), T.Y_CUT - 5))  # 눈금자 위에서는 메뉴가 없다
-    assert len(menu_log["shown"]) == n
+    win.goto(30 * 4 + 1)  # 31번째 컷
+    pump(qapp, 100)
+    item = strip.item(30)
+    r = strip.visualItemRect(item)
+    assert abs(r.center().x() - strip.viewport().width() / 2) <= r.width()  # 가운데 근처
+    win.goto(5 * 4)
+    pump(qapp, 100)
+    assert strip.horizontalScrollBar().value() < r.width() * 10  # 앞쪽 컷으로 돌아오면 앞으로 스크롤
 
 
 def test_context_menu_split_entry_follows_the_playhead_and_feed_tab_has_add_video(qapp, win, menu_log):
@@ -408,7 +395,7 @@ def test_split_at_playhead_button_shortcut_undo_and_selection(qapp, win):
     pump(qapp, 200)
     assert strip.count() == 6
     _click_tile(qapp, strip, 4)  # #5 선택 (41~150)
-    sel_before = win.timeline.sel_ids[0]
+    sel_before = win.sel_ids[0]
     win.goto(100)
     btn = next(b for b in win.findChildren(QPushButton) if b.text().startswith("컷 나누기"))
     btn.click()  # 툴바 버튼
@@ -423,8 +410,8 @@ def test_split_at_playhead_button_shortcut_undo_and_selection(qapp, win):
         (150, 240),
     ]
     assert strip.count() == 7
-    assert win.timeline.sel_ids == [p.state.cuts[4].id, p.state.cuts[5].id] and p.state.cuts[4].id == sel_before
-    assert strip.selected_ids() == win.timeline.sel_ids  # 나눈 컷이 선택돼 있었으면 두 조각이 함께 선택된다
+    assert win.sel_ids == [p.state.cuts[4].id, p.state.cuts[5].id] and p.state.cuts[4].id == sel_before
+    assert strip.selected_ids() == win.sel_ids  # 나눈 컷이 선택돼 있었으면 두 조각이 함께 선택된다
     assert "에서 컷을 나눴습니다" in win.toast_lbl.text()
     # 단축키(C) 액션 - 같은 위치에서 또 나누면 거절(첫 프레임), 상태는 그대로
     win.actions["split_cut"].trigger()
@@ -455,7 +442,7 @@ def test_timeline_no_longer_has_a_full_length_thumbnail_row(qapp, win):
     from ics.ui import timeline as T
 
     assert not hasattr(T, "THUMB_H") and not hasattr(T.TimelineWidget, "_paint_thumbs")
-    assert T.Y_CUT == T.RULER_H  # 눈금자 바로 아래가 컷 레인
+    assert not hasattr(T.TimelineWidget, "_paint_cuts") and not hasattr(T.TimelineWidget, "_cut_boundary_at")
     win.project.import_cuts(CUTS, {})
     pump(qapp, 300)
     assert not win.timeline.grab().isNull()
@@ -650,3 +637,69 @@ def test_video_without_audio_disables_the_mute_button(qapp, vfr_h264, tmp_path, 
     finally:
         w.close()
         pump(qapp, 200)
+
+
+# ---------------------------------------------------------------- FEED 원본 비율 / Fit 확대
+def test_feed_ratio_defaults_to_original_and_can_switch_with_undo(qapp, win):
+    p, fp = win.project, win.feed_panel
+    assert p.feed_kind() == "orig" and fp.ratio_combo.currentData() == "orig"
+    assert "기본" in fp.ratio_combo.itemText(0)
+    fp.ratio_combo.setCurrentIndex(1)
+    pump(qapp, 50)
+    assert p.feed_kind() == "45" and p.state.feed_ratio == "45"
+    win.do_undo()
+    pump(qapp, 50)
+    assert p.feed_kind() == "orig" and fp.ratio_combo.currentData() == "orig"
+
+
+def test_fit_zoom_slider_is_enabled_and_original_ratio_hides_fit_fill(qapp, win):
+    p, fp = win.project, win.feed_panel
+    win.set_tab("feed")
+    win.goto(40)
+    win.add_still()
+    pump(qapp, 100)
+    le = fp.layout_editor
+    assert le.r_fit.isChecked() and le.zoom.isEnabled()  # Fit 에서도 확대 가능
+    assert le.r_fit.isHidden() and le.r_fill.isHidden()  # 원본 비율(기본)에서는 Fit/Fill 선택이 없다
+    fp.ratio_combo.setCurrentIndex(1)
+    pump(qapp, 50)
+    assert not le.r_fit.isHidden() and le.zoom.isEnabled()
+    le.zoom.setValue(200)
+    le.zoom.sliderReleased.emit()
+    pump(qapp, 50)
+    assert p.state.feed[0].layout.mode == "fit" and p.state.feed[0].layout.zoom == 2.0
+
+
+def test_planner_uses_original_aspect_for_feed_and_4x5_when_chosen(qapp, win):
+    from ics.render.planner import plan_render
+
+    p = win.project
+    win.set_tab("feed")
+    win.goto(40)
+    win.add_still()
+    j = [j for j in plan_render(p).jobs if j.kind == "feed_still"][0]
+    assert abs(j.params["geo"]["canvas_w"] / j.params["geo"]["canvas_h"] - 960 / 540) < 0.02
+    p.set_feed_ratio("45")
+    j = [j for j in plan_render(p).jobs if j.kind == "feed_still"][0]
+    assert j.params["geo"]["canvas_w"] * 5 == j.params["geo"]["canvas_h"] * 4
+
+
+def test_reels_cover_ratio_option_defaults_to_original_and_drives_the_plan(qapp, win):
+    from ics.render.planner import plan_render
+
+    p, rp = win.project, win.reels_panel
+    p.set_range("reels", 10, 60)
+    p.set_cover_frame(30)
+    pump(qapp, 100)
+    assert p.cover_kind() == "orig" and rp.cover_ratio_combo.currentData() == "orig"
+    job = [j for j in plan_render(p).jobs if j.kind == "reels_cover"][0]
+    g = job.params["geo"]
+    assert abs(g["canvas_w"] / g["canvas_h"] - 960 / 540) < 0.02
+    rp.cover_ratio_combo.setCurrentIndex(1)
+    pump(qapp, 50)
+    assert p.state.cover_ratio == "916"
+    g = [j for j in plan_render(p).jobs if j.kind == "reels_cover"][0].params["geo"]
+    assert g["canvas_w"] * 16 == g["canvas_h"] * 9
+    win.do_undo()
+    pump(qapp, 50)
+    assert p.cover_kind() == "orig" and rp.cover_ratio_combo.currentData() == "orig"

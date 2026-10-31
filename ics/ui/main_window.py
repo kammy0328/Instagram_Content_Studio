@@ -138,13 +138,13 @@ class CarouselView(QWidget):
         self.requestStop.emit()
         m = self.project.media
         if it.kind == "still":
-            geo = compute_geometry(m.display_w, m.display_h, "45", it.layout)
+            geo = compute_geometry(m.display_w, m.display_h, self.project.feed_kind(), it.layout)
             self.token += 1
             self.pw.set_canvas_mode()
             self.loader.load(self.token, m, self.project.index, it.start, geo)
         else:
             self.pw.set_source_size(m.display_w, m.display_h)
-            self.pw.set_output(True, "45", it.layout)
+            self.pw.set_output(True, self.project.feed_kind(), it.layout)
             self.canvas_img = None
             self.requestPlay.emit(it.start, -1)  # 첫 프레임만 표시
 
@@ -193,6 +193,7 @@ class EditorWindow(QMainWindow):
         self.tab = "story"
         self.playhead = max(0, min(project.state.playhead, max(0, index.count - 1)))
         self.cover_mode = False
+        self.sel_ids: list[int] = []  # 선택된 컷 id (컷 스트립이 원본)
         self._range_source = "manual"  # FEED 영상 추가 구간의 출처: 'cuts'(선택한 컷) | 'manual'(In/Out 직접 지정)
         self.rate_level = 0
         self._refresh_pending = False
@@ -372,8 +373,6 @@ class EditorWindow(QMainWindow):
         bv.addWidget(self.cut_strip)
         self.timeline = TimelineWidget(self.project, self.thumbs)
         self.timeline.playheadRequested.connect(self.goto)
-        self.timeline.cutSelectionChanged.connect(self._timeline_selected)
-        self.timeline.cutContextRequested.connect(self._show_cut_menu)
         self.timeline.feedItemClicked.connect(self._feed_clicked)
         bv.addWidget(self.timeline)
         sp.addWidget(bottom)
@@ -393,6 +392,7 @@ class EditorWindow(QMainWindow):
         self.reels_panel.coverGoto.connect(self._goto_cover)
         self.reels_panel.coverChanged.connect(lambda a, o: self.project.set_cover_grid(a, o))
         self.reels_panel.coverPreview.connect(self._cover_preview)
+        self.reels_panel.coverRatioChanged.connect(self._set_cover_ratio)
         self.reels_panel.coverLayoutLive.connect(lambda lp: self._layout_live("cover", lp))
         self.reels_panel.coverLayoutCommit.connect(lambda _lp: self._layout_commit())
         fp = self.feed_panel
@@ -402,6 +402,7 @@ class EditorWindow(QMainWindow):
         fp.includeToggled.connect(lambda i, v: self._feed_include(i, v))
         fp.deleteClicked.connect(self._feed_delete)
         fp.manageClicked.connect(self.open_feed_manager)
+        fp.ratioChanged.connect(self._set_feed_ratio)
         fp.carouselToggled.connect(self._carousel_toggled)
         fp.layoutLive.connect(lambda lp: self._layout_live("feed", lp))
         fp.layoutCommit.connect(lambda _lp: self._layout_commit())
@@ -446,7 +447,6 @@ class EditorWindow(QMainWindow):
         )
         btn("원래 컷 복원", self.restore_cuts)
         btn("선택 컷 → In/Out", self.cuts_to_inout, "선택한 (병합) 컷 범위를 현재 탭의 In/Out 으로 지정")
-        self.mode_btn = btn("편집: 롤", self.toggle_mode, "롤: 맞닿은 두 경계를 함께 이동 / 트림: 한쪽 경계만 이동 (R)")
         self.snap_btn = btn("스냅 ✓", self.toggle_snap, "스냅 켜기/끄기 (N)")
         h.addStretch(1)
         self.cut_info = QLabel("")
@@ -493,7 +493,6 @@ class EditorWindow(QMainWindow):
             "split_cut": self.split_at_playhead,
             "toggle_mute": lambda: self.transport.mute_btn.toggle() if self.transport.mute_btn.isEnabled() else None,
             "toggle_view": lambda: self.transport.view_btn.toggle(),
-            "toggle_mode": self.toggle_mode,
             "toggle_snap": self.toggle_snap,
             "tab_story": lambda: self.set_tab("story"),
             "tab_reels": lambda: self.set_tab("reels"),
@@ -708,8 +707,8 @@ class EditorWindow(QMainWindow):
         """FEED 영상 추가가 사용할 구간. 컷을 가장 최근에 선택했다면 선택한 컷들의 시작~끝(Shift 다중 선택이면 그 범위 전체),
         In/Out 을 직접 지정했다면 그 값이다. 예전에 남은 In/Out 이 새로 선택한 컷보다 우선하지 않도록 출처를 구분한다."""
         p = self.project
-        if self._range_source == "cuts" and self.timeline.sel_ids:
-            want = set(self.timeline.sel_ids)
+        if self._range_source == "cuts" and self.sel_ids:
+            want = set(self.sel_ids)
             cs = [c for c in p.state.cuts if c.id in want]
             if cs:
                 return min(c.start for c in cs), max(c.end for c in cs)
@@ -804,6 +803,14 @@ class EditorWindow(QMainWindow):
         if it.kind == "video":
             self.playback.play(it.start, 1.0, (it.start, it.end))
 
+    def _set_cover_ratio(self, ratio: str) -> None:
+        self.project.set_cover_ratio(ratio)
+        self.toast("REELS 커버 비율: " + ("원본 비율" if ratio == "orig" else "9:16"))
+
+    def _set_feed_ratio(self, ratio: str) -> None:
+        self.project.set_feed_ratio(ratio)
+        self.toast("FEED 출력 비율: " + ("원본 비율" if ratio == "orig" else "4:5"))
+
     def open_feed_manager(self) -> None:
         FeedManagerDialog(self.project, self.thumbs, self).exec()
         self._refresh()
@@ -828,31 +835,25 @@ class EditorWindow(QMainWindow):
 
     def _set_cut_selection(self, ids: list[int]) -> None:
         """컷 선택을 타임라인과 컷 스트립에 함께 반영한다."""
-        self.timeline.sel_ids = list(ids)
-        self.timeline.anchor_id = ids[0] if ids else None
+        self.sel_ids = list(ids)
         self.cut_strip.refresh()  # 병합 직후처럼 컷 목록이 방금 바뀐 경우를 위해 타일을 먼저 맞춘다
         self.cut_strip.set_selected_ids(ids)
         self.timeline.update()
         self._on_cut_selection()
 
     def _strip_selected(self, ids: list) -> None:
-        self.timeline.sel_ids = list(ids)
-        self.timeline.anchor_id = ids[0] if ids else None
+        self.sel_ids = list(ids)
         self.timeline.update()
         self._on_cut_selection()
 
-    def _timeline_selected(self, ids: list) -> None:
-        self.cut_strip.set_selected_ids(ids)
-        self._on_cut_selection()
-
     def _on_cut_selection(self) -> None:
-        if self.timeline.sel_ids:
+        if self.sel_ids:
             self._range_source = "cuts"
         self._update_cut_info()
         self._update_feed_pending()
 
     def merge_selected(self) -> None:
-        ids = self.timeline.sel_ids
+        ids = self.sel_ids
         try:
             self.project.merge_cuts(ids)
         except ValueError as e:
@@ -864,7 +865,7 @@ class EditorWindow(QMainWindow):
         self.toast("컷을 병합했습니다 (원본/XML 은 변경되지 않음)")
 
     def unmerge_selected(self) -> None:
-        cs = [c for c in self.project.state.cuts if c.id in self.timeline.sel_ids and c.merged]
+        cs = [c for c in self.project.state.cuts if c.id in self.sel_ids and c.merged]
         if not cs:
             self.toast("병합된 컷을 선택하세요.")
             return
@@ -887,13 +888,13 @@ class EditorWindow(QMainWindow):
         except ValueError as e:
             self.toast(str(e))
             return
-        sel = list(self.timeline.sel_ids)
+        sel = list(self.sel_ids)
         if cid is not None and cid in sel:  # 나눈 컷이 선택돼 있었다면 두 조각을 함께 선택해 둔다
             k = sel.index(cid)
             sel[k : k + 1] = [left, right]
             self._set_cut_selection(sel)
         else:
-            self.cut_strip.refresh(self.timeline.sel_ids)
+            self.cut_strip.refresh(self.sel_ids)
             self.timeline.update()
         n = next(k for k, c in enumerate(self.project.state.cuts) if c.id == right) + 1
         self.toast(f"{self.project.tc(frame)} 에서 컷을 나눴습니다 (#{n - 1} | #{n})")
@@ -901,7 +902,7 @@ class EditorWindow(QMainWindow):
     def _build_cut_menu(self) -> QMenu:
         """컷 위 오른쪽 클릭 메뉴. 지금 선택/재생 헤드 상태에 맞게 항목을 켜고 끈다."""
         cs = self.project.state.cuts
-        ids = list(self.timeline.sel_ids)
+        ids = list(self.sel_ids)
         sel = [c for c in cs if c.id in ids]
         sc = self.settings.shortcut
 
@@ -978,7 +979,7 @@ class EditorWindow(QMainWindow):
             self._set_cut_selection([])
 
     def cuts_to_inout(self) -> None:
-        cs = [c for c in self.project.state.cuts if c.id in self.timeline.sel_ids]
+        cs = [c for c in self.project.state.cuts if c.id in self.sel_ids]
         if not cs:
             self.toast("컷을 선택하세요.")
             return
@@ -992,16 +993,6 @@ class EditorWindow(QMainWindow):
             self._update_feed_pending()
         self.goto(a)
 
-    def toggle_mode(self) -> None:
-        self.timeline.edit_mode = "trim" if self.timeline.edit_mode == "roll" else "roll"
-        self.mode_btn.setText("편집: 트림" if self.timeline.edit_mode == "trim" else "편집: 롤")
-        self.toast(
-            "트림: 한쪽 경계만 이동 (겹침/빈 구간 발생 가능)"
-            if self.timeline.edit_mode == "trim"
-            else "롤: 맞닿은 두 경계를 함께 이동"
-        )
-        self.timeline.update()
-
     def toggle_snap(self) -> None:
         self.timeline.snap_on = not self.timeline.snap_on
         self.snap_btn.setText("스냅 ✓" if self.timeline.snap_on else "스냅 ✗")
@@ -1011,7 +1002,7 @@ class EditorWindow(QMainWindow):
         if not cs:
             self.cut_info.setText("컷 정보 없음 (XML 없이도 프레임 단위 편집 가능)")
             return
-        sel = [c for c in cs if c.id in self.timeline.sel_ids]
+        sel = [c for c in cs if c.id in self.sel_ids]
         iss = self.project.cut_issues()
         xml_name = Path(str(self.project.state.xml_meta.get("file", ""))).name
         txt = f"컷 {len(cs)}개" + (f" · XML {xml_name}" if xml_name else "") + " (STORY/REELS/FEED 공용)"
@@ -1073,14 +1064,14 @@ class EditorWindow(QMainWindow):
         st = self.project.state
         view_out = self.transport.view_btn.isChecked()
         if self.cover_mode:
-            kind, lp = "916", st.cover.layout
+            kind, lp = self.project.cover_kind(), st.cover.layout
             self.preview.cover_grid = (st.cover.grid_aspect, st.cover.grid_offset)
             self.preview.label = "릴스 커버 미리보기"
         else:
             self.preview.cover_grid = None
             self.preview.label = ""
             if self.tab == "feed":
-                kind = "45"
+                kind = self.project.feed_kind()
                 cid = self.feed_panel.current_id()
                 it = self.project.get_feed(cid) if cid else None
                 lp = it.layout if it else LayoutParams()
@@ -1175,7 +1166,7 @@ class EditorWindow(QMainWindow):
         self._update_feed_pending()
         self._update_preview_layout()
         self.timeline.update()
-        self.cut_strip.refresh(self.timeline.sel_ids)
+        self.cut_strip.refresh(self.sel_ids)
         self._update_cut_info()
         self.b_undo.setEnabled(self.project.can_undo())
         self.b_redo.setEnabled(self.project.can_redo())

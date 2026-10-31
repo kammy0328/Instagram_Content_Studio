@@ -26,9 +26,9 @@ FFmpeg/FFprobe (subprocess)      SQLite (프로젝트 저장소, ID 사전)
 | `ics/core/media.py` | FFprobe 분석. HDR 오류 차단, VFR/태그 누락/인터레이스/SAR/회전 경고 (`Issue` 목록) |
 | `ics/core/frameindex.py` | 프레임 번호 <-> 시각. 패킷 PTS 기반, CFR 은 `Fraction`, VFR 은 PTS 표. 파일로 캐시 |
 | `ics/core/timecode.py` | 프레임 <-> 타임코드(Non-drop/Drop-frame), 다양한 입력 형식 파싱 |
-| `ics/core/layout.py` | 9:16 / 4:5 지오메트리(Fit/Fill), 업스케일 회피 캔버스 선택, 프로필 그리드 창 계산 |
+| `ics/core/layout.py` | 9:16 / 4:5 / 원본 비율(orig) 지오메트리(Fit/Fill, Fit 확대 시 넘치는 축만 크롭), 업스케일 회피 캔버스 선택, 프로필 그리드 창 계산 |
 | `ics/core/decode.py` | 원본에서 정확한 프레임을 디코딩, 색 변환 옵션을 항상 명시 |
-| `ics/core/cuts.py` | 컷 병합/해제/복원/경계 이동(롤, 트림)과 겹침/빈 구간 검사. 순수 함수 |
+| `ics/core/cuts.py` | 컷 병합/해제/나누기/복원/경계 이동(롤, 트림; 현재 UI 는 경계 드래그를 제공하지 않음)과 겹침/빈 구간 검사. 순수 함수 |
 | `ics/core/xml_import.py` | Premiere/FCP7 xmeml, FCPXML, EDL 파서와 마스터 프레임 좌표 매핑(오프셋, 경고) |
 | `ics/core/credits.py`, `iddict.py` | 크레딧 정규화 `ROLE | NAME (@id)`, 로컬 ID 사전(SQLite) |
 | `ics/core/caption.py` | 글자 수 계산(UTF-16 기본/코드포인트/글자), 행 단위 캡션/댓글 분리 |
@@ -40,7 +40,7 @@ FFmpeg/FFprobe (subprocess)      SQLite (프로젝트 저장소, ID 사전)
 | `ics/render/planner.py` | 출력 파일 목록, 규칙(20개/길이) 검증, 경로/용량/충돌 점검 |
 | `ics/render/queue.py` | 백그라운드 순차 실행, 취소, 실패 항목만 재시도, 로그 기록, 잔여 `.part` 정리 |
 | `ics/ui/main_window.py` | 편집 창 조립, 단축키, 재생/구간/피드/컷/렌더 연결 |
-| `ics/ui/timeline.py` | 눈금자/썸네일/컷 레인/구간 레인, 마우스 편집(선택, 경계 드래그, 스냅) |
+| `ics/ui/timeline.py` | 눈금자(재생 헤드 클릭/드래그)/STORY·REELS·FEED 구간 레인, 마우스 편집(구간 드래그, 스냅). 컷 레인 없음 |
 | `ics/ui/cutstrip.py` | 컷 스트립: 길이와 무관하게 같은 크기의 타일(썸네일, 번호, 길이). 타임라인과 선택을 양방향 동기화, 오른쪽 클릭 메뉴 요청 |
 | `ics/ui/services.py` | 프록시 생성(소리 WAV 먼저), 프레임 요청 합치기와 LRU, 썸네일 캐시, 재생 엔진, 오디오(`AudioPlayer`, `default_audio_output`) |
 
@@ -79,7 +79,10 @@ FFmpeg/FFprobe (subprocess)      SQLite (프로젝트 저장소, ID 사전)
 18. **앱은 `quitOnLastWindowClosed=False`** 입니다 (`app.py`). 편집 창 → 프로젝트 목록 전환 중에는 열린 창이 잠시 없어서 기본값이면 앱이 종료됩니다. 종료는 사용자가 편집 창을 닫거나 프로젝트 목록을 취소할 때만 명시적으로 합니다.
 19. **컷 나누기는 재생 헤드 프레임을 뒤쪽 컷의 첫 프레임으로 만듭니다** (`cuts.split`, Premiere 의 Razor 와 같은 관례). 앞 컷은 기존 id 를 유지하고 뒤 컷은 새 id 를 받으며 둘 다 `manual` 입니다. 병합된 컷이면 파트도 경계에서 나뉩니다. 컷 정보가 없으면(XML 없이 편집) 영상 전체를 한 컷으로 보고 나눕니다. 컷 병합/나누기 메뉴의 활성화 판단은 `merge_error`/`split_error` 로 실제 동작과 같은 규칙을 씁니다.
 20. **타임라인에는 전체 길이 썸네일 줄이 없습니다.** 컷 썸네일은 컷 스트립이 보여 줍니다. 그래서 `ThumbService` 는 거친 격자를 미리 만들지 않고(`coarse=False`), 필요한 화면(컷 스트립/타임라인 컷 레인/FEED 목록)이 `request_visible`/`ensure` 로 직접 요청합니다. `request_visible` 은 우선 큐를 통째로 바꾸므로 서비스 인스턴스를 용도별로 나눕니다.
-21. **소리 경로** (`ProxyBuilder.build_audio` → `AudioPlayer`): ① 재생용 WAV 는 영상 프록시보다 먼저 만들고 `audioReady` 시그널로 즉시 연결합니다. ② 프록시가 이미 캐시에 있어도 `ProxyBuilder` 는 항상 시작합니다(없는 것만 만들고, 소리 연결과 프록시 색인 로드를 같은 경로로 처리). 예전에는 이 경로에서 소리 연결이 빠져 두 번째 열기부터 무음이었습니다. ③ `AudioPlayer` 는 재생할 때마다 그 시점의 기본 출력 장치로 싱크를 새로 만듭니다(헤드셋을 나중에 연결해도 소리가 남). ④ 소리를 못 내면 조용히 넘어가지 않고 `error` 에 사유를 남겨 화면(재생 바 옆 문구, 재생 시작 시 토스트)에 알립니다. ⑤ 소리 끄기는 미리보기 재생에만 적용되며 렌더링 결과에는 영향이 없습니다(설정 `audio_muted` 로 저장). ⑥ 장치 조회는 `default_audio_output()` 한 곳으로 모아 테스트가 실제 오디오 시스템에 닿지 않게 합니다.
+21. **FEED 비율은 프로젝트 단위(`EditState.feed_ratio`, `orig`|`45`)이고 기본은 `orig` 입니다.** `feed_ratio` 가 없는 옛 저장본은 FEED 항목이 이미 있으면 `45`(기존 결과 유지), 없으면 `orig` 로 읽습니다. `LayoutParams.zv` 가 2 미만인 옛 Fit 배치는 zoom 을 1 로 읽습니다(예전에는 Fit 에서 zoom 이 무시됐으므로 결과가 달라지면 안 됩니다).
+22. **REELS 커버 비율도 프로젝트 단위(`EditState.cover_ratio`, `orig`|`916`, 기본 `orig`)입니다.** 키가 없는 옛 저장본은 커버 프레임이 이미 지정돼 있으면 `916` 으로 읽어 결과를 유지합니다.
+23. **컷 선택의 원본은 컷 스트립입니다.** `EditorWindow.sel_ids` 가 마지막 선택을 들고 있고, 재생 헤드가 움직이면 `CutStrip.set_playhead` 가 그 컷을 가운데로 스크롤합니다.
+24. **소리 경로** (`ProxyBuilder.build_audio` → `AudioPlayer`): ① 재생용 WAV 는 영상 프록시보다 먼저 만들고 `audioReady` 시그널로 즉시 연결합니다. ② 프록시가 이미 캐시에 있어도 `ProxyBuilder` 는 항상 시작합니다(없는 것만 만들고, 소리 연결과 프록시 색인 로드를 같은 경로로 처리). 예전에는 이 경로에서 소리 연결이 빠져 두 번째 열기부터 무음이었습니다. ③ `AudioPlayer` 는 재생할 때마다 그 시점의 기본 출력 장치로 싱크를 새로 만듭니다(헤드셋을 나중에 연결해도 소리가 남). ④ 소리를 못 내면 조용히 넘어가지 않고 `error` 에 사유를 남겨 화면(재생 바 옆 문구, 재생 시작 시 토스트)에 알립니다. ⑤ 소리 끄기는 미리보기 재생에만 적용되며 렌더링 결과에는 영향이 없습니다(설정 `audio_muted` 로 저장). ⑥ 장치 조회는 `default_audio_output()` 한 곳으로 모아 테스트가 실제 오디오 시스템에 닿지 않게 합니다.
 
 ## 6. 스레딩 모델
 

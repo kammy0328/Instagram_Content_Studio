@@ -23,6 +23,21 @@ def output_fps(info: MediaInfo, vfr_avg: Fraction | None = None) -> Fraction:
     return f
 
 
+def crop_filter(info: MediaInfo, geo: Geometry) -> str:
+    """지오메트리의 크롭 창(표시 좌표)을 코딩 좌표 crop 필터로 환산한다. 크롭 후 한 번에 스케일해 이중 리샘플링을 피한다."""
+    gw = info.width if info.rotation not in (90, 270) else info.height
+    sx = gw / info.display_w
+    cw = max(2, int(round(geo.crop_w * sx)))
+    cx = int(round(geo.crop_x * sx))
+    if cx + cw > gw:
+        cw = gw - cx
+    return f"crop={cw}:{geo.crop_h}:{cx}:{geo.crop_y}"
+
+
+def is_cropped(info: MediaInfo, geo: Geometry) -> bool:
+    return geo.crop_w > 0 and (geo.crop_w, geo.crop_h) != (info.display_w, info.display_h)
+
+
 OUTPUT_TAGS_FILTER = "setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv"
 
 
@@ -33,16 +48,12 @@ def video_filter(info: MediaInfo, geo: Geometry, fps_out: Fraction | None, pix_f
     if geo.mode == "fill":
         # 크롭 좌표는 표시(SAR 반영) 좌표계 -> 먼저 표시 크기로 정사각 픽셀화 후 크롭하면 이중 리샘플링이 되므로,
         # 코딩 좌표로 환산해 크롭 후 한 번에 스케일한다.
-        gw = info.width if info.rotation not in (90, 270) else info.height
-        sx = gw / info.display_w
-        cw = max(2, int(round(geo.crop_w * sx)))
-        cx = int(round(geo.crop_x * sx))
-        if cx + cw > info.width:
-            cw = info.width - cx
-        parts.append(f"crop={cw}:{geo.crop_h}:{cx}:{geo.crop_y}")
+        parts.append(crop_filter(info, geo))
         parts.append(f"scale={geo.canvas_w}:{geo.canvas_h}:{scale_opts}")
         parts.append(f"format={pix_fmt}")
     else:
+        if is_cropped(info, geo):  # Fit 에서 확대해 넘치는 부분
+            parts.append(crop_filter(info, geo))
         parts.append(f"scale={geo.content_w}:{geo.content_h}:{scale_opts}")
         parts.append(f"format={pix_fmt}")
         if (geo.content_w, geo.content_h) != (geo.canvas_w, geo.canvas_h):
@@ -130,16 +141,12 @@ def still_filter(info: MediaInfo, geo: Geometry, pix_fmt: str = "rgb24") -> str:
     parts: list[str] = pre_filters(info)
     scale_opts = f"flags={SCALE_FLAGS}:{in_color_opts(info)}:out_range=full:sws_dither=ed"
     if geo.mode == "fill":
-        gw = info.width if info.rotation not in (90, 270) else info.height
-        sx = gw / info.display_w
-        cw = max(2, int(round(geo.crop_w * sx)))
-        cx = int(round(geo.crop_x * sx))
-        if cx + cw > gw:
-            cw = gw - cx
-        parts.append(f"crop={cw}:{geo.crop_h}:{cx}:{geo.crop_y}")
+        parts.append(crop_filter(info, geo))
         parts.append(f"scale={geo.canvas_w}:{geo.canvas_h}:{scale_opts}")
         parts.append(f"format={pix_fmt}")
     else:
+        if is_cropped(info, geo):  # Fit 에서 확대해 넘치는 부분
+            parts.append(crop_filter(info, geo))
         parts.append(f"scale={geo.content_w}:{geo.content_h}:{scale_opts}")
         parts.append(f"format={pix_fmt}")
         if (geo.content_w, geo.content_h) != (geo.canvas_w, geo.canvas_h):

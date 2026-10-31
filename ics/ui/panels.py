@@ -161,7 +161,7 @@ def slider(minv, maxv, val) -> QSlider:
 
 
 class LayoutEditor(QGroupBox):
-    """Fit / Fill(크롭) + 확대 + 위치 조정."""
+    """Fit / Fill(크롭) + 확대 + 위치 조정. 확대는 Fit 에서도 된다 (넘치는 부분은 잘림). 원본 비율 출력에서는 Fit/Fill 구분이 없다."""
 
     changed = Signal(object)  # LayoutParams
     committed = Signal(object)
@@ -205,8 +205,12 @@ class LayoutEditor(QGroupBox):
         self._sync_enabled()
 
     def _sync_enabled(self):
-        fill = self.r_fill.isChecked()
-        self.zoom.setEnabled(fill)
+        self.zoom.setEnabled(True)
+
+    def set_original_ratio(self, on: bool) -> None:
+        """원본 비율 출력이면 여백/크롭 선택이 의미 없으므로 Fit/Fill 선택을 숨긴다."""
+        self.r_fit.setVisible(not on)
+        self.r_fill.setVisible(not on)
 
     def value(self) -> LayoutParams:
         return LayoutParams(
@@ -255,6 +259,7 @@ class SelectionPanel(QWidget):
     coverGoto = Signal()
     coverChanged = Signal(str, float)
     coverPreview = Signal(bool)
+    coverRatioChanged = Signal(str)  # 'orig' | '916'
     coverLayoutLive = Signal(object)
     coverLayoutCommit = Signal(object)
 
@@ -348,6 +353,16 @@ class SelectionPanel(QWidget):
         self.cover_lbl.setObjectName("muted")
         self.cover_lbl.setWordWrap(True)
         gl.addWidget(self.cover_lbl)
+        self.cover_ratio_combo = QComboBox()
+        self.cover_ratio_combo.addItem("원본 비율 (기본)", "orig")
+        self.cover_ratio_combo.addItem("9:16 (1080×1920)", "916")
+        self.cover_ratio_combo.currentIndexChanged.connect(
+            lambda _i: self.coverRatioChanged.emit(self.cover_ratio_combo.currentData())
+        )
+        rr = QHBoxLayout()
+        rr.addWidget(QLabel("커버 출력 비율"))
+        rr.addWidget(self.cover_ratio_combo, 1)
+        gl.addLayout(rr)
         self.cover_prev = QCheckBox("커버 미리보기 + 프로필 그리드 크롭")
         self.cover_prev.toggled.connect(self.coverPreview.emit)
         gl.addWidget(self.cover_prev)
@@ -405,6 +420,10 @@ class SelectionPanel(QWidget):
             self.grid_off.setValue(int(c.grid_offset * 100))
             self.grid_off.blockSignals(False)
             self.cover_layout.set_value(c.layout)
+            self.cover_ratio_combo.blockSignals(True)
+            self.cover_ratio_combo.setCurrentIndex(0 if p.cover_kind() == "orig" else 1)
+            self.cover_ratio_combo.blockSignals(False)
+            self.cover_layout.set_original_ratio(p.cover_kind() == "orig")
 
 
 class FeedPanel(QWidget):
@@ -421,10 +440,13 @@ class FeedPanel(QWidget):
     setOut = Signal()
     inOutEntered = Signal(int, int)
     playItem = Signal(str)
+    ratioChanged = Signal(str)  # 'orig' | '45'
 
     def __init__(self, project, thumbs):
         super().__init__()
         self.project, self.thumbs = project, thumbs
+        self._block = False
+        self._want: str | None = None
         self._thumb_frames: set[int] = set()
         self._thumb_timer = QTimer(self)
         self._thumb_timer.setSingleShot(True)
@@ -436,10 +458,23 @@ class FeedPanel(QWidget):
         t = QLabel("<b>FEED</b> (캐러셀)")
         t.setObjectName("h1")
         v.addWidget(t)
-        s = QLabel("4:5 · 1080×1350 · 스틸 JPG / 영상 MP4(최대 60초) · 최종 20개 이하")
+        s = QLabel("스틸 JPG / 영상 MP4(최대 60초) · 최종 20개 이하")
         s.setObjectName("muted")
         s.setWordWrap(True)
         v.addWidget(s)
+        rr = QHBoxLayout()
+        rr.addWidget(QLabel("출력 비율"))
+        self.ratio_combo = QComboBox()
+        self.ratio_combo.addItem("원본 비율 (기본)", "orig")
+        self.ratio_combo.addItem("4:5 (1080×1350)", "45")
+        self.ratio_combo.setToolTip(
+            "원본 비율: 여백/크롭 없이 원본과 같은 비율로 출력 / 4:5: 여백(Fit) 또는 크롭(Fill)"
+        )
+        self.ratio_combo.currentIndexChanged.connect(
+            lambda _i: None if self._block else self.ratioChanged.emit(self.ratio_combo.currentData())
+        )
+        rr.addWidget(self.ratio_combo, 1)
+        v.addLayout(rr)
         g = QGroupBox("추가")
         gl = QVBoxLayout(g)
         row = QHBoxLayout()
@@ -516,6 +551,7 @@ class FeedPanel(QWidget):
             if self.list.item(i).data(Qt.ItemDataRole.UserRole) == item_id:
                 self.list.setCurrentRow(i)
                 return
+        self._want = item_id  # 목록이 아직 갱신 전이면 다음 refresh 에서 선택한다
 
     def _cur_changed(self, cur, _prev):
         if self._block or cur is None:
@@ -536,7 +572,8 @@ class FeedPanel(QWidget):
 
     def refresh(self) -> None:
         p = self.project
-        cur = self.current_id()
+        cur = self._want or self.current_id()
+        self._want = None
         self._block = True
         self.list.clear()
         items = p.feed_ordered()
@@ -580,10 +617,14 @@ class FeedPanel(QWidget):
         self.warn_lbl.setText("\n".join(w[:6]) + (f"\n… 외 {len(w) - 6}건" if len(w) > 6 else ""))
         it = p.get_feed(self.current_id()) if self.current_id() else None
         self.layout_editor.setEnabled(it is not None)
+        self.layout_editor.set_original_ratio(p.feed_kind() == "orig")
+        self.ratio_combo.blockSignals(True)
+        self.ratio_combo.setCurrentIndex(0 if p.feed_kind() == "orig" else 1)
+        self.ratio_combo.blockSignals(False)
         if it is not None:
             self.layout_editor.set_value(it.layout)
             if p.media:
-                g = compute_geometry(p.media.display_w, p.media.display_h, "45", it.layout)
+                g = compute_geometry(p.media.display_w, p.media.display_h, p.feed_kind(), it.layout)
                 self.layout_editor.set_info(
                     f"출력 {g.canvas_w}×{g.canvas_h}" + (f" · {g.tier_note}" if g.tier_note else "")
                 )

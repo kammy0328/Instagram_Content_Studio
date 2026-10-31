@@ -136,7 +136,7 @@ def plan_render(project: Project, include_original_stills: bool = True) -> Rende
             if geo.tier_note:
                 plan.issues.append(PlanIssue("info", f"REELS: {geo.tier_note}"))
     if st.cover.frame is not None:
-        geo = compute_geometry(info.display_w, info.display_h, "916", st.cover.layout)
+        geo = compute_geometry(info.display_w, info.display_h, project.cover_kind(), st.cover.layout)
         add(
             "reels_cover",
             "REELS 커버",
@@ -157,8 +157,19 @@ def plan_render(project: Project, include_original_stills: bool = True) -> Rende
         )
     else:
         done_orig: set[int] = set()
+        feed_kind = project.feed_kind()
+        if feed_kind == "orig" and included:
+            ar = info.display_w / info.display_h
+            if not (0.8 - 1e-3 <= ar <= 1.91 + 1e-3):
+                plan.issues.append(
+                    PlanIssue(
+                        "warn",
+                        f"FEED 원본 비율({info.display_w}:{info.display_h})이 인스타그램 피드 허용 범위(4:5 ~ 1.91:1)를 "
+                        "벗어납니다. 인스타그램이 피드에서 가장자리를 잘라 보여 줄 수 있습니다.",
+                    )
+                )
         for n, it in enumerate(included, start=1):
-            geo = compute_geometry(info.display_w, info.display_h, "45", it.layout)
+            geo = compute_geometry(info.display_w, info.display_h, feed_kind, it.layout)
             if it.kind == "video":
                 dur = project.seconds(it.start, it.end)
                 if it.end - it.start > max_frames_for(FEED_VIDEO_MAX_SEC, project.fps):
