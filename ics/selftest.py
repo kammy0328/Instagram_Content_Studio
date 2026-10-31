@@ -86,6 +86,9 @@ def _check_qt() -> str:
     return f"Qt {qVersion()}, platform={app.platformName()}, plugins={found}"
 
 
+_TAG_FIELDS = "stream=color_space,color_primaries,color_transfer,color_range"
+
+
 def _make_clip(path: Path) -> None:
     from .core import ffbin
 
@@ -104,7 +107,7 @@ def _make_clip(path: Path) -> None:
 
 def _check_pipeline(work: Path, qt_pump) -> str:
     from . import paths
-    from .core import frameindex, media
+    from .core import ffbin, frameindex, media
     from .core.iddict import IdDictionary
     from .core.project import Project
     from .core.store import Library
@@ -145,6 +148,14 @@ def _check_pipeline(work: Path, qt_pump) -> str:
             raise RuntimeError(f"출력 누락/빈 파일: {empty}")
         if list(Path(plan.root).rglob("*.part")):
             raise RuntimeError(".part 임시 파일이 남았습니다")
+        story = next(o for o in outs if o.suffix == ".mp4" and "STORY" in o.parts)
+        vs = ffbin.probe_json(str(story), "-select_streams", "v:0", "-show_entries", _TAG_FIELDS)["streams"][0]
+        tags = {k: vs.get(k) for k in _TAG_FIELDS.split("=")[1].split(",")}
+        want = {"color_space": "bt709", "color_primaries": "bt709", "color_transfer": "bt709", "color_range": "tv"}
+        if any(tags[k] != v for k, v in want.items()):
+            raise RuntimeError(
+                f"출력 색 태그가 BT.709 Limited 가 아닙니다: {tags} (FFmpeg: {ffbin.versions()['ffmpeg']})"
+            )
 
         w = EditorWindow(proj, Settings(), IdDictionary(), paths.cache_dir(rec.id))
         w.resize(1400, 860)

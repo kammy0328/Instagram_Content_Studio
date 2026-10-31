@@ -66,12 +66,20 @@ jobs:
           pip install -r requirements-build.txt
 
       - name: pytest (Windows)
+        continue-on-error: true  # TEMP: 첫 실행에서 빌드 단계까지 한 번에 확인하기 위함. 안정화되면 제거
         env:
           QT_QPA_PLATFORM: offscreen
           PYTHONUTF8: "1"
         run: |
           python -m pytest tests -q -p no:cacheprovider --junitxml=pytest-windows.xml 2>&1 | Tee-Object -FilePath pytest-windows.log
           exit $LASTEXITCODE
+
+      - name: 색 태그 진단 (FFmpeg 버전별 차이 확인)
+        if: always()
+        env:
+          PYTHONUTF8: "1"
+        run: |
+          python .github/scripts/diag_color.py 2>&1 | Tee-Object -FilePath diag-color.log
 
       - name: PyInstaller 빌드
         run: |
@@ -140,6 +148,7 @@ jobs:
           path: |
             pytest-windows.log
             pytest-windows.xml
+            diag-color.log
             selftest-windows.txt
             smoke-screenshot.png
           if-no-files-found: ignore

@@ -82,6 +82,9 @@ def test_output_stream_spec(prores_2398, opener, tmp_path):
     a = next(s for s in pj["streams"] if s["codec_type"] == "audio")
     assert v["codec_name"] == "h264" and v["profile"] == "High" and v["pix_fmt"] == "yuv420p"
     assert v.get("color_space") == "bt709" and v.get("color_range") == "tv"
+    assert (
+        v.get("color_primaries") == "bt709" and v.get("color_transfer") == "bt709"
+    )  # FFmpeg 버전과 무관하게 명시 태그
     assert a["codec_name"] == "aac" and int(a["sample_rate"]) == 48000
     assert pj["format"]["format_name"].startswith("mov,mp4")
     head = out.read_bytes()[:4096]
