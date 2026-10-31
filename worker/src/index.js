@@ -26,7 +26,7 @@ export async function handle(req, env, now = Date.now(), fetchFn = fetch) {
     const key = decodeURIComponent(path.slice(3));
     if (!(await verifyMedia(env.MEDIA_SIGNING_KEY, key, url.searchParams.get("exp"), url.searchParams.get("sig"), now))) return new Response("forbidden", { status: 403 });
     const range = req.headers.get("range");
-    const obj = req.method === "HEAD" ? await env.MEDIA.head(key) : await env.MEDIA.get(key, range ? { range } : undefined);
+    const obj = req.method === "HEAD" ? await env.MEDIA.head(key) : await env.MEDIA.get(key, range ? { range: req.headers } : undefined);
     if (!obj) return new Response("not found", { status: 404 });
     const headers = new Headers({ "content-type": (obj.httpMetadata && obj.httpMetadata.contentType) || "application/octet-stream", "accept-ranges": "bytes" });
     const size = obj.size;

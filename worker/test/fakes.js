@@ -29,7 +29,10 @@ export function fakeR2() {
   return {
     store,
     put: async (k, body, opts = {}) => { const bytes = await asBytes(body); store.set(k, { bytes, ct: opts.httpMetadata?.contentType }); return { size: bytes.length }; },
-    get: async (k, opts) => obj(k, null, opts?.range),
+    get: async (k, opts) => {
+      if (opts?.range && typeof opts.range === "string") throw new TypeError("R2 requires Headers or Range object"); // 실제 R2 와 동일하게 문자열 거부
+      return obj(k, null, opts?.range && opts.range.get ? opts.range.get("range") : opts?.range);
+    },
     head: async (k) => { const v = store.get(k); return v ? { size: v.bytes.length } : null; },
     delete: async (k) => { store.delete(k); },
     createMultipartUpload: async (k, opts = {}) => { const id = `u${++n}`; mp.set(id, { k, ct: opts.httpMetadata?.contentType, parts: new Map() }); return { uploadId: id }; },
