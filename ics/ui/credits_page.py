@@ -203,6 +203,13 @@ class CreditsPage(QWidget):
         return w
 
     # ------------------------------------------------------------------ 동작
+    def flush_pending(self) -> None:
+        """렌더/종료 전에 디바운스 중인 입력을 프로젝트 상태에 반영한다."""
+        for timer in (self._raw_timer, self._body_timer, self._cmt_timer):
+            if timer.isActive():
+                timer.stop()
+                timer.timeout.emit()
+
     def run_parse(self) -> None:
         self._raw_timer.stop()
         self.project.set_credits_raw(self.raw.toPlainText())

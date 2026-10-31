@@ -31,6 +31,7 @@ class AutoSaver:
         self._saving = False
         self.last_error = ""
         self.save_count = 0
+        self._failures = 0
         self._thread = threading.Thread(target=self._run, name="ics-autosave", daemon=True)
         self._thread.start()
 
@@ -78,6 +79,7 @@ class AutoSaver:
             self.on_status(self.SAVED, "")
             return True
         except Exception as e:  # noqa: BLE001
+            self._failures += 1
             self.last_error = str(e)
             self.on_status(self.ERROR, f"저장 실패: {e}")
             # 실패한 payload 는 보존해 다음 요청/종료 시 재시도
@@ -89,16 +91,24 @@ class AutoSaver:
             return False
 
     def flush(self, timeout: float = 10.0) -> bool:
-        """대기 중인 저장을 즉시 동기 수행 (종료 시 호출)."""
+        """저장 스레드에 즉시 쓰기를 요청하고 완료를 기다린다. 동시 쓰기와 순서 역전을 막는다."""
         deadline = time.monotonic() + timeout
         with self._cv:
-            while self._saving and time.monotonic() < deadline:
-                self._cv.wait(timeout=0.1)
-            payload, self._pending = self._pending, None
-        return self._write(payload)
+            failures = self._failures
+            if self._pending is not None:
+                self._first_dirty = self._last_req = 0.0
+                self._cv.notify_all()
+            while self._saving or self._pending is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or self._failures != failures:
+                    return False
+                self._cv.wait(timeout=remaining)
+            return True
 
     def close(self):
         ok = self.flush()
+        if not ok:
+            return False
         with self._cv:
             self._stop = True
             self._cv.notify_all()

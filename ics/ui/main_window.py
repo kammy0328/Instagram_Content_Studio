@@ -1091,6 +1091,7 @@ class EditorWindow(QMainWindow):
             if self.project.feed_over_limit():
                 return
         self.playback.pause()
+        self.credits.flush_pending()
         plan = plan_render(self.project)
         dlg = RenderDialog(plan, self)
         self.render_dialog = dlg
@@ -1291,13 +1292,19 @@ class EditorWindow(QMainWindow):
                 return
             self.render_queue.cancel_all()
             self.render_queue.wait(10)
-        self._closing = True
         self._layout_commit()
+        self.credits.flush_pending()
+        try:
+            self.project.close()
+        except RuntimeError as err:
+            QMessageBox.critical(self, "프로젝트 저장 실패", str(err))
+            e.ignore()
+            return
+        self._closing = True
         self.playback.shutdown()
         self.proxy.cancel()
         self.frames.stop()
         self.thumbs.stop()
         self.cut_thumbs.stop()
-        self.project.close()
         super().closeEvent(e)
         self.closed.emit()
