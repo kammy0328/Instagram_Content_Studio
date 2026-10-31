@@ -161,3 +161,65 @@ def test_render_through_window(qapp, win, tmp_path):
     pump(qapp, 200)
     assert all(j.status == "done" for j in plan.jobs), [(j.label, j.status, j.error) for j in plan.jobs]
     assert "렌더링 완료" in win.render_lbl.text()
+
+
+def test_close_saves_pending_credit_text(qapp, win):
+    win.set_tab("credits")
+    win.credits.raw.setPlainText("Director | 닫기 직전 원문")
+    win.credits.body.setPlainText("닫기 직전 본문")
+    assert win.close()
+    from ics.core.store import ProjectStore
+
+    store = ProjectStore(win.project.store.path)
+    try:
+        state = store.load_latest()[0]["state"]
+        assert state["credits_raw"] == "Director | 닫기 직전 원문"
+        assert state["caption_body"] == "닫기 직전 본문"
+    finally:
+        store.close()
+
+
+def test_close_failure_keeps_editor_open(qapp, win, monkeypatch):
+    errors = []
+    monkeypatch.setattr(QMessageBox, "critical", lambda *args: errors.append(args))
+    save = win.project.store.save
+
+    def full_disk(payload):
+        raise OSError(28, "디스크 공간 부족")
+
+    monkeypatch.setattr(win.project.store, "save", full_disk)
+    win.project.set_caption_body("저장 실패")
+    assert not win.close()
+    assert errors and not win._closing and not win.project._closed
+    monkeypatch.setattr(win.project.store, "save", save)
+
+
+def test_back_to_projects_respects_cancelled_close():
+    from ics.app import App
+
+    class Window:
+        deleted = False
+
+        def close(self):
+            return False
+
+        def deleteLater(self):
+            self.deleted = True
+
+    app = App.__new__(App)
+    app.window = Window()
+    window = app.window
+    app._back_to_projects()
+    assert app.window is window and not window.deleted
+
+
+def test_render_plan_includes_pending_caption(qapp, win):
+    win.project.set_range("story", 0, 4)
+    win.set_tab("credits")
+    win.credits.body.setPlainText("렌더 직전 본문")
+    win.open_render()
+    try:
+        job = next(j for j in win.render_dialog.plan.jobs if j.kind == "captions")
+        assert job.params["caption"] == "렌더 직전 본문"
+    finally:
+        win.render_dialog.close()

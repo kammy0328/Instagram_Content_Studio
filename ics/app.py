@@ -120,7 +120,12 @@ class App:
             QTimer.singleShot(0, self.show_projects)
             return
         prog.close()
-        project = Project(rec, self.library)
+        try:
+            project = Project(rec, self.library)
+        except RuntimeError as err:
+            QMessageBox.warning(None, "프로젝트 열기 실패", str(err))
+            QTimer.singleShot(0, self.show_projects)
+            return
         res = project.open()
         project.attach_media(info, index)
         # 원본이 바뀐 경우(크기/수정시간/길이) 경고
@@ -149,10 +154,12 @@ class App:
             QTimer.singleShot(400, lambda: QMessageBox.information(win, "프로젝트 열기", "\n\n".join(msgs)))
 
     def _back_to_projects(self) -> None:
-        w, self.window = self.window, None
+        w = self.window
         if w:
-            w.close()
+            if not w.close():
+                return
             w.deleteLater()
+        self.window = None
         QTimer.singleShot(0, self.show_projects)
 
 

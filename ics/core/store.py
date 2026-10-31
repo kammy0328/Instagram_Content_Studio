@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
 import threading
 import time
@@ -28,13 +29,39 @@ class ProjectStore:
     def __init__(self, path: Path):
         self.path = Path(path)
         self._lock = threading.Lock()
-        self._conn = self._connect()
-        self._init()
+        self._session_lock = self.path.with_name(self.path.name + ".lock").open("a+b")
+        try:
+            if self._session_lock.seek(0, os.SEEK_END) == 0:
+                self._session_lock.write(b"\0")
+                self._session_lock.flush()
+            self._session_lock.seek(0)
+            try:
+                if os.name == "nt":
+                    import msvcrt
+
+                    msvcrt.locking(self._session_lock.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(self._session_lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as err:
+                raise RuntimeError("이 프로젝트는 다른 실행에서 사용 중입니다. 먼저 해당 창을 닫아 주세요.") from err
+            self._conn = self._connect()
+            self._init()
+        except BaseException:
+            if hasattr(self, "_conn"):
+                self._conn.close()
+            self._session_lock.close()
+            raise
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.path), timeout=10, check_same_thread=False, isolation_level=None)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=FULL")
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=FULL")
+        except BaseException:
+            conn.close()
+            raise
         return conn
 
     def _init(self):
@@ -102,6 +129,7 @@ class ProjectStore:
                 self._conn.close()
             except sqlite3.Error:
                 pass
+            self._session_lock.close()  # 종료/강제 종료 시 OS가 잠금을 해제한다. 파일은 삭제하지 않는다.
 
 
 # ============================================================================ 라이브러리

@@ -73,13 +73,14 @@ class Project:
     def close(self) -> None:
         if self._closed:
             return
+        self.autosaver.request(self._payload())
+        if not self.autosaver.close():
+            raise RuntimeError(
+                "프로젝트를 저장하지 못했습니다. 공간/권한을 확인한 뒤 다시 시도하세요. " + self.autosaver.last_error
+            )
+        self.store.mark_closed()
+        self.store.close()
         self._closed = True
-        try:
-            self.autosaver.request(self._payload())
-            self.autosaver.close()
-        finally:
-            self.store.mark_closed()
-            self.store.close()
 
     def attach_media(self, info: MediaInfo, index: FrameIndex) -> None:
         self.media, self.index = info, index
