@@ -68,3 +68,14 @@ def test_rows_to_lines_and_review_count():
     rows = parse("Director: A\nbad line")
     assert C.count_review(rows) == 1
     assert C.rows_to_lines(rows)[0] == "Director | A"
+
+
+def test_similar_domain_does_not_create_instagram_handle():
+    row = parse("Director | A https://notinstagram.com/someone")[0]
+    assert all(p.handle is None for p in row.people)
+
+
+def test_ampersand_with_only_one_handle_remains_review():
+    raw = "Production | A & B (@studio)"
+    row = parse(raw)[0]
+    assert row.status == "review" and row.text == raw
