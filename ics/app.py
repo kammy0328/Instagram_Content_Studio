@@ -25,7 +25,11 @@ from .ui.settings import Settings
 class App:
     def __init__(self, argv=None):
         QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
-        self.qt = QApplication(argv or sys.argv)
+        self.qt = QApplication.instance() or QApplication(argv or sys.argv)
+        # 편집 창 <-> 프로젝트 목록 전환 중에는 열린 창이 잠시 없다. 기본값(True)이면 그 순간 앱이 통째로 종료되므로
+        # 자동 종료를 끄고, 사용자가 편집 창을 닫거나 프로젝트 목록을 취소할 때만 명시적으로 종료한다.
+        self.qt.setQuitOnLastWindowClosed(False)
+        self._switching = False
         self.qt.setApplicationName(APP_NAME)
         self.qt.setStyleSheet(theme.STYLE)
         self.settings = Settings()
@@ -56,19 +60,23 @@ class App:
         QTimer.singleShot(0, self.show_projects)
         return self.qt.exec()
 
+    def _quit(self) -> None:
+        self.qt.quit()
+
     def show_projects(self) -> None:
         if self.window is not None:
             return
+        self._switching = False
         dlg = ProjectListDialog(self.library)
         if not dlg.exec():
-            self.qt.quit()
+            self._quit()
             return
         if dlg.new_requested:
             self.new_project()
         elif dlg.chosen:
             self.open_record(dlg.chosen)
         else:
-            self.qt.quit()
+            self._quit()
 
     def new_project(self) -> None:
         dlg = NewProjectDialog(None, self.settings.get("last_output", ""))
@@ -131,6 +139,7 @@ class App:
         win = EditorWindow(project, self.settings, self.iddict, cache)
         self.window = win
         win.requestProjects.connect(self._back_to_projects)
+        win.closed.connect(self._on_window_closed)
         win.show()
         msgs = []
         if res["crashed"] and res["restored"]:
@@ -148,11 +157,20 @@ class App:
         if msgs:
             QTimer.singleShot(400, lambda: QMessageBox.information(win, "프로젝트 열기", "\n\n".join(msgs)))
 
+    def _on_window_closed(self) -> None:
+        if not self._switching:  # 사용자가 편집 창을 직접 닫음 -> 프로그램 종료
+            self._quit()
+
     def _back_to_projects(self) -> None:
-        w, self.window = self.window, None
-        if w:
-            w.close()
-            w.deleteLater()
+        w = self.window
+        if w is None:
+            return
+        self._switching = True
+        if not w.close():  # 렌더링 중 '취소하고 종료' 를 거절한 경우 등: 그대로 편집을 계속한다
+            self._switching = False
+            return
+        self.window = None
+        w.deleteLater()
         QTimer.singleShot(0, self.show_projects)
 
 
