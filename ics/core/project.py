@@ -254,6 +254,20 @@ class Project:
     def max_len_frames(self, which: str) -> int:
         return max_frames_for(self._limit_sec(which), self.fps)
 
+    def limited_end(self, start: int, seconds: int | float) -> int:
+        """PTS 실제 길이가 제한을 넘지 않는 마지막 배타적 Out을 구한다."""
+        deadline = self.index.time_of(start) + Fraction(str(seconds))
+        lo, hi = start, self.count
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if self.index.time_of(mid) <= deadline:
+                lo = mid
+            else:
+                hi = mid - 1
+        if lo <= start:
+            raise ValueError("현재 프레임 하나의 길이가 출력 시간 제한을 넘습니다.")
+        return lo
+
     def apply_preset(self, which: str, start: int, preset: str) -> str:
         """시작 지점 기준 프리셋 적용. 반환: 안내 메시지(없으면 '')."""
         sel = self._sel(which)
@@ -267,9 +281,8 @@ class Project:
             else:
                 sec = min(PRESET_SECONDS[preset], self._limit_sec(which))
             if sec is not None:
-                n = max_frames_for(sec, self.fps)
-                end = min(self.count, start + n)
-                if end - start < n:
+                end = self.limited_end(start, sec)
+                if self.index.time_of(self.count) < self.index.time_of(start) + Fraction(str(sec)):
                     msg = f"영상 끝까지 {self.seconds(start, end):.2f}초만 선택되었습니다."
             else:
                 end = max(start + 1, min(sel.end if sel.end > start else start + 1, self.count))
@@ -282,9 +295,9 @@ class Project:
         with self.edit(f"{which.upper()} In/Out", (which, "state")):
             start = self.index.clamp(start)
             end = max(start + 1, min(int(end), self.count))
-            n = self.max_len_frames(which)
-            if end - start > n:
-                end = start + n
+            max_end = self.limited_end(start, self._limit_sec(which))
+            if end > max_end:
+                end = max_end
                 msg = f"{which.upper()}는 최대 {int(self._limit_sec(which))}초까지 가능해 Out 을 조정했습니다."
             sel.enabled, sel.start, sel.end, sel.preset = True, start, end, "custom"
         return msg
@@ -342,9 +355,9 @@ class Project:
         with self.edit("피드 영상 추가", ("feed", "state")):
             start = self.index.clamp(start)
             end = max(start + 1, min(int(end), self.count))
-            n = max_frames_for(FEED_VIDEO_MAX_SEC, self.fps)
-            if end - start > n:
-                end = start + n
+            max_end = self.limited_end(start, FEED_VIDEO_MAX_SEC)
+            if end > max_end:
+                end = max_end
                 msg = f"피드 영상은 최대 {int(FEED_VIDEO_MAX_SEC)}초라 Out 을 조정했습니다."
             self.state.feed_seq += 1
             it = FeedItem(
@@ -368,9 +381,9 @@ class Project:
             else:
                 s = self.index.clamp(start)
                 e = max(s + 1, min(int(end), self.count))
-                n = max_frames_for(FEED_VIDEO_MAX_SEC, self.fps)
-                if e - s > n:
-                    e, msg = s + n, "피드 영상은 최대 60초입니다."
+                max_end = self.limited_end(s, FEED_VIDEO_MAX_SEC)
+                if e > max_end:
+                    e, msg = max_end, "피드 영상은 최대 60초입니다."
                 it.start, it.end = s, e
         return msg
 

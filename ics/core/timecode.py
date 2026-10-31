@@ -119,6 +119,8 @@ def tc_to_frame(text: str, fps: Fraction, drop: bool | None = None) -> int | Non
     use_drop = sep_drop if drop is None else (drop or sep_drop)
     if use_drop and is_drop_capable(fps):
         d = _drop_n(fps)
+        if mm % 10 != 0 and ss == 0 and ff < d:
+            return None
         total_min = 60 * hh + mm
         frame = ((hh * 3600 + mm * 60 + ss) * base + ff) - d * (total_min - total_min // 10)
     else:

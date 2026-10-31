@@ -178,6 +178,8 @@ def render_video(
         if rc != 0:
             raise RenderError("ffmpeg 인코딩 실패:\n" + err.strip())
         result = verify_video(str(part), meta["frames"], meta["duration"], info.has_audio, spec.geo)
+        if cancel is not None and cancel.is_set():
+            raise RenderCancelled()
         os.replace(part, final)
         result.update(meta)
         result["path"] = str(final)
@@ -206,7 +208,7 @@ def verify_video(path: str, expect_frames: int, expect_dur: float, expect_audio:
     if (int(v["width"]), int(v["height"])) != (geo.canvas_w, geo.canvas_h):
         problems.append(f"해상도 불일치 {v['width']}x{v['height']}")
     nb = int(v.get("nb_read_packets", 0) or 0)
-    if abs(nb - expect_frames) > 1:
+    if nb != expect_frames:
         problems.append(f"프레임 수 불일치 {nb} / 기대 {expect_frames}")
     if expect_audio and not a:
         problems.append("오디오 스트림 누락")

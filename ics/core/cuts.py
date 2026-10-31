@@ -98,12 +98,13 @@ def unmerge(cuts: list[Cut], cut_id: int) -> list[Cut]:
     c = cuts[idx]
     restored = []
     for k, p in enumerate(c.parts):
-        s, e = p.start, p.end
+        s, e = max(p.start, c.start), min(p.end, c.end)
         if k == 0:
             s = c.start  # 병합 컷의 바깥 경계 보정은 유지
         if k == len(c.parts) - 1:
             e = c.end
-        restored.append(Cut(p.id, s, e, p.name, [Part(p.id, p.start, p.end, p.name, p.meta)], manual=c.manual))
+        if e > s:
+            restored.append(Cut(p.id, s, e, p.name, [Part(p.id, s, e, p.name, copy.deepcopy(p.meta))], manual=c.manual))
     return cuts[:idx] + restored + cuts[idx + 1 :]
 
 
