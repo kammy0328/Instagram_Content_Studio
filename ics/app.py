@@ -156,5 +156,10 @@ class App:
         QTimer.singleShot(0, self.show_projects)
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    args = list(sys.argv[1:] if argv is None else argv)
+    if args and args[0] == "--selftest":  # 배포본 점검: 창 없이 결과 파일만 쓰고 종료
+        from .selftest import run_selftest
+
+        return run_selftest(args[1] if len(args) > 1 else None)
     return App().run()

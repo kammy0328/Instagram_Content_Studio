@@ -22,7 +22,13 @@ WizardStyle=modern
 UninstallDisplayIcon={app}\{#MyAppExe}
 
 [Languages]
+; Korean.isl 은 기본 설치에 없을 수 있다. 설치 폴더(compiler:) 또는 이 스크립트 옆에 있을 때만 한국어를 켠다.
+#if FileExists(CompilerPath + "Languages\Korean.isl")
 Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"
+#elif FileExists(SourcePath + "Korean.isl")
+Name: "korean"; MessagesFile: "Korean.isl"
+#endif
+Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "바탕 화면 아이콘 만들기"; Flags: unchecked
