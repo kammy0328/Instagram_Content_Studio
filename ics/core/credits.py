@@ -10,7 +10,7 @@ from typing import Callable
 
 HANDLE_RE = re.compile(r"^[A-Za-z0-9._]{1,30}$")
 AT_RE = re.compile(r"@([^\s,;()\[\]&|<>/]+)")
-URL_RE = re.compile(r"(?:https?://)?(?:www\.)?instagram\.com/([A-Za-z0-9._]+)/?(?:\?[^\s)]*)?", re.I)
+URL_RE = re.compile(r"(?<![\w.-])(?:https?://)?(?:www\.)?instagram\.com/([A-Za-z0-9._]+)/?(?:\?[^\s)]*)?", re.I)
 RESERVED_IG_PATHS = {"p", "reel", "reels", "stories", "explore", "accounts", "tv", "direct", "about"}
 
 # 역할 어휘(방향 판정용). 사전에 없는 역할도 허용되지만, 약한 구분자(-, /)에서는 검토 대상이 된다.
@@ -420,7 +420,7 @@ def _parse_line(line: str, original: str) -> CreditRow:
         p = _parse_chunk(chunk)
         if p is not None:
             people.append(p)
-            if sep in _AMBIG_SEPS and not p.handle:
+            if sep in _AMBIG_SEPS and (not p.handle or len(people) < 2 or not people[-2].handle):
                 ambiguous = True
     if ambiguous:
         status = "review"

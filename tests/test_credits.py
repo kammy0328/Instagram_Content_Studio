@@ -135,3 +135,14 @@ def test_affiliation_parentheses_are_preserved():
     assert r.status == "review" and r.candidate_text == "Art Director | Jinsil, Bona (Mu:E)"
     assert parse("Editor | Foo (@foo_id)")[0].text == "Editor | Foo (@foo_id)"  # 핸들 괄호는 기존처럼
     assert parse("Editor | Foo (broken")[0].text == "Editor | Foo broken"  # 짝이 안 맞는 괄호만 제거
+
+
+def test_similar_domain_does_not_create_instagram_handle():
+    row = parse("Director | A https://notinstagram.com/someone")[0]
+    assert all(p.handle is None for p in row.people)
+
+
+def test_ampersand_with_only_one_handle_remains_review():
+    raw = "Production | A & B (@studio)"
+    row = parse(raw)[0]
+    assert row.status == "review" and row.text == raw
