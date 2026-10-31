@@ -140,6 +140,7 @@ class EditState:
     comments_override: list[str] | None = None
     upload_checks: dict = field(default_factory=lambda: {"story": False, "reels": False, "feed": False})
     feed_seq: int = 0
+    feed_ratio: str = "orig"  # FEED 출력 비율: 'orig'(원본 비율, 기본) | '45'(4:5)
     playhead: int = 0
     ui: dict = field(default_factory=dict)  # 줌/스크롤/탭 등 복원용 (undo 대상 아님)
 
@@ -159,6 +160,7 @@ class EditState:
             "comments_override": None if self.comments_override is None else list(self.comments_override),
             "upload_checks": dict(self.upload_checks),
             "feed_seq": self.feed_seq,
+            "feed_ratio": self.feed_ratio,
             "playhead": self.playhead,
             "ui": copy.deepcopy(self.ui),
         }
@@ -180,6 +182,10 @@ class EditState:
         s.comments_override = d.get("comments_override")
         s.upload_checks.update(d.get("upload_checks", {}))
         s.feed_seq = d.get("feed_seq", 0)
+        # 이 설정이 없던 옛 프로젝트: 이미 4:5 로 구성한 피드가 있으면 그대로 4:5 를 유지한다 (결과가 바뀌면 안 됨)
+        s.feed_ratio = d.get("feed_ratio") or ("45" if d.get("feed") else "orig")
+        if s.feed_ratio not in ("orig", "45"):
+            s.feed_ratio = "orig"
         s.playhead = d.get("playhead", 0)
         s.ui = copy.deepcopy(d.get("ui", {}))
         return s

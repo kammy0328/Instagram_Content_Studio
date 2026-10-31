@@ -91,7 +91,11 @@ class PreviewWidget(QWidget):
         iw, ih = self.image.width(), self.image.height()
         if g.mode == "fit":
             tr = QRectF(cr.x() + g.pad_x * sc, cr.y() + g.pad_y * sc, g.content_w * sc, g.content_h * sc)
-            p.drawImage(tr, self.image)
+            if g.crop_w:  # Fit 에서 확대하면 소스의 일부만 보인다
+                kx, ky = iw / self.disp[0], ih / self.disp[1]
+                p.drawImage(tr, self.image, QRectF(g.crop_x * kx, g.crop_y * ky, g.crop_w * kx, g.crop_h * ky))
+            else:
+                p.drawImage(tr, self.image)
         else:
             k = iw / self.disp[0]
             src = QRectF(g.crop_x * k, g.crop_y * (ih / self.disp[1]), g.crop_w * k, g.crop_h * (ih / self.disp[1]))
@@ -118,7 +122,9 @@ class PreviewWidget(QWidget):
             p.drawRect(QRectF(gx, gy, gw, gh))
             p.setPen(theme.C["ACCENT"])
             p.drawText(QPointF(gx + 6, gy + 16), f"프로필 그리드 {asp}")
-        info = f"{g.canvas_w}×{g.canvas_h} · {'Fit' if g.mode == 'fit' else 'Fill'}"
+        info = f"{g.canvas_w}×{g.canvas_h} · " + (
+            "원본 비율" if self.kind == "orig" else ("Fit" if g.mode == "fit" else "Fill")
+        )
         if g.upscaled:
             info += f" · 확대 {g.scale:.2f}x"
         p.setPen(theme.C["MUTED"])
@@ -147,18 +153,18 @@ class PreviewWidget(QWidget):
         dy = (e.position().y() - self._drag.y()) / sc
         L = self._drag_start_layout
         new = LayoutParams(L.mode, L.zoom, L.pos_x, L.pos_y)
-        if g.mode == "fill":
-            k = g.scale
-            rx = max(1, self.disp[0] - g.crop_w)
-            ry = max(1, self.disp[1] - g.crop_h)
-            new.pos_x = min(1, max(0, (g.crop_x - dx / k) / rx)) if self.disp[0] > g.crop_w else L.pos_x
-            new.pos_y = min(1, max(0, (g.crop_y - dy / k) / ry)) if self.disp[1] > g.crop_h else L.pos_y
-        else:
-            rx, ry = g.canvas_w - g.content_w, g.canvas_h - g.content_h
-            if rx > 0:
-                new.pos_x = min(1, max(0, (g.pad_x + dx) / rx))
-            if ry > 0:
-                new.pos_y = min(1, max(0, (g.pad_y + dy) / ry))
+        k = g.scale
+        rx = max(1, self.disp[0] - g.crop_w)
+        ry = max(1, self.disp[1] - g.crop_h)
+        # 축마다: 소스가 잘리는 축은 크롭 창을 옮기고, 여백이 남는 축(Fit)은 내용을 옮긴다
+        if self.disp[0] > g.crop_w:
+            new.pos_x = min(1, max(0, (g.crop_x - dx / k) / rx))
+        elif g.mode == "fit" and g.canvas_w > g.content_w:
+            new.pos_x = min(1, max(0, (g.pad_x + dx) / (g.canvas_w - g.content_w)))
+        if self.disp[1] > g.crop_h:
+            new.pos_y = min(1, max(0, (g.crop_y - dy / k) / ry))
+        elif g.mode == "fit" and g.canvas_h > g.content_h:
+            new.pos_y = min(1, max(0, (g.pad_y + dy) / (g.canvas_h - g.content_h)))
         self.layout = new
         self.update()
         self.layoutChanged.emit(new)

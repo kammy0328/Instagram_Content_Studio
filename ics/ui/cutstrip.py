@@ -195,14 +195,14 @@ class CutStrip(QListWidget):
         self.viewport().update()
 
     def set_playhead(self, frame: int) -> None:
-        """재생 헤드가 있는 컷을 표시하고 화면 안으로 스크롤한다."""
+        """재생 헤드가 있는 컷을 표시하고 스트립 가운데로 스크롤한다 (재생 헤드 근방 썸네일이 보이도록)."""
         i = cuts_mod.cut_index_at(self.project.state.cuts, frame)
         cid = self.project.state.cuts[i].id if i is not None else None
         if cid == self.current_id:
             return
         self.current_id = cid
         if i is not None and i < self.count():
-            self.scrollToItem(self.item(i), QAbstractItemView.ScrollHint.EnsureVisible)
+            self.scrollToItem(self.item(i), QAbstractItemView.ScrollHint.PositionAtCenter)
         self.viewport().update()
 
     # ------------------------------------------------------------ 입력

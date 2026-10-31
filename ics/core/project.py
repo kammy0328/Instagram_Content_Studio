@@ -393,6 +393,16 @@ class Project:
     def feed_ordered(self) -> list[FeedItem]:
         return sorted(self.state.feed, key=lambda f: f.sort_key())
 
+    def feed_kind(self) -> str:
+        """compute_geometry 에 넘기는 FEED 출력 종류: 'orig'(원본 비율) | '45'."""
+        return "45" if self.state.feed_ratio == "45" else "orig"
+
+    def set_feed_ratio(self, ratio: str) -> None:
+        if ratio not in ("orig", "45"):
+            raise ValueError(ratio)
+        with self.edit("FEED 출력 비율", ("feed", "state")):
+            self.state.feed_ratio = ratio
+
     def feed_included(self) -> list[FeedItem]:
         return [f for f in self.feed_ordered() if f.included]
 
