@@ -47,6 +47,8 @@ def video_filter(info: MediaInfo, geo: Geometry, fps_out: Fraction | None, pix_f
     parts.append("setsar=1")
     if fps_out is not None:
         parts.append(f"fps=fps={fps_out.numerator}/{fps_out.denominator}:round=near")
+    # 필터 프레임의 태그도 출력 규격으로 고정한다 (인코더 옵션만으로는 누락될 수 있음).
+    parts.append("setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=limited")
     return ",".join(parts)
 
 
