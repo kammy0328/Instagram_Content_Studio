@@ -23,7 +23,7 @@ PUBLIC_BASE = "https://REPLACE.workers.dev"
 MISSED_GRACE_MIN = "10"
 # 게시 완료 후 임시 영상을 지우기까지의 유예(분). 실패/취소 건은 7일 보존.
 CLEANUP_DELAY_MIN = "60"
-GRAPH_HOST = "https://graph.instagram.com"
+GRAPH_HOST = "https://graph.facebook.com"
 
 # 비밀값은 wrangler secret put 으로만 넣는다 (파일/저장소에 쓰지 않는다):
 #   RELAY_API_KEY      앱 <-> 중계 인증 키 (긴 무작위 문자열)
