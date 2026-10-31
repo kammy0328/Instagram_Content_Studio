@@ -102,6 +102,15 @@ def make_video(
         vf.append("setparams=colorspace=unknown:color_primaries=unknown:color_trc=unknown:range=unknown")
     if vfr_drop:
         vf.insert(0, "select='not(eq(mod(n\\,5)\\,3))'")
+    # 필터가 전달하는 프레임 태그도 명시한다. 최신 FFmpeg는 이 값을 인코더 옵션보다 우선한다.
+    color = {"colorspace": "bt709", "color_primaries": "bt709", "color_trc": "bt709"}
+    for option, value in zip((extra or [])[::2], (extra or [])[1::2]):
+        key = option.removeprefix("-")
+        if key in color:
+            color[key] = value
+    if not tags:
+        color = {key: "unknown" for key in color}
+    vf.append("setparams=" + ":".join(f"{key}={value}" for key, value in color.items()))
     cmd = [
         ffbin.ffmpeg(),
         "-y",
