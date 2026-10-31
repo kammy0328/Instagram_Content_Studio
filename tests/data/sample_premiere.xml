@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE xmeml>
+<xmeml version="4">
+  <sequence id="seq-1">
+    <name>MV_FINAL</name>
+    <duration>240</duration>
+    <rate><timebase>24</timebase><ntsc>TRUE</ntsc></rate>
+    <timecode><rate><timebase>24</timebase><ntsc>TRUE</ntsc></rate><string>01:00:00:00</string><frame>86400</frame></timecode>
+    <media>
+      <video>
+        <track>
+          <clipitem id="c1"><name>A001</name><enabled>TRUE</enabled><start>0</start><end>50</end><in>100</in><out>150</out></clipitem>
+          <clipitem id="c2"><name>A002</name><enabled>TRUE</enabled><start>50</start><end>120</end><in>0</in><out>70</out></clipitem>
+          <clipitem id="c3"><name>A003</name><enabled>TRUE</enabled><start>120</start><end>200</end><in>10</in><out>90</out></clipitem>
+          <clipitem id="c4"><name>A004</name><enabled>TRUE</enabled><start>200</start><end>240</end><in>0</in><out>40</out></clipitem>
+        </track>
+        <track>
+          <clipitem id="d1"><name>GFX</name><enabled>TRUE</enabled><start>10</start><end>30</end><in>0</in><out>20</out></clipitem>
+        </track>
+      </video>
+    </media>
+  </sequence>
+</xmeml>

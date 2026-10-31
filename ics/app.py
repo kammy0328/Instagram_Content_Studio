@@ -1,0 +1,160 @@
+"""앱 진입점: 프로젝트 목록 -> (분석/재연결) -> 편집 창."""
+
+from __future__ import annotations
+
+import os
+import sys
+import traceback
+
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox, QProgressDialog
+
+from . import APP_NAME, paths
+from .core import ffbin
+from .core.frameindex import build_frame_index
+from .core.iddict import IdDictionary
+from .core.media import analyze
+from .core.project import Project
+from .core.store import Library, ProjectRecord
+from .ui import theme
+from .ui.dialogs import MediaReportDialog, NewProjectDialog, ProjectListDialog
+from .ui.main_window import EditorWindow
+from .ui.settings import Settings
+
+
+class App:
+    def __init__(self, argv=None):
+        QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
+        self.qt = QApplication(argv or sys.argv)
+        self.qt.setApplicationName(APP_NAME)
+        self.qt.setStyleSheet(theme.STYLE)
+        self.settings = Settings()
+        self.library = Library()
+        self.iddict = IdDictionary()
+        self.window: EditorWindow | None = None
+        sys.excepthook = self._excepthook
+
+    def _excepthook(self, et, ev, tb):
+        text = "".join(traceback.format_exception(et, ev, tb))
+        try:
+            (paths.logs_dir() / "crash.log").open("a", encoding="utf-8").write(text + "\n")
+        except OSError:
+            pass
+        QMessageBox.critical(
+            None,
+            "예기치 못한 오류",
+            f"오류가 발생했습니다. 편집 내용은 자동저장되어 있습니다.\n\n{ev}\n\n(진단 로그: {paths.logs_dir()})",
+        )
+
+    # -------------------------------------------------------------- 흐름
+    def run(self) -> int:
+        try:
+            ffbin.ffmpeg(), ffbin.ffprobe()
+        except ffbin.FFmpegNotFound as e:
+            QMessageBox.critical(None, "FFmpeg 없음", str(e))
+            return 2
+        QTimer.singleShot(0, self.show_projects)
+        return self.qt.exec()
+
+    def show_projects(self) -> None:
+        if self.window is not None:
+            return
+        dlg = ProjectListDialog(self.library)
+        if not dlg.exec():
+            self.qt.quit()
+            return
+        if dlg.new_requested:
+            self.new_project()
+        elif dlg.chosen:
+            self.open_record(dlg.chosen)
+        else:
+            self.qt.quit()
+
+    def new_project(self) -> None:
+        dlg = NewProjectDialog(None, self.settings.get("last_output", ""))
+        if not dlg.exec():
+            QTimer.singleShot(0, self.show_projects)
+            return
+        v = dlg.values()
+        self.settings.set("last_output", v["output_dir"])
+        rec = self.library.create(v["name"], v["artist"], v["title"], v["master_path"], v["output_dir"])
+        if dlg.info and (dlg.info.warnings or dlg.info.color_assumed):
+            MediaReportDialog(dlg.info).exec()
+        self.open_record(rec)
+
+    def open_record(self, rec: ProjectRecord) -> None:
+        # 원본 연결 확인 / 재연결
+        while not os.path.isfile(rec.master_path):
+            m = QMessageBox.question(
+                self.window,
+                "마스터링 파일을 찾을 수 없음",
+                f"원본 파일이 이동되었거나 연결이 끊겼습니다.\n{rec.master_path}\n\n새 위치를 지정할까요?\n"
+                "(NAS/외장 디스크라면 연결 상태를 먼저 확인하세요)",
+            )
+            if m != QMessageBox.StandardButton.Yes:
+                QTimer.singleShot(0, self.show_projects)
+                return
+            p, _ = QFileDialog.getOpenFileName(
+                None, "마스터링 영상 다시 연결", "", "영상 (*.mp4 *.mov *.m4v);;모든 파일 (*)"
+            )
+            if p:
+                rec.master_path = p
+                self.library.upsert(rec)
+        prog = QProgressDialog("영상 분석 중…", None, 0, 0)
+        prog.setWindowModality(Qt.WindowModality.ApplicationModal)
+        prog.setMinimumDuration(0)
+        prog.show()
+        self.qt.processEvents()
+        try:
+            info = analyze(rec.master_path)
+            if info.errors:
+                prog.close()
+                MediaReportDialog(info).exec()
+                QTimer.singleShot(0, self.show_projects)
+                return
+            cache = paths.cache_dir(rec.id)
+            index = build_frame_index(info, cache)
+        except Exception as e:  # noqa: BLE001
+            prog.close()
+            QMessageBox.critical(None, "영상 분석 실패", f"파일을 읽을 수 없습니다.\n{e}")
+            QTimer.singleShot(0, self.show_projects)
+            return
+        prog.close()
+        project = Project(rec, self.library)
+        res = project.open()
+        project.attach_media(info, index)
+        # 원본이 바뀐 경우(크기/수정시간/길이) 경고
+        summ = None
+        if res["restored"]:
+            snap, _ = project.store.load_latest()
+            summ = (snap or {}).get("media_summary")
+        win = EditorWindow(project, self.settings, self.iddict, cache)
+        self.window = win
+        win.requestProjects.connect(self._back_to_projects)
+        win.show()
+        msgs = []
+        if res["crashed"] and res["restored"]:
+            msgs.append("이전 세션이 비정상 종료되어 마지막으로 정상 저장된 상태를 복구했습니다.")
+        if res["skipped"]:
+            msgs.append(f"손상된 저장본 {res['skipped']}개를 건너뛰고 이전 정상 저장본으로 복구했습니다.")
+        if summ and (
+            abs(summ.get("duration", 0) - info.duration) > 0.05
+            or summ.get("w") != info.width
+            or summ.get("fps") != info.fps
+        ):
+            msgs.append("마스터링 파일이 이전과 다릅니다 (길이/해상도/FPS). 컷·구간 위치를 확인하세요.")
+        for w in info.warnings:
+            msgs.append(w.message)
+        if msgs:
+            QTimer.singleShot(400, lambda: QMessageBox.information(win, "프로젝트 열기", "\n\n".join(msgs)))
+
+    def _back_to_projects(self) -> None:
+        w, self.window = self.window, None
+        if w:
+            w.close()
+            w.deleteLater()
+        QTimer.singleShot(0, self.show_projects)
+
+
+def main() -> int:
+    return App().run()

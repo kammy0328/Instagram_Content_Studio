@@ -1,0 +1,32 @@
+[project]
+name = "instagram-content-studio"
+version = "1.0.0"
+description = "마스터링 영상 1개를 인스타그램 STORY / REELS / FEED 콘텐츠로 변환하는 Windows 데스크톱 프로그램"
+requires-python = ">=3.11"
+readme = "README.md"
+
+[tool.black]
+line-length = 120
+target-version = ["py311", "py312", "py313"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = ["vendor", "build", "dist"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B"]
+ignore = [
+    "E501",  # 줄 길이는 black 이 담당한다
+    "E741",  # 짧은 변수명(l, O 등)은 수식/좌표 코드에서 의도적으로 사용
+    "B905",  # zip(strict=...) 는 요구하지 않는다
+    "B023",  # 루프 안 람다의 기본 인자 바인딩을 이미 사용하는 곳이 있음
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["ics", "tests"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = ["ignore::DeprecationWarning"]

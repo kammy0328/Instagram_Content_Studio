@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# 비밀 값 (.env.example 만 커밋한다)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# 빌드 산출물
+build/
+dist/
+installer/Output/
+*.spec.bak
+
+# FFmpeg 실행 파일은 용량/라이선스 때문에 커밋하지 않는다 (vendor/ffmpeg/README.txt 참고)
+vendor/ffmpeg/*.exe
+vendor/ffmpeg/ffmpeg
+vendor/ffmpeg/ffprobe
+
+# 앱 데이터, 캐시, 렌더 결과물
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.part
+proxy_*.mkv
+proxy_*.wav
+frameindex_*.json
+ics_out/
+ics_media/
+
+# 에디터/OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

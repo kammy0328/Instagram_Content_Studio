@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<fcpxml version="1.10">
+  <resources>
+    <format id="r1" frameDuration="1001/24000s" width="1920" height="1080"/>
+  </resources>
+  <library><event name="e"><project name="P">
+    <sequence format="r1" duration="240240/24000s" tcStart="3600s">
+      <spine>
+        <asset-clip name="S1" offset="3600s" duration="50050/24000s" start="0s"/>
+        <gap name="Gap" offset="3602002/1000s" duration="1001/24000s"/>
+        <asset-clip name="S2" offset="3602.002s" duration="70070/24000s" start="0s"/>
+      </spine>
+    </sequence>
+  </project></event></library>
+</fcpxml>
