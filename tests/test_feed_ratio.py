@@ -70,6 +70,7 @@ def _state_with_feed(**extra):
     st = EditState()
     d = st.to_dict()
     d.pop("feed_ratio", None)
+    d.pop("cover_ratio", None)
     d.update(extra)
     return d
 
@@ -118,3 +119,25 @@ def test_fit_zoom_video_renders_exact_frames_and_fills_the_canvas(prores_2398, o
     # 가로가 넘쳐 잘리므로 원본 좌우 흰 테두리는 보이지 않고, 위아래에는 여백이 남는다
     assert fr[fr.shape[0] // 2, 1:3].mean() < 200
     assert geo.crop_w < info.display_w
+
+
+# ------------------------------------------------------------------ REELS 커버 비율
+def test_cover_ratio_defaults_to_original_for_new_projects():
+    assert EditState().cover_ratio == "orig"
+    assert EditState.from_dict(_state_with_feed()).cover_ratio == "orig"
+
+
+def test_existing_project_with_a_cover_keeps_916_so_the_output_does_not_change():
+    st = EditState.from_dict(_state_with_feed(cover={"frame": 12}))
+    assert st.cover.frame == 12 and st.cover_ratio == "916"
+
+
+@pytest.mark.parametrize("bad", ["", None, "45", 3])
+def test_unknown_cover_ratio_falls_back_to_original(bad):
+    assert EditState.from_dict(_state_with_feed(cover_ratio=bad)).cover_ratio == "orig"
+
+
+def test_cover_ratio_round_trips():
+    st = EditState()
+    st.cover_ratio = "916"
+    assert EditState.from_dict(st.to_dict()).cover_ratio == "916"

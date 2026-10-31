@@ -682,3 +682,24 @@ def test_planner_uses_original_aspect_for_feed_and_4x5_when_chosen(qapp, win):
     p.set_feed_ratio("45")
     j = [j for j in plan_render(p).jobs if j.kind == "feed_still"][0]
     assert j.params["geo"]["canvas_w"] * 5 == j.params["geo"]["canvas_h"] * 4
+
+
+def test_reels_cover_ratio_option_defaults_to_original_and_drives_the_plan(qapp, win):
+    from ics.render.planner import plan_render
+
+    p, rp = win.project, win.reels_panel
+    p.set_range("reels", 10, 60)
+    p.set_cover_frame(30)
+    pump(qapp, 100)
+    assert p.cover_kind() == "orig" and rp.cover_ratio_combo.currentData() == "orig"
+    job = [j for j in plan_render(p).jobs if j.kind == "reels_cover"][0]
+    g = job.params["geo"]
+    assert abs(g["canvas_w"] / g["canvas_h"] - 960 / 540) < 0.02
+    rp.cover_ratio_combo.setCurrentIndex(1)
+    pump(qapp, 50)
+    assert p.state.cover_ratio == "916"
+    g = [j for j in plan_render(p).jobs if j.kind == "reels_cover"][0].params["geo"]
+    assert g["canvas_w"] * 16 == g["canvas_h"] * 9
+    win.do_undo()
+    pump(qapp, 50)
+    assert p.cover_kind() == "orig" and rp.cover_ratio_combo.currentData() == "orig"

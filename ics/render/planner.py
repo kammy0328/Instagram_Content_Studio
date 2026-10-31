@@ -136,7 +136,7 @@ def plan_render(project: Project, include_original_stills: bool = True) -> Rende
             if geo.tier_note:
                 plan.issues.append(PlanIssue("info", f"REELS: {geo.tier_note}"))
     if st.cover.frame is not None:
-        geo = compute_geometry(info.display_w, info.display_h, "916", st.cover.layout)
+        geo = compute_geometry(info.display_w, info.display_h, project.cover_kind(), st.cover.layout)
         add(
             "reels_cover",
             "REELS 커버",

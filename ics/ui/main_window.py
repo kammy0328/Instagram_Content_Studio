@@ -392,6 +392,7 @@ class EditorWindow(QMainWindow):
         self.reels_panel.coverGoto.connect(self._goto_cover)
         self.reels_panel.coverChanged.connect(lambda a, o: self.project.set_cover_grid(a, o))
         self.reels_panel.coverPreview.connect(self._cover_preview)
+        self.reels_panel.coverRatioChanged.connect(self._set_cover_ratio)
         self.reels_panel.coverLayoutLive.connect(lambda lp: self._layout_live("cover", lp))
         self.reels_panel.coverLayoutCommit.connect(lambda _lp: self._layout_commit())
         fp = self.feed_panel
@@ -802,6 +803,10 @@ class EditorWindow(QMainWindow):
         if it.kind == "video":
             self.playback.play(it.start, 1.0, (it.start, it.end))
 
+    def _set_cover_ratio(self, ratio: str) -> None:
+        self.project.set_cover_ratio(ratio)
+        self.toast("REELS 커버 비율: " + ("원본 비율" if ratio == "orig" else "9:16"))
+
     def _set_feed_ratio(self, ratio: str) -> None:
         self.project.set_feed_ratio(ratio)
         self.toast("FEED 출력 비율: " + ("원본 비율" if ratio == "orig" else "4:5"))
@@ -1059,7 +1064,7 @@ class EditorWindow(QMainWindow):
         st = self.project.state
         view_out = self.transport.view_btn.isChecked()
         if self.cover_mode:
-            kind, lp = "916", st.cover.layout
+            kind, lp = self.project.cover_kind(), st.cover.layout
             self.preview.cover_grid = (st.cover.grid_aspect, st.cover.grid_offset)
             self.preview.label = "릴스 커버 미리보기"
         else:

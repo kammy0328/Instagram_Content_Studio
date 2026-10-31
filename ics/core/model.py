@@ -141,6 +141,7 @@ class EditState:
     upload_checks: dict = field(default_factory=lambda: {"story": False, "reels": False, "feed": False})
     feed_seq: int = 0
     feed_ratio: str = "orig"  # FEED 출력 비율: 'orig'(원본 비율, 기본) | '45'(4:5)
+    cover_ratio: str = "orig"  # REELS 커버 출력 비율: 'orig'(원본 비율, 기본) | '916'
     playhead: int = 0
     ui: dict = field(default_factory=dict)  # 줌/스크롤/탭 등 복원용 (undo 대상 아님)
 
@@ -161,6 +162,7 @@ class EditState:
             "upload_checks": dict(self.upload_checks),
             "feed_seq": self.feed_seq,
             "feed_ratio": self.feed_ratio,
+            "cover_ratio": self.cover_ratio,
             "playhead": self.playhead,
             "ui": copy.deepcopy(self.ui),
         }
@@ -186,6 +188,10 @@ class EditState:
         s.feed_ratio = d.get("feed_ratio") or ("45" if d.get("feed") else "orig")
         if s.feed_ratio not in ("orig", "45"):
             s.feed_ratio = "orig"
+        # 옛 프로젝트: 이미 9:16 으로 지정한 커버가 있으면 그대로 9:16 유지 (결과가 바뀌면 안 됨)
+        s.cover_ratio = d.get("cover_ratio") or ("916" if (d.get("cover") or {}).get("frame") is not None else "orig")
+        if s.cover_ratio not in ("orig", "916"):
+            s.cover_ratio = "orig"
         s.playhead = d.get("playhead", 0)
         s.ui = copy.deepcopy(d.get("ui", {}))
         return s

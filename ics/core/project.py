@@ -397,6 +397,16 @@ class Project:
         """compute_geometry 에 넘기는 FEED 출력 종류: 'orig'(원본 비율) | '45'."""
         return "45" if self.state.feed_ratio == "45" else "orig"
 
+    def cover_kind(self) -> str:
+        """REELS 커버의 compute_geometry 종류: 'orig'(원본 비율) | '916'."""
+        return "916" if self.state.cover_ratio == "916" else "orig"
+
+    def set_cover_ratio(self, ratio: str) -> None:
+        if ratio not in ("orig", "916"):
+            raise ValueError(ratio)
+        with self.edit("REELS 커버 비율", ("cover", "state")):
+            self.state.cover_ratio = ratio
+
     def set_feed_ratio(self, ratio: str) -> None:
         if ratio not in ("orig", "45"):
             raise ValueError(ratio)

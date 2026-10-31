@@ -259,6 +259,7 @@ class SelectionPanel(QWidget):
     coverGoto = Signal()
     coverChanged = Signal(str, float)
     coverPreview = Signal(bool)
+    coverRatioChanged = Signal(str)  # 'orig' | '916'
     coverLayoutLive = Signal(object)
     coverLayoutCommit = Signal(object)
 
@@ -352,6 +353,16 @@ class SelectionPanel(QWidget):
         self.cover_lbl.setObjectName("muted")
         self.cover_lbl.setWordWrap(True)
         gl.addWidget(self.cover_lbl)
+        self.cover_ratio_combo = QComboBox()
+        self.cover_ratio_combo.addItem("원본 비율 (기본)", "orig")
+        self.cover_ratio_combo.addItem("9:16 (1080×1920)", "916")
+        self.cover_ratio_combo.currentIndexChanged.connect(
+            lambda _i: self.coverRatioChanged.emit(self.cover_ratio_combo.currentData())
+        )
+        rr = QHBoxLayout()
+        rr.addWidget(QLabel("커버 출력 비율"))
+        rr.addWidget(self.cover_ratio_combo, 1)
+        gl.addLayout(rr)
         self.cover_prev = QCheckBox("커버 미리보기 + 프로필 그리드 크롭")
         self.cover_prev.toggled.connect(self.coverPreview.emit)
         gl.addWidget(self.cover_prev)
@@ -409,6 +420,10 @@ class SelectionPanel(QWidget):
             self.grid_off.setValue(int(c.grid_offset * 100))
             self.grid_off.blockSignals(False)
             self.cover_layout.set_value(c.layout)
+            self.cover_ratio_combo.blockSignals(True)
+            self.cover_ratio_combo.setCurrentIndex(0 if p.cover_kind() == "orig" else 1)
+            self.cover_ratio_combo.blockSignals(False)
+            self.cover_layout.set_original_ratio(p.cover_kind() == "orig")
 
 
 class FeedPanel(QWidget):
