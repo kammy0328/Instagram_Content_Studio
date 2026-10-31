@@ -58,7 +58,7 @@ class RelayClient:
         self.base, self._key, self._http, self.timeout = base_url.rstrip("/"), api_key, http or _urllib_http, timeout
 
     def _call(self, method: str, path: str, body: dict | bytes | None = None, ctype: str | None = None) -> dict:
-        headers = {"Authorization": f"Bearer {self._key}"}
+        headers = {"Authorization": f"Bearer {self._key}", "User-Agent": "InstagramContentStudio/1.1 (relay-client)"}
         data: bytes | None
         if isinstance(body, dict):
             data, headers["Content-Type"] = json.dumps(body).encode(), "application/json"
