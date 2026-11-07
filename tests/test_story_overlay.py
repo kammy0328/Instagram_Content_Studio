@@ -11,6 +11,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
 
+from PySide6.QtGui import QColor  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from ics.core.layout import LayoutParams, compute_geometry  # noqa: E402
@@ -136,11 +137,13 @@ def test_story_render_command_composites_png_and_keeps_audio_and_tags(qapp, pror
     assert "-vf" not in cmd
     r = subprocess.run(cmd, capture_output=True, text=True)
     assert r.returncode == 0, r.stderr[-500:]
-    from PIL import Image
+    from PySide6.QtGui import QImage
+
+    from ics.core import ffbin
 
     subprocess.run(
         [
-            "ffmpeg",
+            ffbin.ffmpeg(),
             "-loglevel",
             "error",
             "-y",
@@ -152,13 +155,12 @@ def test_story_render_command_composites_png_and_keeps_audio_and_tags(qapp, pror
         ],
         check=True,
     )
-    f = Image.open(tmp_path / "f.png").convert("RGB")
-    assert f.size == (geo.canvas_w, geo.canvas_h)
+    f = QImage(str(tmp_path / "f.png"))
+    assert (f.width(), f.height()) == (geo.canvas_w, geo.canvas_h)
     top, _ = overlay.margins(geo)
     if top >= 90:
-        assert any(
-            sum(f.getpixel((x, int(top / 2)))) > 300 for x in range(0, f.size[0], 3)
-        )  # 위 여백에 로고(밝은 픽셀)
+        y = int(top / 2)
+        assert any(QColor(f.pixel(x, y)).lightness() > 100 for x in range(0, f.width(), 3))  # 위 여백에 로고(밝은 픽셀)
 
 
 def test_new_project_defaults_to_60s_for_story_and_reels_but_not_existing(qapp, prores_2398, tmp_path, monkeypatch):
