@@ -90,8 +90,9 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
           PYTHONUTF8: "1"
+          ICS_FAST_EXIT: "1"
         run: |
-          python -m pytest tests -q -p no:cacheprovider --junitxml=pytest-windows.xml 2>&1 | Tee-Object -FilePath pytest-windows.log
+          python -X faulthandler -m pytest tests -q -p no:cacheprovider --junitxml=pytest-windows.xml 2>&1 | Tee-Object -FilePath pytest-windows.log
           exit $LASTEXITCODE
 
       - name: 색 태그 진단 (테스트 실패 시에만, FFmpeg 버전별 차이 확인)
