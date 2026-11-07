@@ -56,7 +56,8 @@ def _bg_chain(info: MediaInfo, geo: Geometry, scale_opts: str, bg_dim: int, pix_
     작은 크기에서 블러하므로 빠르고(렌즈 블러처럼 부드럽게 퍼짐), 밝기는 limited range 기준으로 낮춘다."""
     bw, bh = max(16, (geo.canvas_w // 4) // 2 * 2), max(16, (geo.canvas_h // 4) // 2 * 2)
     k = max(0.0, min(0.9, bg_dim / 100.0))
-    # 밴딩 방지: 블러/확대/밝기 조절을 10비트로 하고, 8비트로 내릴 때 오차 확산 디더 + 아주 약한 고정 그레인을 쓴다.
+    # 밴딩 방지: 블러/확대/밝기 조절을 10비트로 하고, 8비트로 내릴 때 오차 확산 디더를 쓴다.
+    # (noise 필터는 10비트 색 성분을 망가뜨려 배경이 초록색으로 쏠리므로 쓰지 않는다.)
     return ",".join(
         [
             "format=yuv420p10le",
@@ -65,7 +66,6 @@ def _bg_chain(info: MediaInfo, geo: Geometry, scale_opts: str, bg_dim: int, pix_
             "gblur=sigma=5:steps=2",
             f"scale={geo.canvas_w}:{geo.canvas_h}:flags=bicubic",
             f"lutyuv=y='64+(val-64)*{1 - k:.3f}':u='512+(val-512)*0.9':v='512+(val-512)*0.9'",
-            "noise=alls=3:allf=u:all_seed=7",
             "scale=sws_dither=ed",
             f"format={pix_fmt}",
             "setsar=1",
