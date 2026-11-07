@@ -245,3 +245,67 @@ def test_story_blur_background_fills_margins_and_dims(qapp, prores_2398, tmp_pat
     assert margin_light(dim) < margin_light(bright) * 0.7  # 어둡게 하면 더 어두움
     mid = geo.pad_y + geo.content_h // 2  # 영상 부분은 배경과 관계없이 그대로
     assert abs(QColor(plain.pixel(540, mid)).lightness() - QColor(dim.pixel(540, mid)).lightness()) < 6
+
+
+@pytest.mark.parametrize("kind", ["prores", "h264"])
+def test_blur_background_keeps_the_source_hue(qapp, tmp_path, kind):
+    """배경이 초록색으로 쏠리던 문제 방지: 배경의 색상(R:G:B 비율)이 영상 색을 따라가야 한다."""
+    from PySide6.QtGui import QImage
+
+    from ics.core import ffbin, frameindex, media
+    from ics.render import engine
+    from tests import helpers
+
+    kw = {} if kind == "prores" else {"vcodec": "h264", "pix_fmt": "yuv420p"}
+    src = helpers.make_video(tmp_path / f"s.{'mov' if kind == 'prores' else 'mp4'}", frames=12, **kw)
+    info = media.analyze(str(src))
+    idx = frameindex.build_frame_index(info, tmp_path)
+    geo = compute_geometry(info.display_w, info.display_h, "916", LayoutParams())
+
+    def mean_rgb(dim):
+        cmd, _ = engine.build_video_cmd(
+            info, idx, engine.VideoSpec(0, 4, geo, bg_dim=dim), str(tmp_path / f"o{dim}.mp4")
+        )
+        assert subprocess.run(cmd, capture_output=True).returncode == 0
+        png = tmp_path / f"o{dim}.png"
+        subprocess.run(
+            [
+                ffbin.ffmpeg(),
+                "-loglevel",
+                "error",
+                "-y",
+                "-i",
+                str(tmp_path / f"o{dim}.mp4"),
+                "-frames:v",
+                "1",
+                str(png),
+            ],
+            check=True,
+        )
+        im = QImage(str(png))
+        ys = range(20, geo.pad_y - 20, 6)
+        px = [QColor(im.pixel(x, y)) for y in ys for x in range(0, im.width(), 12)]
+        return [
+            sum(c.red() for c in px) / len(px),
+            sum(c.green() for c in px) / len(px),
+            sum(c.blue() for c in px) / len(px),
+        ]
+
+    # 기준: 8비트로 단순하게 만든 같은 모양의 배경(0%). 엔진의 배경은 색상 비율이 이것과 같아야 한다 (초록 쏠림 없음).
+    ref_png = tmp_path / "ref.png"
+    subprocess.run(
+        [
+            ffbin.ffmpeg(), "-loglevel", "error", "-y", "-i", str(src), "-frames:v", "1", "-vf",
+            f"scale={geo.canvas_w // 4}:{geo.canvas_h // 4}:force_original_aspect_ratio=increase,"
+            f"crop={geo.canvas_w // 4}:{geo.canvas_h // 4},gblur=sigma=5,scale={geo.canvas_w}:{geo.canvas_h}",
+            str(ref_png),
+        ],
+        check=True,
+    )  # fmt: skip
+    ref = QImage(str(ref_png))
+    ys = range(20, geo.pad_y - 20, 6)
+    px = [QColor(ref.pixel(x, y)) for y in ys for x in range(0, ref.width(), 12)]
+    a = [sum(c.red() for c in px) / len(px), sum(c.green() for c in px) / len(px), sum(c.blue() for c in px) / len(px)]
+    b = mean_rgb(0)
+    ra, rb = [c / max(1.0, sum(a)) for c in a], [c / max(1.0, sum(b)) for c in b]
+    assert all(abs(x - y) < 0.06 for x, y in zip(ra, rb)), (ra, rb)
