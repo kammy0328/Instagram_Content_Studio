@@ -18,7 +18,7 @@ class PreviewWidget(QWidget):
 
     def __init__(self):
         super().__init__()
-        self.setMinimumSize(320, 200)
+        self.setMinimumSize(320, 160)
         self.image: QImage | None = None
         self.frame_no = 0
         self.mode = "source"  # 'source' | 'output'

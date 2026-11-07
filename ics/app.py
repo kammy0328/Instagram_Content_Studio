@@ -20,6 +20,7 @@ from .ui import theme
 from .ui.dialogs import MediaReportDialog, NewProjectDialog, ProjectListDialog
 from .ui.main_window import EditorWindow
 from .ui.settings import Settings
+from .ui.widgets import studio_icon
 
 
 class App:
@@ -31,7 +32,8 @@ class App:
         self.qt.setQuitOnLastWindowClosed(False)
         self._switching = False
         self.qt.setApplicationName(APP_NAME)
-        self.qt.setStyleSheet(theme.STYLE)
+        theme.apply(self.qt)
+        self.qt.setWindowIcon(studio_icon())
         self.settings = Settings()
         self.library = Library()
         self.iddict = IdDictionary()

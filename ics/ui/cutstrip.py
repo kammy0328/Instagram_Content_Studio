@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 from ..core import cuts as cuts_mod
 from . import theme
 
-TILE_W, TILE_H = 140, 112  # 모든 컷 타일의 고정 크기 (컷 길이와 무관)
+TILE_W, TILE_H = 140, 104  # 모든 컷 타일의 고정 크기 (컷 길이와 무관)
 PAD = 4
 STRIP_H = TILE_H + 22  # 가로 스크롤바 포함 높이
 DATA = Qt.ItemDataRole.UserRole
@@ -51,8 +51,13 @@ class _TileDelegate(QStyledItemDelegate):
         selected = self.strip.isSelected(index)
         r = QRectF(option.rect).adjusted(PAD, PAD, -PAD, -PAD)
         p.save()
-        p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
-        p.fillRect(r, QColor(76, 157, 255, 70) if selected else QColor("#1a1d24"))
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        fill = QColor(theme.ACCENT if selected else theme.PANEL2)
+        if selected:
+            fill.setAlpha(50)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(fill)
+        p.drawRoundedRect(r, 5, 5)
         # 썸네일 (가로세로 비율 유지)
         th = QRectF(r.x() + 2, r.y() + 2, r.width() - 4, r.height() - 4 - 22)
         p.fillRect(th, QColor("#101216"))
@@ -85,7 +90,7 @@ class _TileDelegate(QStyledItemDelegate):
         # 테두리 / 현재 위치 표시
         p.setPen(QPen(theme.C["ACCENT"] if selected else theme.C["BORDER"], 2 if selected else 1))
         p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawRect(r.adjusted(0, 0, -1, -1))
+        p.drawRoundedRect(r.adjusted(0, 0, -1, -1), 5, 5)
         if d["id"] == self.strip.current_id:
             p.fillRect(QRectF(r.x(), r.bottom() - 3, r.width(), 3), theme.C["ACCENT2"])
         p.restore()

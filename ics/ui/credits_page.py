@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFormLayout,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
@@ -81,7 +82,8 @@ class CreditsPage(QWidget):
         )
         self.raw.textChanged.connect(lambda: None if self._block else self._raw_timer.start(600))
         v.addWidget(self.raw, 1)
-        self.auto_unique = QCheckBox("ID 사전의 유일 일치는 자동 적용 (동명이인은 자동 확정 안 함)")
+        self.auto_unique = QCheckBox("사전의 유일한 ID 자동 적용")
+        self.auto_unique.setToolTip("동명이인은 자동으로 확정하지 않고 후보로 남깁니다.")
         self.auto_unique.setChecked(True)
         v.addWidget(self.auto_unique)
         r = QHBoxLayout()
@@ -115,16 +117,18 @@ class CreditsPage(QWidget):
         self.table.setAlternatingRowColors(True)
         self.table.itemChanged.connect(self._cell_edited)
         v.addWidget(self.table, 1)
-        r = QHBoxLayout()
-        for text, fn in (
-            ("제안 변환 수락", self.accept_selected),
-            ("원문 그대로 확정", self.keep_raw),
-            ("동명이인 후보 선택…", self.pick_candidate),
-            ("ID를 사전에 저장", self.save_to_dict),
+        r = QGridLayout()
+        for i, (text, fn) in enumerate(
+            (
+                ("제안 변환 수락", self.accept_selected),
+                ("원문 그대로 확정", self.keep_raw),
+                ("동명이인 후보 선택…", self.pick_candidate),
+                ("ID를 사전에 저장", self.save_to_dict),
+            )
         ):
             b = QPushButton(text)
             b.clicked.connect(fn)
-            r.addWidget(b)
+            r.addWidget(b, i // 2, i % 2)
         v.addLayout(r)
         return w
 

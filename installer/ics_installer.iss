@@ -1,6 +1,6 @@
 ; Inno Setup 6 스크립트 - PyInstaller 결과물(dist\InstagramContentStudio)을 설치 파일로 묶는다.
 #define MyAppName "Instagram Content Studio"
-#define MyAppVersion "1.0.6"
+#define MyAppVersion "1.1.0"
 #define MyAppExe "InstagramContentStudio.exe"
 
 [Setup]
@@ -19,6 +19,7 @@ MinVersion=10.0
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 WizardStyle=modern
+SetupIconFile=..\assets\studio.ico
 UninstallDisplayIcon={app}\{#MyAppExe}
 
 [Languages]

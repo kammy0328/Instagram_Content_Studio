@@ -44,6 +44,7 @@ from ..core.model import FEED_MAX_FINAL
 from ..core.timecode import frame_to_tc, tc_to_frame
 from ..render.planner import RenderJob, RenderPlan
 from .settings import DEFAULT_SHORTCUTS
+from .widgets import studio_icon
 
 
 def open_path(path: str) -> None:
@@ -99,12 +100,22 @@ class NewProjectDialog(QDialog):
     def __init__(self, parent=None, default_output: str = ""):
         super().__init__(parent)
         self.setWindowTitle("새 프로젝트")
+        self.setWindowIcon(studio_icon())
         self.setAcceptDrops(True)
-        self.resize(560, 330)
+        self.resize(640, 450)
         self.info: media_mod.MediaInfo | None = None
         v = QVBoxLayout(self)
+        v.setContentsMargins(28, 24, 28, 24)
+        v.setSpacing(14)
+        heading = QLabel("새 프로젝트 만들기")
+        heading.setObjectName("h1")
+        v.addWidget(heading)
+        note = QLabel("마스터링 원본과 결과물을 저장할 폴더를 선택하세요.")
+        note.setObjectName("muted")
+        v.addWidget(note)
         f = QFormLayout()
         self.name = QLineEdit()
+        self.name.setPlaceholderText("예: 아티스트_뮤직비디오")
         self.artist = QLineEdit()
         self.title = QLineEdit()
         self.master = QLineEdit()
@@ -131,6 +142,8 @@ class NewProjectDialog(QDialog):
         v.addStretch(1)
         bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         bb.button(QDialogButtonBox.StandardButton.Ok).setText("프로젝트 만들기")
+        bb.button(QDialogButtonBox.StandardButton.Ok).setObjectName("primary")
+        bb.button(QDialogButtonBox.StandardButton.Cancel).setText("취소")
         bb.accepted.connect(self._ok)
         bb.rejected.connect(self.reject)
         v.addWidget(bb)
@@ -196,20 +209,58 @@ class ProjectListDialog(QDialog):
         super().__init__(parent)
         self.library = library
         self.setWindowTitle("Instagram Content Studio - 프로젝트")
-        self.resize(900, 460)
+        self.setWindowIcon(studio_icon())
+        self.resize(1000, 660)
         self.chosen = None
         v = QVBoxLayout(self)
-        h = QLabel("프로젝트")
-        h.setObjectName("h1")
-        v.addWidget(h)
+        v.setContentsMargins(30, 28, 30, 24)
+        v.setSpacing(16)
+        brand = QHBoxLayout()
+        mark = QLabel()
+        mark.setPixmap(studio_icon().pixmap(36, 36))
+        brand.addWidget(mark)
+        name = QLabel("INSTAGRAM CONTENT STUDIO")
+        name.setObjectName("eyebrow")
+        brand.addWidget(name)
+        brand.addStretch(1)
+        v.addLayout(brand)
+        heading = QLabel("마스터링의 다음 장면을 만들어 보세요.")
+        heading.setObjectName("hero")
+        v.addWidget(heading)
+        description = QLabel("하나의 원본에서 STORY, REELS, FEED까지. 프레임 단위로 선택하고 완성하세요.")
+        description.setObjectName("muted")
+        v.addWidget(description)
+        specs = QHBoxLayout()
+        for title, detail in (
+            ("STORY", "9:16 · 최대 60초"),
+            ("REELS", "세로 영상과 커버 이미지"),
+            ("FEED", "이미지와 영상을 캐러셀로"),
+        ):
+            card = QGroupBox(title)
+            layout = QVBoxLayout(card)
+            label = QLabel(detail)
+            label.setObjectName("muted")
+            layout.addWidget(label)
+            specs.addWidget(card)
+        v.addLayout(specs)
+        recent = QLabel("최근 프로젝트")
+        recent.setObjectName("eyebrow")
+        v.addWidget(recent)
         self.table = QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(["프로젝트명", "아티스트", "영상 제목", "마지막 수정", "마스터링 파일"])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
+        self.table.verticalHeader().hide()
+        self.table.verticalHeader().setDefaultSectionSize(44)
         self.table.doubleClicked.connect(self._open)
         v.addWidget(self.table, 1)
+        self.empty = QLabel("아직 프로젝트가 없습니다.\n아래 ‘새 프로젝트’를 눌러 마스터링 영상을 불러오세요.")
+        self.empty.setObjectName("muted")
+        self.empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty.setMinimumHeight(90)
+        v.addWidget(self.empty, 1)
         r = QHBoxLayout()
         for text, fn, name in (
             ("새 프로젝트", self._new, "primary"),
@@ -232,6 +283,8 @@ class ProjectListDialog(QDialog):
 
     def refresh(self):
         self.recs = self.library.list()
+        self.empty.setVisible(not self.recs)
+        self.table.setVisible(bool(self.recs))
         self.table.setRowCount(len(self.recs))
         for i, r in enumerate(self.recs):
             ok = os.path.isfile(r.master_path)
@@ -555,9 +608,14 @@ class RenderDialog(QDialog):
     def __init__(self, plan: RenderPlan, parent=None, running=False):
         super().__init__(parent)
         self.plan = plan
-        self.setWindowTitle("렌더링")
+        self.setWindowTitle("내보내기")
         self.resize(900, 640)
         v = QVBoxLayout(self)
+        v.setContentsMargins(24, 22, 24, 22)
+        v.setSpacing(12)
+        heading = QLabel("내보내기 준비")
+        heading.setObjectName("h1")
+        v.addWidget(heading)
         n_files = len([j for j in plan.jobs])
         self.head = QLabel(
             f"<b>출력 폴더</b> {plan.root}<br>파일 {n_files}개 · 예상 최대 용량 {fmt_bytes(plan.total_est_bytes)} "

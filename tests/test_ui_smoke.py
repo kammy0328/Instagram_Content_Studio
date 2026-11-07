@@ -54,6 +54,28 @@ def pump(app, ms=200):
         time.sleep(0.005)
 
 
+def test_editor_and_credits_fit_laptop_viewport(qapp, win):
+    # Windows offscreen 플러그인은 시스템 폰트를 자동 검색하지 못할 수 있다. 실제 한글 글꼴 폭으로 검사한다.
+    from pathlib import Path
+
+    from PySide6.QtGui import QFontDatabase
+
+    font = Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts" / "malgun.ttf"
+    if font.is_file() and not QFontDatabase.families():
+        QFontDatabase.addApplicationFont(str(font))
+    win.project.update_info(name="아주 긴 프로젝트 이름 " * 12)
+    win.resize(1280, 800)
+    pump(qapp)
+    assert win.width() == 1280
+    assert win.height() == 800
+    assert win.preview.width() >= 320
+    assert win.transport.view_btn.isVisible()
+    win.set_tab("credits")
+    pump(qapp)
+    assert win.width() == 1280
+    assert win.credits.body.isVisible()
+
+
 def test_tabs_in_out_inclusive_and_undo(qapp, win):
     p = win.project
     win.goto(50)

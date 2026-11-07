@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QSlider,
+    QStyle,
     QVBoxLayout,
     QWidget,
 )
@@ -25,6 +26,7 @@ from PySide6.QtWidgets import (
 from ..core.layout import LayoutParams, compute_geometry
 from ..core.model import FEED_MAX_FINAL
 from ..core.timecode import frame_to_tc, tc_to_frame
+from .widgets import ElidedLabel, control_icon
 
 
 class TCEdit(QLineEdit):
@@ -35,6 +37,7 @@ class TCEdit(QLineEdit):
     def __init__(self, project):
         super().__init__()
         self.project = project
+        self.setObjectName("timecode")
         self.setFixedWidth(104)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setToolTip("타임코드 입력 (예: 00:01:02:12 · 1234f · 10212)")
@@ -68,13 +71,19 @@ class TransportBar(QWidget):
 
     def __init__(self, project):
         super().__init__()
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(8, 4, 8, 4)
+        self.setObjectName("transport")
+        v = QVBoxLayout(self)
+        v.setContentsMargins(12, 10, 12, 10)
+        v.setSpacing(9)
+        lay = QHBoxLayout()
+        lay.setSpacing(6)
         self.b_start = self._btn("⏮", "처음으로 (Home)", lambda: self.gotoClicked.emit("start"))
         self.b_prev = self._btn("◀|", "1프레임 뒤로 (←)", lambda: self.stepClicked.emit(-1))
         self.b_play = self._btn("▶", "재생/정지 (Space)", self.playClicked.emit)
         self.b_next = self._btn("|▶", "1프레임 앞으로 (→)", lambda: self.stepClicked.emit(1))
         self.b_end = self._btn("⏭", "끝으로 (End)", lambda: self.gotoClicked.emit("end"))
+        self.b_play.setObjectName("play")
+        self.b_play.setFixedWidth(40)
         for b in (self.b_start, self.b_prev, self.b_play, self.b_next, self.b_end):
             lay.addWidget(b)
         self.tc = TCEdit(project)
@@ -82,7 +91,7 @@ class TransportBar(QWidget):
         lay.addWidget(self.tc)
         self.frame_lbl = QLabel("f0")
         self.frame_lbl.setObjectName("muted")
-        self.frame_lbl.setMinimumWidth(90)
+        self.frame_lbl.setMinimumWidth(76)
         lay.addWidget(self.frame_lbl)
         self.rate_lbl = QLabel("")
         self.rate_lbl.setObjectName("muted")
@@ -91,12 +100,14 @@ class TransportBar(QWidget):
         self.mute_btn.setCheckable(True)
         self.mute_btn.toggled.connect(self.muteToggled.emit)
         lay.addWidget(self.mute_btn)
-        self.audio_lbl = QLabel("")
+        self.audio_lbl = ElidedLabel()
         self.audio_lbl.setObjectName("muted")
-        lay.addWidget(self.audio_lbl)
+        lay.addWidget(self.audio_lbl, 1)
         self._has_audio = True
         self.set_muted(False)
-        lay.addStretch(1)
+        v.addLayout(lay)
+        lay = QHBoxLayout()
+        lay.setSpacing(10)
         self.loop = QCheckBox("구간 반복")
         self.loop.toggled.connect(self.loopToggled.emit)
         lay.addWidget(self.loop)
@@ -108,12 +119,25 @@ class TransportBar(QWidget):
         lay.addWidget(self.view_btn)
         self.safe = QCheckBox("UI 안전영역")
         lay.addWidget(self.safe)
+        lay.addStretch(1)
+        v.addLayout(lay)
         self.project = project
 
     def _btn(self, text, tip, fn):
         b = QPushButton(text)
+        icons = {
+            "⏮": QStyle.StandardPixmap.SP_MediaSkipBackward,
+            "◀|": QStyle.StandardPixmap.SP_MediaSeekBackward,
+            "▶": QStyle.StandardPixmap.SP_MediaPlay,
+            "|▶": QStyle.StandardPixmap.SP_MediaSeekForward,
+            "⏭": QStyle.StandardPixmap.SP_MediaSkipForward,
+        }
+        b.setIcon(control_icon(self, icons[text], "#121a32" if text == "▶" else "#edf1f7"))
+        b.setText("")
+        b.setAccessibleName(tip)
         b.setToolTip(tip)
-        b.setFixedWidth(42)
+        b.setObjectName("compact")
+        b.setFixedWidth(32)
         b.clicked.connect(fn)
         return b
 
@@ -122,7 +146,9 @@ class TransportBar(QWidget):
         self.frame_lbl.setText(f"f{f} / {max(0, self.project.count - 1)}")
 
     def set_playing(self, playing: bool) -> None:
-        self.b_play.setText("⏸" if playing else "▶")
+        icon = QStyle.StandardPixmap.SP_MediaPause if playing else QStyle.StandardPixmap.SP_MediaPlay
+        self.b_play.setIcon(control_icon(self, icon, "#121a32"))
+        self.b_play.setAccessibleName("일시 정지" if playing else "재생")
 
     def set_muted(self, muted: bool) -> None:
         """버튼 표시만 맞춘다 (muteToggled 는 내보내지 않는다)."""
@@ -267,9 +293,9 @@ class SelectionPanel(QWidget):
         super().__init__()
         self.which, self.project = which, project
         v = QVBoxLayout(self)
-        v.setContentsMargins(6, 6, 6, 6)
+        v.setContentsMargins(14, 14, 14, 14)
         spec = "최대 60초 · 9:16 · 1080×1920 · MP4" if which == "story" else "최대 180초 · 9:16 · 1080×1920 · MP4"
-        t = QLabel(f"<b>{which.upper()}</b> (프로젝트당 1개)")
+        t = QLabel(f"{which.upper()} 설정")
         t.setObjectName("h1")
         v.addWidget(t)
         s = QLabel(spec)
