@@ -19,8 +19,14 @@ from ..core.layout import Geometry
 from ..core.model import StoryOverlay
 
 MIN_MARGIN_PX = 90  # 이보다 작은 여백에는 아무것도 놓지 않는다 (1080 폭 기준)
-FONT_FILES = ("Pretendard-Regular.ttf", "Pretendard-Bold.ttf")
-DEFAULT_FONT = "Pretendard"
+FONT_FILES = (
+    "Pretendard-Regular.ttf",
+    "Pretendard-Bold.ttf",
+    "BlackHanSans-Regular.ttf",
+    "Montserrat-Bold.ttf",
+    "PlayfairDisplay-Bold.ttf",
+)
+DEFAULT_FONT = "Black Han Sans"
 _lock = threading.Lock()
 _fonts_ready = False
 
@@ -74,13 +80,14 @@ def _logo_size(path: str) -> tuple[int, int] | None:
     return None if img.isNull() else (img.width(), img.height())
 
 
-def _fit_text(text: str, family: str, bold: bool, px: float, box_w: float, box_h: float):
+def _fit_text(text: str, family: str, bold: bool, px: float, box_w: float, box_h: float, spacing: int = 0):
     """상자에 들어가도록 글자 크기를 줄여 가며(최소 50%) 줄바꿈 후 크기를 정한다. 안 들어가면 None."""
     size = px
     while size >= px * 0.5:
         font = QFont(family)
         font.setPixelSize(max(6, int(round(size))))
         font.setBold(bold)
+        font.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 100 + spacing)
         fm = QFontMetricsF(font)
         r = fm.boundingRect(
             QRectF(0, 0, box_w, 10_000), int(Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap), text
@@ -133,7 +140,7 @@ def layout(ov: StoryOverlay, geo: Geometry, title: str) -> OverlayResult:
                     w, hh = w * bh / hh, bh
                 items.append(Placed("logo", QRectF((geo.canvas_w - w) / 2, py + (ph - hh) / 2, w, hh)))
             else:
-                s = _fit_text(text, ov.text_font, ov.text_bold, ov.text_size * scale, bw, bh)
+                s = _fit_text(text, ov.text_font, ov.text_bold, ov.text_size * scale, bw, bh, ov.text_spacing)
                 if s is None:
                     warns.append("제목: 글자가 여백에 들어가지 않아 표시하지 않습니다 (글자 크기를 줄이세요).")
                     continue
@@ -162,6 +169,7 @@ def render(ov: StoryOverlay, geo: Geometry, title: str) -> tuple[QImage | None, 
             font = QFont(ov.text_font)
             font.setPixelSize(max(6, int(round(it.font_px))))
             font.setBold(ov.text_bold)
+            font.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 100 + ov.text_spacing)
             p.setFont(font)
             p.setPen(QColor(ov.text_color))
             p.drawText(it.rect, int(Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap), it.text)

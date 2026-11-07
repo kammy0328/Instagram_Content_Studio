@@ -135,9 +135,10 @@ class StoryOverlay:
     text_on: bool = False
     text: str = ""  # 비어 있으면 프로젝트명
     text_pos: str = "top"
-    text_font: str = "Pretendard"
+    text_font: str = "Black Han Sans"
     text_size: int = 56  # 1080 폭 기준 px
-    text_bold: bool = True
+    text_bold: bool = False  # 기본 글꼴(Black Han Sans)은 이미 굵은 한 가지 굵기뿐이라 가짜 굵게를 쓰지 않는다
+    text_spacing: int = 4  # 자간 (%, 글자 크기 대비 추가 간격이 아니라 QFont 퍼센트 간격의 100 초과분)
     text_color: str = "#ececec"
 
     def to_dict(self):
@@ -154,6 +155,7 @@ class StoryOverlay:
         if o.text_pos not in ("top", "bottom"):
             o.text_pos = "top"
         o.bg_dim = min(90, max(0, int(o.bg_dim)))
+        o.text_spacing = min(60, max(-10, int(o.text_spacing)))
         o.logo_size = min(100, max(5, int(o.logo_size)))
         o.text_size = min(200, max(12, int(o.text_size)))
         return o

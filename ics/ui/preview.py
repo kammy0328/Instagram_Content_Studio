@@ -92,10 +92,11 @@ class PreviewWidget(QWidget):
         else:
             sw, sh = iw, iw / ar
         src = self.image.copy(int((iw - sw) / 2), int((ih - sh) / 2), max(1, int(sw)), max(1, int(sh)))
-        small = src.scaled(
-            24, max(2, int(24 / ar)), Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation
-        )
-        p.drawImage(cr, small)
+        # 아주 작게 줄인 뒤 두 단계로 키워 마름모/블록 무늬 없이 부드럽게 퍼지게 한다
+        sm = Qt.TransformationMode.SmoothTransformation
+        im = src.scaled(32, max(2, int(32 / ar)), Qt.AspectRatioMode.IgnoreAspectRatio, sm)
+        im = im.scaled(im.width() * 4, im.height() * 4, Qt.AspectRatioMode.IgnoreAspectRatio, sm)
+        p.drawImage(cr, im)
         p.fillRect(cr, QColor(0, 0, 0, int(255 * max(0, min(90, self.bg_dim)) / 100)))
 
     def _paint_output(self, p: QPainter) -> None:
@@ -108,6 +109,8 @@ class PreviewWidget(QWidget):
             self._paint_blur_bg(p, cr)
         if g.mode == "fit":
             tr = QRectF(cr.x() + g.pad_x * sc, cr.y() + g.pad_y * sc, g.content_w * sc, g.content_h * sc)
+            if self.bg_dim is not None:  # 배경 위에 올릴 때는 가장자리가 반투명으로 번지지 않게 화면 픽셀에 맞춘다
+                tr = QRectF(tr.toAlignedRect())
             if g.crop_w:  # Fit 에서 확대하면 소스의 일부만 보인다
                 kx, ky = iw / self.disp[0], ih / self.disp[1]
                 p.drawImage(tr, self.image, QRectF(g.crop_x * kx, g.crop_y * ky, g.crop_w * kx, g.crop_h * ky))
