@@ -126,6 +126,8 @@ class FeedItem:
 class StoryOverlay:
     """STORY 의 검정 여백(영상 위/아래)에만 그리는 로고/제목 텍스트. 영상 위에는 절대 올라가지 않는다."""
 
+    bg_on: bool = True  # 검정 여백 대신 영상을 흐리게(렌즈 블러) 채운 배경
+    bg_dim: int = 45  # 배경을 어둡게 하는 정도(%) - 로고/제목이 잘 보이도록
     logo_on: bool = False
     logo_path: str = ""
     logo_pos: str = "bottom"  # 'top' | 'bottom' (어느 여백에 둘지)
@@ -151,6 +153,7 @@ class StoryOverlay:
             o.logo_pos = "bottom"
         if o.text_pos not in ("top", "bottom"):
             o.text_pos = "top"
+        o.bg_dim = min(90, max(0, int(o.bg_dim)))
         o.logo_size = min(100, max(5, int(o.logo_size)))
         o.text_size = min(200, max(12, int(o.text_size)))
         return o

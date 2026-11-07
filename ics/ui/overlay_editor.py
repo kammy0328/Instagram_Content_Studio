@@ -39,7 +39,7 @@ class OverlayEditor(QGroupBox):
     changed = Signal(object)  # StoryOverlay (확정된 변경)
 
     def __init__(self, settings, parent=None):
-        super().__init__("오버레이 (영상 위가 아닌 검정 여백에만 표시)", parent)
+        super().__init__("배경 · 로고 · 제목 (로고와 제목은 영상 위가 아닌 여백에만 표시)", parent)
         ov_mod.ensure_fonts()
         self.presets = LogoPresets(settings)
         self._ov = StoryOverlay()
@@ -49,6 +49,20 @@ class OverlayEditor(QGroupBox):
         self._timer.setInterval(450)
         self._timer.timeout.connect(self._commit)
         v = QVBoxLayout(self)
+
+        # ---- 배경
+        self.bg_on = QCheckBox("검정 여백 대신 영상을 흐리게 채운 배경 (렌즈 블러)")
+        self.bg_on.toggled.connect(self._edited)
+        v.addWidget(self.bg_on)
+        br = QHBoxLayout()
+        br.addWidget(QLabel("배경 어둡기"))
+        self.bg_dim = QSlider(Qt.Orientation.Horizontal)
+        self.bg_dim.setRange(0, 90)
+        self.bg_dim.valueChanged.connect(self._edited_slider)
+        br.addWidget(self.bg_dim, 1)
+        self.bg_dim_lbl = QLabel("")
+        br.addWidget(self.bg_dim_lbl)
+        v.addLayout(br)
 
         # ---- 로고
         self.logo_on = QCheckBox("로고 표시")
@@ -141,6 +155,9 @@ class OverlayEditor(QGroupBox):
     def set_value(self, ov: StoryOverlay, warnings: list[str] | None = None) -> None:
         self._ov = StoryOverlay.from_dict(ov.to_dict())
         self._block = True
+        self.bg_on.setChecked(ov.bg_on)
+        self.bg_dim.setValue(ov.bg_dim)
+        self.bg_dim_lbl.setText(f"{ov.bg_dim}%")
         self.logo_on.setChecked(ov.logo_on)
         self.logo_pos.setCurrentIndex(0 if ov.logo_pos == "bottom" else 1)
         self.logo_size.setValue(ov.logo_size)
@@ -164,6 +181,8 @@ class OverlayEditor(QGroupBox):
 
     def _gather(self) -> StoryOverlay:
         o = StoryOverlay.from_dict(self._ov.to_dict())
+        o.bg_on = self.bg_on.isChecked()
+        o.bg_dim = self.bg_dim.value()
         o.logo_on = self.logo_on.isChecked()
         o.logo_pos = self.logo_pos.currentData()
         o.logo_size = self.logo_size.value()
@@ -182,6 +201,7 @@ class OverlayEditor(QGroupBox):
     def _edited_slider(self, *_a) -> None:  # 연속 입력은 잠시 기다렸다가 한 번에 확정
         if not self._block:
             self.logo_size_lbl.setText(f"{self.logo_size.value()}%")
+            self.bg_dim_lbl.setText(f"{self.bg_dim.value()}%")
             self._timer.start()
 
     def _commit(self) -> None:

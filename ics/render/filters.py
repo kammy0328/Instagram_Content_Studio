@@ -46,13 +46,43 @@ OVERLAY_PREP = (
 )
 
 
+def has_bg(geo: Geometry, bg_dim: int | None) -> bool:
+    """배경 채우기는 Fit 에서 위/아래(또는 좌우) 여백이 실제로 있을 때만."""
+    return bg_dim is not None and geo.mode == "fit" and (geo.content_w, geo.content_h) != (geo.canvas_w, geo.canvas_h)
+
+
+def _bg_chain(info: MediaInfo, geo: Geometry, scale_opts: str, bg_dim: int, pix_fmt: str) -> str:
+    """영상을 캔버스에 가득 차게(cover) 줄여 흐리게 한 뒤 키우고, 로고/제목이 보이도록 어둡게 한다.
+    작은 크기에서 블러하므로 빠르고(렌즈 블러처럼 부드럽게 퍼짐), 밝기는 limited range 기준으로 낮춘다."""
+    bw, bh = max(16, (geo.canvas_w // 4) // 2 * 2), max(16, (geo.canvas_h // 4) // 2 * 2)
+    k = max(0.0, min(0.9, bg_dim / 100.0))
+    return ",".join(
+        [
+            f"scale={bw}:{bh}:force_original_aspect_ratio=increase:{scale_opts}",
+            f"crop={bw}:{bh}",
+            f"format={pix_fmt}",
+            "gblur=sigma=5:steps=2",
+            f"scale={geo.canvas_w}:{geo.canvas_h}:flags=bicubic",
+            f"lutyuv=y='16+(val-16)*{1 - k:.3f}':u='128+(val-128)*0.9':v='128+(val-128)*0.9'",
+            "setsar=1",
+        ]
+    )
+
+
 def video_filter(
-    info: MediaInfo, geo: Geometry, fps_out: Fraction | None, pix_fmt: str = "yuv420p", overlay: bool = False
+    info: MediaInfo,
+    geo: Geometry,
+    fps_out: Fraction | None,
+    pix_fmt: str = "yuv420p",
+    overlay: bool = False,
+    bg_dim: int | None = None,
 ) -> str:
     """원본 디코딩 프레임 -> (디인터레이스) -> [크롭] -> 스케일(+색변환, 디더) -> pad(검정) -> setsar=1.
-    overlay=True 면 filter_complex 문자열을 돌려준다: 입력 1 번(투명 PNG)을 캔버스 전체에 합성하고 출력 라벨은 [vout]."""
+    overlay 또는 배경(bg_dim) 이 있으면 filter_complex 문자열을 돌려준다: 입력 1 번(투명 PNG)을 캔버스 전체에 합성하고
+    출력 라벨은 [vout]."""
     parts: list[str] = pre_filters(info)
     scale_opts = f"flags={SCALE_FLAGS}:{in_color_opts(info)}:out_color_matrix=bt709:out_range=tv:" f"sws_dither=ed"
+    use_bg = has_bg(geo, bg_dim)
     if geo.mode == "fill":
         # 크롭 좌표는 표시(SAR 반영) 좌표계 -> 먼저 표시 크기로 정사각 픽셀화 후 크롭하면 이중 리샘플링이 되므로,
         # 코딩 좌표로 환산해 크롭 후 한 번에 스케일한다.
@@ -64,20 +94,36 @@ def video_filter(
             parts.append(crop_filter(info, geo))
         parts.append(f"scale={geo.content_w}:{geo.content_h}:{scale_opts}")
         parts.append(f"format={pix_fmt}")
-        if (geo.content_w, geo.content_h) != (geo.canvas_w, geo.canvas_h):
+        if use_bg:
+            pass  # 여백은 pad 대신 흐린 배경이 채운다
+        elif (geo.content_w, geo.content_h) != (geo.canvas_w, geo.canvas_h):
             parts.append(f"pad={geo.canvas_w}:{geo.canvas_h}:{geo.pad_x}:{geo.pad_y}:color=black")
     parts.append("setsar=1")
-    if fps_out is not None:
-        parts.append(f"fps=fps={fps_out.numerator}/{fps_out.denominator}:round=near")
+    if use_bg:
+        pre = pre_filters(info)
+        pre_s = ",".join(pre + ([f"fps=fps={fps_out.numerator}/{fps_out.denominator}:round=near"] if fps_out else []))
+        head = f"[0:v]{pre_s + ',' if pre_s else ''}split=2[s1][s2]"
+        fg = ",".join(parts[len(pre) :])
+        base = (
+            f"{head};[s1]{fg}[fg];[s2]{_bg_chain(info, geo, scale_opts, int(bg_dim), pix_fmt)}[bg];"
+            f"[bg][fg]overlay={geo.pad_x}:{geo.pad_y}:format=yuv420,format={pix_fmt},setsar=1[base]"
+        )
+    else:
+        if fps_out is not None:
+            parts.append(f"fps=fps={fps_out.numerator}/{fps_out.denominator}:round=near")
+        base = None
     # 출력 색 태그를 프레임 속성으로도 명시한다. FFmpeg 7.1+ 는 인코더 옵션(-color_primaries/-color_trc)보다 프레임 속성을
     # 우선해서 기록하므로, 이 줄이 없으면 primaries/trc 태그가 비어 나온다 (Windows 번들 FFmpeg 8.1 에서 확인).
-    if overlay:
+    if overlay or use_bg:
         # 로고/텍스트 PNG(캔버스 크기, 투명 배경)는 BT.709 limited 로 맞춰 합성한다 (색이 달라지지 않게). 정지 이미지라 마지막 프레임을 반복.
-        base = ",".join(parts)
-        return (
-            f"[0:v]{base}[base];[1:v]{OVERLAY_PREP}[ov];"
-            f"[base][ov]overlay=0:0:format=yuv420:eof_action=repeat,format={pix_fmt},setsar=1,{OUTPUT_TAGS_FILTER}[vout]"
-        )
+        if base is None:
+            base = f"[0:v]{','.join(parts)}[base]"
+        if overlay:
+            return (
+                f"{base};[1:v]{OVERLAY_PREP}[ov];"
+                f"[base][ov]overlay=0:0:format=yuv420:eof_action=repeat,format={pix_fmt},setsar=1,{OUTPUT_TAGS_FILTER}[vout]"
+            )
+        return f"{base};[base]{OUTPUT_TAGS_FILTER}[vout]"
     parts.append(OUTPUT_TAGS_FILTER)
     return ",".join(parts)
 

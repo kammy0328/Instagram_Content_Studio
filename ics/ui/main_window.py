@@ -218,7 +218,7 @@ class EditorWindow(QMainWindow):
         br = QPushButton("내보내기  ↗")
         br.setObjectName("primary")
         br.setToolTip("STORY · REELS · FEED 파일과 캡션을 확인하고 렌더링합니다.")
-        br.clicked.connect(self.open_render)
+        br.clicked.connect(lambda _=False: self.open_render())
         bp = QPushButton("게시…")
         bp.setToolTip("Instagram 에 게시/예약합니다 (Cloudflare 중계 필요).")
         bp.clicked.connect(self.open_publisher)
@@ -302,6 +302,7 @@ class EditorWindow(QMainWindow):
         cv.addWidget(self.preview, 1)
         self.transport = TransportBar(self.project)
         self.transport.playClicked.connect(self.toggle_play)
+        self.transport.reverseClicked.connect(self.toggle_reverse)
         self.transport.stepClicked.connect(lambda d: self.step(d))
         self.transport.gotoClicked.connect(lambda w: self.goto(0 if w == "start" else self.project.count - 1))
         self.transport.frameEntered.connect(self.goto)
@@ -546,6 +547,9 @@ class EditorWindow(QMainWindow):
     def _on_frame_ready(self, n: int, img: QImage) -> None:
         if self.playback.playing and self.playback.rate > 0:
             return
+        if self.playback.playing and self.playback.rate < 0:  # 역재생: 디코딩이 끝나는 대로 최신 프레임을 바로 표시
+            self.preview.set_image(n, img)
+            return
         if n == self._display_frame():
             self.preview.set_image(n, img)
 
@@ -594,6 +598,20 @@ class EditorWindow(QMainWindow):
             return
         self.transport.loop.setChecked(True)
         self.playback.play(r[0], 1.0, r)
+
+    def toggle_reverse(self) -> None:
+        """역재생 버튼: 소리 없이 -1배속으로 거꾸로 재생, 재생 중이면 정지."""
+        if self.playback.playing:
+            self.playback.pause()
+            self.rate_level = 0
+            self.transport.rate_lbl.setText("")
+            return
+        loop = self._active_range() if self.transport.loop.isChecked() else None
+        start = self.playhead
+        if loop and not (loop[0] < start <= loop[1]):
+            start = loop[1] - 1
+        self.transport.rate_lbl.setText("-1×")
+        self.playback.play(start, -1.0, loop)
 
     def shuttle(self, direction: int) -> None:
         cur = self.playback.rate if self.playback.playing else 0
@@ -1047,6 +1065,10 @@ class EditorWindow(QMainWindow):
             else:
                 kind = "916"
                 lp = (st.story if self.tab == "story" else st.reels).layout
+        ov_state = self.project.state.story_overlay
+        self.preview.bg_dim = (
+            ov_state.bg_dim if (self.tab == "story" and ov_state.bg_on and not self.cover_mode) else None
+        )
         self.preview.overlay_img = (
             self._story_overlay_image() if (self.tab == "story" and not self.cover_mode) else None
         )

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QIcon, QPixmap
+from PySide6.QtGui import QIcon, QPixmap, QTransform
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QButtonGroup,
@@ -63,6 +63,7 @@ class TCEdit(QLineEdit):
 
 class TransportBar(QWidget):
     playClicked = Signal()
+    reverseClicked = Signal()
     stepClicked = Signal(int)
     gotoClicked = Signal(str)
     loopToggled = Signal(bool)
@@ -80,12 +81,13 @@ class TransportBar(QWidget):
         lay.setSpacing(6)
         self.b_start = self._btn("⏮", "처음으로 (Home)", lambda: self.gotoClicked.emit("start"))
         self.b_prev = self._btn("◀|", "1프레임 뒤로 (←)", lambda: self.stepClicked.emit(-1))
+        self.b_rev = self._btn("◀", "역재생 (J) - 소리 없이 거꾸로 재생, 다시 누르면 정지", self.reverseClicked.emit)
         self.b_play = self._btn("▶", "재생/정지 (Space)", self.playClicked.emit)
         self.b_next = self._btn("|▶", "1프레임 앞으로 (→)", lambda: self.stepClicked.emit(1))
         self.b_end = self._btn("⏭", "끝으로 (End)", lambda: self.gotoClicked.emit("end"))
         self.b_play.setObjectName("play")
         self.b_play.setFixedWidth(40)
-        for b in (self.b_start, self.b_prev, self.b_play, self.b_next, self.b_end):
+        for b in (self.b_start, self.b_prev, self.b_rev, self.b_play, self.b_next, self.b_end):
             lay.addWidget(b)
         self.tc = TCEdit(project)
         self.tc.frameEntered.connect(self.frameEntered.emit)
@@ -132,8 +134,12 @@ class TransportBar(QWidget):
             "▶": QStyle.StandardPixmap.SP_MediaPlay,
             "|▶": QStyle.StandardPixmap.SP_MediaSeekForward,
             "⏭": QStyle.StandardPixmap.SP_MediaSkipForward,
+            "◀": QStyle.StandardPixmap.SP_MediaPlay,
         }
-        b.setIcon(control_icon(self, icons[text], "#0a0a0a" if text == "▶" else "#ececec"))
+        ic = control_icon(self, icons[text], "#0a0a0a" if text == "▶" else "#ececec")
+        if text == "◀":  # 역재생: 재생 아이콘을 좌우로 뒤집는다
+            ic = QIcon(ic.pixmap(16, 16).transformed(QTransform().scale(-1, 1)))
+        b.setIcon(ic)
         b.setText("")
         b.setAccessibleName(tip)
         b.setToolTip(tip)

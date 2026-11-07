@@ -196,3 +196,52 @@ def test_new_project_defaults_to_60s_for_story_and_reels_but_not_existing(qapp, 
 def test_defaults_title_on_top_small_logo_on_bottom():
     o = StoryOverlay()
     assert o.text_pos == "top" and o.logo_pos == "bottom" and o.logo_size <= 25
+
+
+def test_story_blur_background_fills_margins_and_dims(qapp, prores_2398, tmp_path):
+    from PySide6.QtGui import QImage
+
+    from ics.core import ffbin, frameindex, media
+    from ics.render import engine
+
+    info = media.analyze(str(prores_2398))
+    idx = frameindex.build_frame_index(info, tmp_path)
+    geo = compute_geometry(info.display_w, info.display_h, "916", LayoutParams())
+    top, _ = (geo.pad_y, 0)
+    assert top > 0
+
+    def frame(dim, name):
+        spec = engine.VideoSpec(0, min(idx.count, 12), geo, bg_dim=dim)
+        cmd, meta = engine.build_video_cmd(info, idx, spec, str(tmp_path / f"{name}.mp4"))
+        assert ("-filter_complex" in cmd) == (dim is not None) and meta["bg_blur"] == (dim is not None)
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr[-600:]
+        subprocess.run(
+            [
+                ffbin.ffmpeg(),
+                "-loglevel",
+                "error",
+                "-y",
+                "-i",
+                str(tmp_path / f"{name}.mp4"),
+                "-frames:v",
+                "1",
+                str(tmp_path / f"{name}.png"),
+            ],
+            check=True,
+        )
+        return QImage(str(tmp_path / f"{name}.png"))
+
+    def margin_light(img):
+        ys = range(10, top - 10, 12)
+        return sum(QColor(img.pixel(x, y)).lightness() for y in ys for x in range(0, img.width(), 20)) / (
+            len(ys) * len(range(0, img.width(), 20))
+        )
+
+    plain, bright, dim = frame(None, "plain"), frame(0, "b0"), frame(60, "b60")
+    assert (plain.width(), plain.height()) == (geo.canvas_w, geo.canvas_h)
+    assert margin_light(plain) < 1  # 배경 없음: 순수 검정 여백
+    assert margin_light(bright) > 5  # 흐린 영상 배경이 채움
+    assert margin_light(dim) < margin_light(bright) * 0.7  # 어둡게 하면 더 어두움
+    mid = geo.pad_y + geo.content_h // 2  # 영상 부분은 배경과 관계없이 그대로
+    assert abs(QColor(plain.pixel(540, mid)).lightness() - QColor(dim.pixel(540, mid)).lightness()) < 6

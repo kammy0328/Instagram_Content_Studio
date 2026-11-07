@@ -686,10 +686,12 @@ class PlaybackEngine(QObject):
                 self.imageReady.emit(shown[0], shown[1])
                 self.positionChanged.emit(shown[0])
         elif self.rate < 0:
+            if self.audio is not None:
+                self.audio.stop()  # 역재생에는 소리를 내지 않는다
             if target != self.current:
                 self.current = target
+                self.positionChanged.emit(target)  # 재생 위치를 먼저 갱신해야 곧바로 오는 프레임이 표시된다
                 self.frames.request(target)
-                self.positionChanged.emit(target)
 
     def shutdown(self) -> None:
         self.pause()

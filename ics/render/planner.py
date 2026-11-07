@@ -120,6 +120,8 @@ def plan_render(
             geo = compute_geometry(info.display_w, info.display_h, "916", s.layout)
             sp = {"start": s.start, "end": s.end, "layout": s.layout.to_dict(), "geo": geo.to_dict()}
             ov = st.story_overlay
+            if ov.bg_on and any(m > 0 for m in overlay.margins(geo)):
+                sp["bg_dim"] = ov.bg_dim
             if overlay.active(ov, project.rec.name):
                 png, res = overlay.save_png(
                     ov,

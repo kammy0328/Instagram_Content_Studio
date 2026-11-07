@@ -821,3 +821,19 @@ def test_new_project_dialog_needs_only_name_and_master_and_defaults_output_to_ma
     assert d.output.text() == str(tmp_path / "custom")
     v = d.values()
     assert v["artist"] == "" and v["title"] == v["name"] and v["output_dir"] == str(tmp_path / "custom")
+
+
+def test_reverse_play_button_goes_backwards_shows_frames_and_stays_silent(qapp, win):
+    fake = win.playback.audio = FakeAudio()
+    win.goto(60)
+    shown = []
+    win.preview.set_image = lambda n, img, _o=win.preview.set_image: (shown.append(n), _o(n, img))
+    win.toggle_reverse()
+    assert win.playback.playing and win.playback.rate < 0
+    pump(qapp, 900)
+    moved = win.playhead
+    win.toggle_reverse()
+    pump(qapp, 150)
+    assert moved < 55 and not win.playback.playing
+    assert len(shown) >= 3 and shown[-1] <= shown[0]  # 거꾸로 가는 프레임이 실제로 화면에 나온다
+    assert not [c for c in fake.calls if c[0] == "play"]  # 역재생 중에는 노래가 나오지 않는다

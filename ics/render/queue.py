@@ -181,7 +181,9 @@ class RenderQueue:
     def _dispatch(self, j: RenderJob, prog) -> dict:
         p = j.params
         if j.kind in ("story", "reels", "feed_video"):
-            spec = engine.VideoSpec(p["start"], p["end"], _geo(p["geo"]), overlay_png=p.get("overlay_png"))
+            spec = engine.VideoSpec(
+                p["start"], p["end"], _geo(p["geo"]), overlay_png=p.get("overlay_png"), bg_dim=p.get("bg_dim")
+            )
             return engine.render_video(self.info, self.index, spec, j.out_path, prog, self._cancel_job)
         if j.kind in ("feed_still", "reels_cover"):
             return engine.render_jpeg_still(self.info, self.index, p["frame"], _geo(p["geo"]), j.out_path)
