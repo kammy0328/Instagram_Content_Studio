@@ -134,21 +134,3 @@ def open_media(path):
 @pytest.fixture()
 def opener():
     return open_media
-
-
-# Windows CI: 모든 테스트가 통과해도 인터프리터 종료 중 Qt 정리에서 프로세스가 비정상 종료(요약 출력 없이 exit 1)하는
-# 일이 간헐적으로 있었다. 요약을 모두 출력한 뒤(unconfigure) 정리 단계를 건너뛰고 테스트 결과 그대로 종료한다.
-_exit_status = {"code": None}
-
-
-def pytest_sessionfinish(session, exitstatus):
-    _exit_status["code"] = int(exitstatus)
-
-
-def pytest_unconfigure(config):
-    import os
-
-    if os.environ.get("ICS_FAST_EXIT") == "1" and _exit_status["code"] is not None:
-        sys.stdout.flush()
-        sys.stderr.flush()
-        os._exit(_exit_status["code"])

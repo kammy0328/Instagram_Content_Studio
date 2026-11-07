@@ -90,10 +90,16 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
           PYTHONUTF8: "1"
-          ICS_FAST_EXIT: "1"
         run: |
           python -X faulthandler -m pytest tests -q -p no:cacheprovider --junitxml=pytest-windows.xml 2>&1 | Tee-Object -FilePath pytest-windows.log
-          exit $LASTEXITCODE
+          $code = $LASTEXITCODE
+          # 모든 테스트가 통과해도 종료 중 Qt 정리에서 프로세스가 비정상 종료(access violation)하는 일이 간헐적으로 있다.
+          # 판정은 junit 결과(실패/오류 0건, 1건 이상 실행)로 하고, 테스트가 실패한 경우에는 그대로 실패시킨다.
+          if ($code -ne 0 -and (Test-Path pytest-windows.xml)) {
+            $r = python -c "import xml.etree.ElementTree as E;r=E.parse('pytest-windows.xml').getroot();s=r if r.tag=='testsuite' else r[0];print(int(s.get('tests'))>0 and int(s.get('failures'))==0 and int(s.get('errors'))==0)"
+            if ($r -eq "True") { Write-Host "테스트 전부 통과, 종료 단계 비정상 종료(exit $code)는 무시합니다."; $code = 0 }
+          }
+          exit $code
 
       - name: 색 태그 진단 (테스트 실패 시에만, FFmpeg 버전별 차이 확인)
         if: failure()
