@@ -835,5 +835,6 @@ def test_reverse_play_button_goes_backwards_shows_frames_and_stays_silent(qapp, 
     win.toggle_reverse()
     pump(qapp, 150)
     assert moved < 55 and not win.playback.playing
-    assert len(shown) >= 3 and shown[-1] <= shown[0]  # 거꾸로 가는 프레임이 실제로 화면에 나온다
+    seq = [n for n in shown if n > 0]  # 처음에 한 번 그려지는 초기 화면(0 프레임)은 제외
+    assert len(seq) >= 3 and seq[-1] < seq[0]  # 거꾸로 가는 프레임이 실제로 화면에 나온다
     assert not [c for c in fake.calls if c[0] == "play"]  # 역재생 중에는 노래가 나오지 않는다
