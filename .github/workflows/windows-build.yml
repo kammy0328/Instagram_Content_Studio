@@ -73,10 +73,13 @@ jobs:
           Get-ChildItem $dest | Select-Object Name, @{n="MB";e={[math]::Round($_.Length/1MB,1)}}
 
       - name: 빌드 ID 기록 (앱 자동 업데이트가 비교에 사용)
+        env:
+          UPDATE_READ_TOKEN: ${{ secrets.UPDATE_READ_TOKEN }}
         run: |
           $slug = ("${{ github.ref_name }}" -replace '[^A-Za-z0-9._-]', '-')
           $id = "${{ github.sha }}".Substring(0, 7)
-          Set-Content -Path ics/_build.py -Value "BUILD_ID = `"$id`"`nBUILD_CHANNEL = `"$slug`"`n" -Encoding utf8
+          $tok = "$env:UPDATE_READ_TOKEN".Trim()
+          Set-Content -Path ics/_build.py -Value "BUILD_ID = `"$id`"`nBUILD_CHANNEL = `"$slug`"`nBUILD_TOKEN = `"$tok`"`n" -Encoding utf8
 
       - name: 의존성 설치
         run: |

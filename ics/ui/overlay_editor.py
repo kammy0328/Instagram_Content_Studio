@@ -82,8 +82,8 @@ class OverlayEditor(QGroupBox):
         lr = QHBoxLayout()
         lr.addWidget(QLabel("위치"))
         self.logo_pos = QComboBox()
-        self.logo_pos.addItem("위 여백", "top")
         self.logo_pos.addItem("아래 여백", "bottom")
+        self.logo_pos.addItem("위 여백", "top")
         self.logo_pos.currentIndexChanged.connect(self._edited)
         lr.addWidget(self.logo_pos)
         lr.addWidget(QLabel("크기"))
@@ -122,8 +122,8 @@ class OverlayEditor(QGroupBox):
         tr2 = QHBoxLayout()
         tr2.addWidget(QLabel("위치"))
         self.text_pos = QComboBox()
-        self.text_pos.addItem("아래 여백", "bottom")
         self.text_pos.addItem("위 여백", "top")
+        self.text_pos.addItem("아래 여백", "bottom")
         self.text_pos.currentIndexChanged.connect(self._edited)
         tr2.addWidget(self.text_pos)
         self.color_btn = QPushButton("글자색")
@@ -142,7 +142,7 @@ class OverlayEditor(QGroupBox):
         self._ov = StoryOverlay.from_dict(ov.to_dict())
         self._block = True
         self.logo_on.setChecked(ov.logo_on)
-        self.logo_pos.setCurrentIndex(0 if ov.logo_pos == "top" else 1)
+        self.logo_pos.setCurrentIndex(0 if ov.logo_pos == "bottom" else 1)
         self.logo_size.setValue(ov.logo_size)
         self.logo_size_lbl.setText(f"{ov.logo_size}%")
         self.logo_lbl.setText(
@@ -154,7 +154,7 @@ class OverlayEditor(QGroupBox):
         self.font.setCurrentFont(QFont(ov.text_font))
         self.size.setValue(ov.text_size)
         self.bold.setChecked(ov.text_bold)
-        self.text_pos.setCurrentIndex(0 if ov.text_pos == "bottom" else 1)
+        self.text_pos.setCurrentIndex(0 if ov.text_pos == "top" else 1)
         self._paint_color(ov.text_color)
         self.warn.setText("\n".join("⚠ " + w for w in (warnings or [])))
         self._block = False

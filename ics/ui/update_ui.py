@@ -9,10 +9,9 @@ from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
-    QFormLayout,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
+    QMessageBox,
     QProgressBar,
     QPushButton,
     QVBoxLayout,
@@ -136,76 +135,42 @@ class UpdateDialog(QDialog):
         QTimer.singleShot(400, QApplication.quit)
 
 
-class UpdateSettingsDialog(QDialog):
-    """채널, 비공개 저장소용 읽기 전용 토큰, 지금 확인."""
+def check_and_prompt(settings, parent=None) -> None:
+    """[업데이트…] 메뉴: 버전을 확인하고, 새 버전이 있으면 설치할지만 묻는다. 입력할 값은 없다."""
+    box = QMessageBox(parent)
+    box.setWindowTitle("업데이트")
+    box.setText("새 버전을 확인하는 중…")
+    box.setStandardButtons(QMessageBox.StandardButton.NoButton)
+    box.setModal(True)
+    worker = CheckWorker(*current_args(settings))
+    result: dict = {}
 
-    def __init__(self, settings, parent=None):
-        super().__init__(parent)
-        self.settings, self.store = settings, secret_store()
-        self.setWindowTitle("업데이트 설정")
-        self.setMinimumWidth(520)
-        v = QVBoxLayout(self)
-        v.setContentsMargins(24, 20, 24, 20)
-        v.setSpacing(10)
-        v.addWidget(QLabel(f"현재 버전: {updater.current_label()}"))
-        f = QFormLayout()
-        self.repo = QLineEdit(settings.get("update_repo", updater.DEFAULT_REPO))
-        self.channel = QLineEdit(settings.get("update_channel", ""))
-        self.channel.setPlaceholderText(f"비우면 {updater.current_channel()}")
-        self.token = QLineEdit()
-        self.token.setEchoMode(QLineEdit.EchoMode.Password)
-        self.token.setPlaceholderText(
-            "(저장됨)" if self.store.get(TOKEN_KEY) else "비공개 저장소일 때만: 읽기 전용 토큰"
+    def done(info, err):
+        result["v"] = (info, err)
+        box.accept()
+
+    worker.done.connect(done)
+    worker.start()
+    box.exec()
+    info, err = result.get("v", (None, "확인하지 못했습니다."))
+    settings.set("update_last_check", time.time())
+    if err:
+        QMessageBox.warning(parent, "업데이트", err)
+    elif info is None:
+        QMessageBox.information(
+            parent,
+            "업데이트",
+            "최신 버전입니다." if updater.BUILD_ID != "dev" else "개발 실행에서는 업데이트를 확인하지 않습니다.",
         )
-        f.addRow("저장소", self.repo)
-        f.addRow("채널", self.channel)
-        f.addRow("읽기 토큰", self.token)
-        v.addLayout(f)
-        self.msg = QLabel("")
-        self.msg.setWordWrap(True)
-        v.addWidget(self.msg)
-        row = QHBoxLayout()
-        row.addStretch(1)
-        save = QPushButton("저장하고 확인")
-        save.setObjectName("primary")
-        save.clicked.connect(self._save_and_check)
-        close = QPushButton("닫기")
-        close.clicked.connect(self.accept)
-        row.addWidget(close)
-        row.addWidget(save)
-        v.addLayout(row)
-        self._worker: CheckWorker | None = None
-
-    def _save_and_check(self) -> None:
-        self.settings.set("update_repo", self.repo.text().strip() or updater.DEFAULT_REPO)
-        self.settings.set("update_channel", self.channel.text().strip())
-        if self.token.text().strip():
-            self.store.set(TOKEN_KEY, self.token.text().strip())
-            self.token.clear()
-            self.token.setPlaceholderText("(저장됨)")
-        self.msg.setText("확인하는 중…")
-        self._worker = CheckWorker(*current_args(self.settings))
-        self._worker.done.connect(self._checked)
-        self._worker.start()
-
-    def _checked(self, info, err: str) -> None:
-        self.settings.set("update_last_check", time.time())
-        if err:
-            self.msg.setText(err)
-        elif info is None:
-            self.msg.setText(
-                "최신 버전입니다." if updater.BUILD_ID != "dev" else "개발 실행에서는 업데이트를 확인하지 않습니다."
-            )
-        else:
-            self.msg.setText("새 버전이 있습니다.")
-            UpdateDialog(info, secret_store().get(TOKEN_KEY), self).exec()
+    else:
+        UpdateDialog(info, updater.default_token(secret_store().get(TOKEN_KEY)), parent).exec()
 
 
 def current_args(settings) -> tuple[str, str, str]:
     return (
         settings.get("update_repo", updater.DEFAULT_REPO) or updater.DEFAULT_REPO,
         updater.current_channel(settings.get("update_channel", "")),
-        secret_store().get(TOKEN_KEY),
+        updater.default_token(secret_store().get(TOKEN_KEY)),
     )
 
 
@@ -230,4 +195,4 @@ class AutoUpdate(QObject):
         if not err:
             self.settings.set("update_last_check", time.time())
         if info is not None:
-            UpdateDialog(info, secret_store().get(TOKEN_KEY)).exec()
+            UpdateDialog(info, updater.default_token(secret_store().get(TOKEN_KEY))).exec()

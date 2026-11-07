@@ -23,7 +23,7 @@ class LogoPreset:
     name: str
     file: str  # 실제 이미지 경로 (내장은 번들 경로)
     size: int = 40
-    pos: str = "top"
+    pos: str = "bottom"
     builtin: bool = False
 
 
@@ -44,13 +44,13 @@ class LogoPresets:
 
     def all(self) -> list[LogoPreset]:
         out = [
-            LogoPreset(n, str(paths.resource_path("assets/logos") / f), 40, "top", True)
+            LogoPreset(n, str(paths.resource_path("assets/logos") / f), 22, "bottom", True)
             for n, f in BUILTIN
             if (paths.resource_path("assets/logos") / f).is_file()
         ]
         for d in self.settings.get("logo_presets", []) or []:
             if isinstance(d, dict) and d.get("name") and Path(d.get("file", "")).is_file():
-                out.append(LogoPreset(d["name"], d["file"], int(d.get("size", 40)), d.get("pos", "top")))
+                out.append(LogoPreset(d["name"], d["file"], int(d.get("size", 22)), d.get("pos", "bottom")))
         return out
 
     def get(self, name: str) -> LogoPreset | None:

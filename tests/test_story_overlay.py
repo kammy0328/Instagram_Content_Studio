@@ -77,7 +77,12 @@ def test_rendered_png_is_transparent_over_the_video_area(qapp):
     for y in range(geo.pad_y, geo.pad_y + geo.content_h, 40):
         for x in range(0, 1080, 60):
             assert (img.pixel(x, y) >> 24) == 0  # 영상 자리는 완전 투명
-    assert any((img.pixel(x, 300) >> 24) > 0 for x in range(0, 1080, 4))  # 위 여백에는 로고가 그려짐
+    assert any(
+        (img.pixel(x, y) >> 24) > 0 for x in range(0, 1080, 4) for y in range(1300, 1920, 8)
+    )  # 아래 여백에는 로고
+    assert any(
+        (img.pixel(x, y) >> 24) > 0 for x in range(0, 1080, 4) for y in range(0, 640, 8)
+    )  # 위 여백에는 제목이 그려짐 (기본: 제목 위, 로고 아래)
 
 
 def test_long_text_shrinks_or_warns_instead_of_overflowing(qapp):
@@ -87,7 +92,7 @@ def test_long_text_shrinks_or_warns_instead_of_overflowing(qapp):
     o = StoryOverlay(text_on=True, text="아주 긴 제목 " * 30, text_size=80)
     res = overlay.layout(o, geo, "x")
     for it in res.items:
-        assert it.rect.bottom() <= geo.canvas_h and it.rect.top() >= geo.pad_y + geo.content_h - 0.5
+        assert it.rect.top() >= 0 and it.rect.bottom() <= geo.pad_y + 0.5  # 기본 위치: 제목은 위 여백
 
 
 def test_overlay_roundtrips_in_project_state_and_old_projects_are_unchanged():
@@ -186,3 +191,8 @@ def test_new_project_defaults_to_60s_for_story_and_reels_but_not_existing(qapp, 
     p.clear_selection("story")
     p.apply_default_ranges()  # 한 번만 적용: 사용자가 지운 선택을 되살리지 않는다
     assert not p.state.story.enabled and end > 0
+
+
+def test_defaults_title_on_top_small_logo_on_bottom():
+    o = StoryOverlay()
+    assert o.text_pos == "top" and o.logo_pos == "bottom" and o.logo_size <= 25

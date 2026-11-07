@@ -797,7 +797,7 @@ def test_render_plan_includes_pending_caption(qapp, win):
     win.project.set_range("story", 0, 4)
     win.set_tab("credits")
     win.credits.body.setPlainText("렌더 직전 본문")
-    win.open_render()
+    win.open_render({"story", "reels", "feed", "credits"})
     try:
         job = next(j for j in win.render_dialog.plan.jobs if j.kind == "captions")
         assert job.params["caption"] == "렌더 직전 본문"

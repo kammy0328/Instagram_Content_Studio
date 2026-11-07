@@ -37,6 +37,7 @@ from . import theme
 from .credits_page import CreditsPage
 from .cutstrip import CutStrip
 from .dialogs import (
+    ExportChooser,
     IdDictionaryDialog,
     MediaReportDialog,
     ReadyDialog,
@@ -1056,12 +1057,24 @@ class EditorWindow(QMainWindow):
         )
 
     # ================================================================ 렌더링 / 업로드 준비
-    def open_render(self) -> None:
+    def open_render(self, sections: set[str] | None = None) -> None:
         if self.render_queue and self.render_queue.running and self.render_dialog:
             self.render_dialog.show()
             self.render_dialog.raise_()
             return
-        if self.project.feed_over_limit():
+        if sections is None:
+            st = self.project.state
+            avail = {
+                "story": bool(st.story.enabled),
+                "reels": bool(st.reels.enabled),
+                "feed": bool(self.project.feed_included()),
+                "credits": True,
+            }
+            chooser = ExportChooser(avail, self)
+            if chooser.exec() != QDialog.DialogCode.Accepted:
+                return
+            sections = chooser.selected()
+        if "feed" in sections and self.project.feed_over_limit():
             QMessageBox.warning(
                 self,
                 "내보내기",
@@ -1070,7 +1083,7 @@ class EditorWindow(QMainWindow):
             return
         self.playback.pause()
         self.credits.flush_pending()
-        plan = plan_render(self.project)
+        plan = plan_render(self.project, sections=sections)
         dlg = RenderDialog(plan, self)
         self.render_dialog = dlg
         dlg.startRequested.connect(lambda ow, d=dlg, pl=plan: self._start_render(pl, ow))
@@ -1117,9 +1130,9 @@ class EditorWindow(QMainWindow):
         ReadyDialog(self.project, self, self.toast).exec()
 
     def open_update(self) -> None:
-        from .update_ui import UpdateSettingsDialog
+        from .update_ui import check_and_prompt
 
-        UpdateSettingsDialog(self.settings, self).exec()
+        check_and_prompt(self.settings, self)
 
     def open_publisher(self) -> None:
         from .. import paths

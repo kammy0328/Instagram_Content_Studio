@@ -67,7 +67,17 @@ def estimate_still_bytes(width: int, height: int) -> int:
     return int(width * height * 0.45)
 
 
-def plan_render(project: Project, include_original_stills: bool = True) -> RenderPlan:
+SECTIONS = ("story", "reels", "feed", "credits")
+
+
+def plan_render(
+    project: Project, include_original_stills: bool = True, sections: set[str] | frozenset[str] | None = None
+) -> RenderPlan:
+    """sections: 내보낼 묶음 (story/reels/feed/credits). None 이면 전부. 선택하지 않은 묶음의 문제는 검사하지 않는다."""
+
+    def want(sec: str) -> bool:
+        return sections is None or sec in sections
+
     plan = RenderPlan()
     info, index, st = project.media, project.index, project.state
     if info is None or index is None:
@@ -99,7 +109,7 @@ def plan_render(project: Project, include_original_stills: bool = True) -> Rende
         return j
 
     # ---------------------------------------------------------------- STORY
-    if st.story.enabled:
+    if want("story") and st.story.enabled:
         s = st.story
         dur = project.seconds(s.start, s.end)
         if s.length < 1:
@@ -132,7 +142,7 @@ def plan_render(project: Project, include_original_stills: bool = True) -> Rende
                 plan.issues.append(PlanIssue("info", f"STORY: {geo.tier_note}"))
 
     # ---------------------------------------------------------------- REELS
-    if st.reels.enabled:
+    if want("reels") and st.reels.enabled:
         s = st.reels
         dur = project.seconds(s.start, s.end)
         if s.length < 1:
@@ -150,7 +160,7 @@ def plan_render(project: Project, include_original_stills: bool = True) -> Rende
             )
             if geo.tier_note:
                 plan.issues.append(PlanIssue("info", f"REELS: {geo.tier_note}"))
-    if st.cover.frame is not None:
+    if want("reels") and st.cover.frame is not None:
         geo = compute_geometry(info.display_w, info.display_h, project.cover_kind(), st.cover.layout)
         add(
             "reels_cover",
@@ -161,13 +171,13 @@ def plan_render(project: Project, include_original_stills: bool = True) -> Rende
         )
 
     # ---------------------------------------------------------------- FEED
-    included = project.feed_included()
+    included = project.feed_included() if want("feed") else []
     if len(included) > FEED_MAX_FINAL:
         plan.issues.append(
             PlanIssue(
                 "error",
                 f"피드 포함 항목이 {len(included)}개입니다. 최종 출력은 {FEED_MAX_FINAL}개 이하여야 합니다. "
-                "FEED 관리 창에서 포함 항목을 줄여주세요.",
+                "FEED 목록에서 체크를 해제하거나 삭제해 주세요.",
             )
         )
     else:
@@ -224,25 +234,27 @@ def plan_render(project: Project, include_original_stills: bool = True) -> Rende
                         {"frame": it.start, "item": it.id},
                         info.width * info.height * (6 if ext == "tiff" else 3) // 2,
                     )
-        if project.feed_warnings():
+        if want("feed") and project.feed_warnings():
             plan.issues.append(
                 PlanIssue("warn", f"피드 중복/겹침 가능성 {len(project.feed_warnings())}건 (자동 삭제하지 않음)")
             )
 
     # ---------------------------------------------------------------- CAPTION
-    cap = project.caption_result()
-    cdir = root / "CAPTION"
-    add(
-        "captions",
-        "캡션/댓글/크레딧 원문",
-        cdir / "CAPTION.txt",
-        {"caption": cap.caption, "comments": cap.comments, "credits_raw": st.credits_raw},
-        10_000,
-    )
-    for w in cap.warnings:
-        plan.issues.append(PlanIssue("warn", w))
+    if want("credits"):
+        cap = project.caption_result()
+        cdir = root / "CAPTION"
+        add(
+            "captions",
+            "캡션/댓글/크레딧 원문",
+            cdir / "CAPTION.txt",
+            {"caption": cap.caption, "comments": cap.comments, "credits_raw": st.credits_raw},
+            10_000,
+        )
+        for w in cap.warnings:
+            plan.issues.append(PlanIssue("warn", w))
 
-    if not [j for j in plan.jobs if j.kind != "captions"]:
+    only_credits = sections is not None and set(sections) == {"credits"}
+    if not only_credits and not [j for j in plan.jobs if j.kind != "captions"]:
         plan.issues.append(
             PlanIssue("error", "렌더링할 항목이 없습니다. STORY / REELS / FEED 중 하나 이상을 선택하세요.")
         )

@@ -20,7 +20,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import BUILD_CHANNEL, BUILD_ID, __version__
+from . import BUILD_CHANNEL, BUILD_ID, BUILD_TOKEN, __version__
 
 DEFAULT_REPO = "kammy0328/Instagram_Content_Studio"
 DEFAULT_CHANNEL = "main"
@@ -67,7 +67,7 @@ def _open(url: str, token: str, accept: str, timeout: float = 30.0):
     except urllib.error.HTTPError as e:
         if e.code in (401, 403, 404) and not token:
             raise UpdateError(
-                "저장소가 비공개이거나 릴리스가 없습니다. 업데이트 설정에서 읽기 전용 토큰을 입력하세요."
+                "업데이트 서버에 접근할 수 없습니다 (저장소가 비공개이고 이 빌드에 읽기 권한이 없습니다)."
             ) from None
         if e.code in (401, 403):
             raise UpdateError("토큰이 올바르지 않거나 권한이 없습니다 (Contents: Read 필요).") from None
@@ -175,6 +175,11 @@ def due(last_check: float, now: float | None = None) -> bool:
 
 def current_channel(configured: str = "") -> str:
     return configured or (BUILD_CHANNEL if BUILD_CHANNEL not in ("", "dev") else DEFAULT_CHANNEL)
+
+
+def default_token(stored: str = "") -> str:
+    """사용자가 입력할 필요 없다: 빌드에 포함된 읽기 전용 토큰(있으면)을 쓰고, 예전에 저장해 둔 토큰은 그다음."""
+    return BUILD_TOKEN or stored
 
 
 def current_label() -> str:

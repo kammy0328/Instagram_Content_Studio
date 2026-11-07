@@ -128,11 +128,11 @@ class StoryOverlay:
 
     logo_on: bool = False
     logo_path: str = ""
-    logo_pos: str = "top"  # 'top' | 'bottom' (어느 여백에 둘지)
-    logo_size: int = 40  # 캔버스 폭 대비 %
+    logo_pos: str = "bottom"  # 'top' | 'bottom' (어느 여백에 둘지)
+    logo_size: int = 22  # 캔버스 폭 대비 %
     text_on: bool = False
     text: str = ""  # 비어 있으면 프로젝트명
-    text_pos: str = "bottom"
+    text_pos: str = "top"
     text_font: str = "Pretendard"
     text_size: int = 56  # 1080 폭 기준 px
     text_bold: bool = True
@@ -148,9 +148,9 @@ class StoryOverlay:
             if k in o.__dict__ and isinstance(v, type(o.__dict__[k])):
                 setattr(o, k, v)
         if o.logo_pos not in ("top", "bottom"):
-            o.logo_pos = "top"
+            o.logo_pos = "bottom"
         if o.text_pos not in ("top", "bottom"):
-            o.text_pos = "bottom"
+            o.text_pos = "top"
         o.logo_size = min(100, max(5, int(o.logo_size)))
         o.text_size = min(200, max(12, int(o.text_size)))
         return o

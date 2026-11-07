@@ -505,6 +505,57 @@ class XmlImportDialog(QDialog):
 
 
 # ============================================================================ 렌더링
+class ExportChooser(QDialog):
+    """내보낼 묶음 선택: STORY / REELS / FEED / CREDITS 를 각각 따로 내보낼 수 있다."""
+
+    LABELS = (
+        ("story", "STORY", "스토리 영상"),
+        ("reels", "REELS", "릴스 영상과 커버"),
+        ("feed", "FEED", "피드 영상·스틸과 원본 스틸"),
+        ("credits", "CREDITS", "캡션·댓글·크레딧 텍스트"),
+    )
+
+    def __init__(self, available: dict[str, bool], parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("내보내기")
+        self.setMinimumWidth(380)
+        v = QVBoxLayout(self)
+        v.setContentsMargins(24, 22, 24, 22)
+        v.setSpacing(10)
+        h = QLabel("무엇을 내보낼까요?")
+        h.setObjectName("h1")
+        v.addWidget(h)
+        self.boxes: dict[str, QCheckBox] = {}
+        for key, title, sub in self.LABELS:
+            cb = QCheckBox(f"{title}  ·  {sub}")
+            ok = available.get(key, True)
+            cb.setChecked(ok)
+            cb.setEnabled(ok)
+            if not ok:
+                cb.setToolTip("현재 프로젝트에서 사용하지 않는 항목입니다.")
+            self.boxes[key] = cb
+            v.addWidget(cb)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        cancel = QPushButton("취소")
+        cancel.clicked.connect(self.reject)
+        self.ok = QPushButton("다음")
+        self.ok.setObjectName("primary")
+        self.ok.clicked.connect(self.accept)
+        row.addWidget(cancel)
+        row.addWidget(self.ok)
+        v.addLayout(row)
+        for cb in self.boxes.values():
+            cb.toggled.connect(self._sync)
+        self._sync()
+
+    def _sync(self) -> None:
+        self.ok.setEnabled(any(cb.isChecked() for cb in self.boxes.values()))
+
+    def selected(self) -> set[str]:
+        return {k for k, cb in self.boxes.items() if cb.isChecked()}
+
+
 class RenderDialog(QDialog):
     startRequested = Signal(bool)  # overwrite
     cancelRequested = Signal()
@@ -630,8 +681,6 @@ class RenderDialog(QDialog):
         self.bars[j.id].setValue(int(j.progress * 100))
         self.table.item(i, 3).setText("" if not j.eta or j.status != "running" else f"약 {int(j.eta)}초")
         note = j.error or (("약 " + fmt_bytes(j.result.get("size_bytes", 0))) if j.status == "done" else "")
-        if j.status == "done" and j.result.get("audio_check", {}).get("clipping_risk"):
-            note += "  ⚠ 오디오 피크가 0dBFS 근처 (클리핑 주의, 볼륨은 변경하지 않음)"
         if j.status == "skipped":
             note = "기존 파일 유지"
         self.table.item(i, 4).setText(note)
