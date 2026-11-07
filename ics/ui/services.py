@@ -21,12 +21,17 @@ from ..core.frameindex import FrameIndex, _cache_key, build_frame_index
 from ..core.media import MediaInfo, analyze
 
 PROXY_COLOR = "in_color_matrix=bt709:in_range=full"
-PREVIEW_MAX_W = 960
+PREVIEW_MAX_W = 1440  # 화면 재생/스크럽용 디코딩 크기 상한 (가로 영상 기준 810p)
+PREVIEW_MAX_H = 1800  # 세로 영상 상한
+PROXY_MAX_W = 1920  # 프록시 파일 상한 (가로 영상 1080p)
+PROXY_MAX_H = 2400  # 세로 영상 상한
+PROXY_REV = "p2"  # 프록시 규격이 바뀌면 올려서 이전 저해상도 캐시를 다시 만들게 한다
 
 
-def preview_size(info: MediaInfo, max_w: int = PREVIEW_MAX_W) -> tuple[int, int]:
-    w = min(info.display_w, max_w)
-    h = int(round(w * info.display_h / info.display_w))
+def preview_size(info: MediaInfo, max_w: int = PREVIEW_MAX_W, max_h: int = PREVIEW_MAX_H) -> tuple[int, int]:
+    """가로/세로 상한 안에 들어가는 가장 큰 크기 (확대하지 않음, 짝수)."""
+    k = min(1.0, max_w / info.display_w, max_h / info.display_h)
+    w, h = int(round(info.display_w * k)), int(round(info.display_h * k))
     return max(2, w - w % 2), max(2, h - h % 2)
 
 
@@ -49,8 +54,12 @@ class ProxyBuilder(QObject):
         super().__init__()
         self.info, self.cache_dir = info, Path(cache_dir)
         key = _cache_key(info)
-        self.video_path = self.cache_dir / f"proxy_{key}.mkv"
+        self.video_path = self.cache_dir / f"proxy_{key}_{PROXY_REV}.mkv"
         self.audio_path = self.cache_dir / f"proxy_{key}.wav"
+        try:  # 이전 규격(저해상도) 프록시는 더 이상 쓰지 않으므로 정리
+            (self.cache_dir / f"proxy_{key}.mkv").unlink(missing_ok=True)
+        except OSError:
+            pass
         self._cancel = threading.Event()
         self._thread: threading.Thread | None = None
         self.index: FrameIndex | None = None
@@ -100,7 +109,7 @@ class ProxyBuilder(QObject):
             elif info.has_audio:
                 self.audioReady.emit(str(self.audio_path))
             if not self.video_path.is_file():
-                w, h = preview_size(info, 1280)
+                w, h = preview_size(info, PROXY_MAX_W, PROXY_MAX_H)
                 vf = ",".join(
                     pre_filters(info)
                     + [
@@ -520,8 +529,10 @@ class AudioPlayer:
             sink = QAudioSink(dev, fmt)
             sink.start(f)
             self._sink, self._file = sink, f
-            if sink.error() != QAudio.Error.NoError:
-                self.error = f"소리 출력 오류({sink.error().name}) - 출력 장치: {dev.description()}"
+            error = sink.error()
+            # Qt 버전에 따라 QtAudio.Error와 QAudio.Error가 다른 Python Enum이 될 수 있다.
+            if error.value != QAudio.Error.NoError.value:
+                self.error = f"소리 출력 오류({error.name}) - 출력 장치: {dev.description()}"
         except Exception as e:  # noqa: BLE001
             self.error = f"소리를 재생하지 못했습니다: {e}"
 
@@ -675,10 +686,12 @@ class PlaybackEngine(QObject):
                 self.imageReady.emit(shown[0], shown[1])
                 self.positionChanged.emit(shown[0])
         elif self.rate < 0:
+            if self.audio is not None:
+                self.audio.stop()  # 역재생에는 소리를 내지 않는다
             if target != self.current:
                 self.current = target
+                self.positionChanged.emit(target)  # 재생 위치를 먼저 갱신해야 곧바로 오는 프레임이 표시된다
                 self.frames.request(target)
-                self.positionChanged.emit(target)
 
     def shutdown(self) -> None:
         self.pause()

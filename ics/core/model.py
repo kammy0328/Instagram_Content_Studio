@@ -123,12 +123,49 @@ class FeedItem:
 
 
 @dataclass
+class StoryOverlay:
+    """STORY 의 검정 여백(영상 위/아래)에만 그리는 로고/제목 텍스트. 영상 위에는 절대 올라가지 않는다."""
+
+    bg_on: bool = True  # 검정 여백 대신 영상을 흐리게(렌즈 블러) 채운 배경
+    bg_dim: int = 45  # 배경을 어둡게 하는 정도(%) - 로고/제목이 잘 보이도록
+    logo_on: bool = False
+    logo_path: str = ""
+    logo_pos: str = "bottom"  # 'top' | 'bottom' (어느 여백에 둘지)
+    logo_size: int = 22  # 캔버스 폭 대비 %
+    text_on: bool = False
+    text: str = ""  # 비어 있으면 프로젝트명
+    text_pos: str = "top"
+    text_font: str = "Pretendard"
+    text_size: int = 56  # 1080 폭 기준 px
+    text_bold: bool = True
+    text_color: str = "#ececec"
+
+    def to_dict(self):
+        return dict(self.__dict__)
+
+    @classmethod
+    def from_dict(cls, d):
+        o = cls()
+        for k, v in (d or {}).items():
+            if k in o.__dict__ and isinstance(v, type(o.__dict__[k])):
+                setattr(o, k, v)
+        if o.logo_pos not in ("top", "bottom"):
+            o.logo_pos = "bottom"
+        if o.text_pos not in ("top", "bottom"):
+            o.text_pos = "top"
+        o.bg_dim = min(90, max(0, int(o.bg_dim)))
+        o.logo_size = min(100, max(5, int(o.logo_size)))
+        o.text_size = min(200, max(12, int(o.text_size)))
+        return o
+
+
+@dataclass
 class EditState:
     cuts: list[Cut] = field(default_factory=list)
     orig_cuts: list[dict] = field(default_factory=list)  # XML 에서 읽은 원본 컷(복원용)
     xml_meta: dict = field(default_factory=dict)
     story: Selection = field(default_factory=lambda: Selection(preset="60"))
-    reels: Selection = field(default_factory=lambda: Selection(preset="max"))
+    reels: Selection = field(default_factory=lambda: Selection(preset="60"))
     cover: Cover = field(default_factory=Cover)
     feed: list[FeedItem] = field(default_factory=list)
     credits_raw: str = ""
@@ -140,6 +177,9 @@ class EditState:
     comments_override: list[str] | None = None
     upload_checks: dict = field(default_factory=lambda: {"story": False, "reels": False, "feed": False})
     feed_seq: int = 0
+    feed_manual: bool = False  # True 면 feed 리스트 순서(드래그로 정한 순서)를 그대로 쓴다. False 는 타임코드 순
+    story_overlay: StoryOverlay = field(default_factory=StoryOverlay)
+    defaults_applied: bool = False  # 새 프로젝트의 기본 구간(STORY/REELS 60초)을 이미 넣었는가
     feed_ratio: str = "orig"  # FEED 출력 비율: 'orig'(원본 비율, 기본) | '45'(4:5)
     cover_ratio: str = "orig"  # REELS 커버 출력 비율: 'orig'(원본 비율, 기본) | '916'
     playhead: int = 0
@@ -161,6 +201,9 @@ class EditState:
             "comments_override": None if self.comments_override is None else list(self.comments_override),
             "upload_checks": dict(self.upload_checks),
             "feed_seq": self.feed_seq,
+            "feed_manual": self.feed_manual,
+            "story_overlay": self.story_overlay.to_dict(),
+            "defaults_applied": self.defaults_applied,
             "feed_ratio": self.feed_ratio,
             "cover_ratio": self.cover_ratio,
             "playhead": self.playhead,
@@ -184,6 +227,9 @@ class EditState:
         s.comments_override = d.get("comments_override")
         s.upload_checks.update(d.get("upload_checks", {}))
         s.feed_seq = d.get("feed_seq", 0)
+        s.feed_manual = bool(d.get("feed_manual", False))
+        s.story_overlay = StoryOverlay.from_dict(d.get("story_overlay"))
+        s.defaults_applied = bool(d.get("defaults_applied", True))  # 이전 버전 프로젝트의 선택 상태는 바꾸지 않는다
         # 이 설정이 없던 옛 프로젝트: 이미 4:5 로 구성한 피드가 있으면 그대로 4:5 를 유지한다 (결과가 바뀌면 안 됨)
         s.feed_ratio = d.get("feed_ratio") or ("45" if d.get("feed") else "orig")
         if s.feed_ratio not in ("orig", "45"):

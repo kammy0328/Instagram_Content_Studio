@@ -25,6 +25,7 @@ from .model import (
     EditState,
     FeedItem,
     Selection,
+    StoryOverlay,
     max_frames_for,
     new_id,
     sel_duration,
@@ -90,6 +91,23 @@ class Project:
     def attach_media(self, info: MediaInfo, index: FrameIndex) -> None:
         self.media, self.index = info, index
         self._notify("media")
+
+    def apply_default_ranges(self) -> None:
+        """새 프로젝트: STORY/REELS 를 처음부터 60초(영상이 짧으면 끝까지)로 미리 잡아 둔다. 이후 자유롭게 바꿀 수 있다."""
+        st = self.state
+        if st.defaults_applied or self.index is None or self.count < 1:
+            return
+        for which in ("story", "reels"):
+            sel = self._sel(which)
+            if sel.enabled:
+                continue
+            try:
+                end = self.limited_end(0, min(PRESET_SECONDS["60"], self._limit_sec(which)))
+            except ValueError:
+                continue
+            sel.enabled, sel.start, sel.end, sel.preset = True, 0, end, "60"
+        st.defaults_applied = True
+        self.request_save()
 
     # ================================================================ 알림/저장
     def add_listener(self, fn: Callable[[str], None]) -> None:
@@ -410,7 +428,25 @@ class Project:
             self.state.feed = [f for f in self.state.feed if f.id != item_id]
 
     def feed_ordered(self) -> list[FeedItem]:
+        if self.state.feed_manual:
+            return list(self.state.feed)
         return sorted(self.state.feed, key=lambda f: f.sort_key())
+
+    def set_feed_order(self, ids: list[str]) -> None:
+        """드래그로 바꾼 피드 순서를 저장한다. 목록에 없는 항목은 뒤에 현재 순서대로 붙인다."""
+        cur = self.feed_ordered()
+        by_id = {f.id: f for f in cur}
+        new = [by_id[i] for i in ids if i in by_id]
+        new += [f for f in cur if f.id not in set(ids)]
+        if [f.id for f in new] == [f.id for f in cur]:
+            return
+        with self.edit("피드 순서 변경", ("feed", "state")):
+            self.state.feed = new
+            self.state.feed_manual = True
+
+    def set_story_overlay(self, ov: StoryOverlay) -> None:
+        with self.edit("STORY 오버레이", ("story", "state")):
+            self.state.story_overlay = ov
 
     def feed_kind(self) -> str:
         """compute_geometry 에 넘기는 FEED 출력 종류: 'orig'(원본 비율) | '45'."""

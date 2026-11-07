@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QIcon, QPixmap
+from PySide6.QtGui import QIcon, QPixmap, QTransform
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QButtonGroup,
     QCheckBox,
     QComboBox,
@@ -18,6 +19,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QSlider,
+    QStyle,
     QVBoxLayout,
     QWidget,
 )
@@ -25,6 +27,7 @@ from PySide6.QtWidgets import (
 from ..core.layout import LayoutParams, compute_geometry
 from ..core.model import FEED_MAX_FINAL
 from ..core.timecode import frame_to_tc, tc_to_frame
+from .widgets import ElidedLabel, control_icon
 
 
 class TCEdit(QLineEdit):
@@ -35,6 +38,7 @@ class TCEdit(QLineEdit):
     def __init__(self, project):
         super().__init__()
         self.project = project
+        self.setObjectName("timecode")
         self.setFixedWidth(104)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setToolTip("타임코드 입력 (예: 00:01:02:12 · 1234f · 10212)")
@@ -59,6 +63,7 @@ class TCEdit(QLineEdit):
 
 class TransportBar(QWidget):
     playClicked = Signal()
+    reverseClicked = Signal()
     stepClicked = Signal(int)
     gotoClicked = Signal(str)
     loopToggled = Signal(bool)
@@ -68,21 +73,28 @@ class TransportBar(QWidget):
 
     def __init__(self, project):
         super().__init__()
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(8, 4, 8, 4)
+        self.setObjectName("transport")
+        v = QVBoxLayout(self)
+        v.setContentsMargins(12, 10, 12, 10)
+        v.setSpacing(9)
+        lay = QHBoxLayout()
+        lay.setSpacing(6)
         self.b_start = self._btn("⏮", "처음으로 (Home)", lambda: self.gotoClicked.emit("start"))
         self.b_prev = self._btn("◀|", "1프레임 뒤로 (←)", lambda: self.stepClicked.emit(-1))
+        self.b_rev = self._btn("◀", "역재생 (J) - 소리 없이 거꾸로 재생, 다시 누르면 정지", self.reverseClicked.emit)
         self.b_play = self._btn("▶", "재생/정지 (Space)", self.playClicked.emit)
         self.b_next = self._btn("|▶", "1프레임 앞으로 (→)", lambda: self.stepClicked.emit(1))
         self.b_end = self._btn("⏭", "끝으로 (End)", lambda: self.gotoClicked.emit("end"))
-        for b in (self.b_start, self.b_prev, self.b_play, self.b_next, self.b_end):
+        self.b_play.setObjectName("play")
+        self.b_play.setFixedWidth(40)
+        for b in (self.b_start, self.b_prev, self.b_rev, self.b_play, self.b_next, self.b_end):
             lay.addWidget(b)
         self.tc = TCEdit(project)
         self.tc.frameEntered.connect(self.frameEntered.emit)
         lay.addWidget(self.tc)
         self.frame_lbl = QLabel("f0")
         self.frame_lbl.setObjectName("muted")
-        self.frame_lbl.setMinimumWidth(90)
+        self.frame_lbl.setMinimumWidth(76)
         lay.addWidget(self.frame_lbl)
         self.rate_lbl = QLabel("")
         self.rate_lbl.setObjectName("muted")
@@ -91,12 +103,14 @@ class TransportBar(QWidget):
         self.mute_btn.setCheckable(True)
         self.mute_btn.toggled.connect(self.muteToggled.emit)
         lay.addWidget(self.mute_btn)
-        self.audio_lbl = QLabel("")
+        self.audio_lbl = ElidedLabel()
         self.audio_lbl.setObjectName("muted")
-        lay.addWidget(self.audio_lbl)
+        lay.addWidget(self.audio_lbl, 1)
         self._has_audio = True
         self.set_muted(False)
-        lay.addStretch(1)
+        v.addLayout(lay)
+        lay = QHBoxLayout()
+        lay.setSpacing(10)
         self.loop = QCheckBox("구간 반복")
         self.loop.toggled.connect(self.loopToggled.emit)
         lay.addWidget(self.loop)
@@ -108,12 +122,29 @@ class TransportBar(QWidget):
         lay.addWidget(self.view_btn)
         self.safe = QCheckBox("UI 안전영역")
         lay.addWidget(self.safe)
+        lay.addStretch(1)
+        v.addLayout(lay)
         self.project = project
 
     def _btn(self, text, tip, fn):
         b = QPushButton(text)
+        icons = {
+            "⏮": QStyle.StandardPixmap.SP_MediaSkipBackward,
+            "◀|": QStyle.StandardPixmap.SP_MediaSeekBackward,
+            "▶": QStyle.StandardPixmap.SP_MediaPlay,
+            "|▶": QStyle.StandardPixmap.SP_MediaSeekForward,
+            "⏭": QStyle.StandardPixmap.SP_MediaSkipForward,
+            "◀": QStyle.StandardPixmap.SP_MediaPlay,
+        }
+        ic = control_icon(self, icons[text], "#0a0a0a" if text == "▶" else "#ececec")
+        if text == "◀":  # 역재생: 재생 아이콘을 좌우로 뒤집는다
+            ic = QIcon(ic.pixmap(16, 16).transformed(QTransform().scale(-1, 1)))
+        b.setIcon(ic)
+        b.setText("")
+        b.setAccessibleName(tip)
         b.setToolTip(tip)
-        b.setFixedWidth(42)
+        b.setObjectName("compact")
+        b.setFixedWidth(32)
         b.clicked.connect(fn)
         return b
 
@@ -122,7 +153,9 @@ class TransportBar(QWidget):
         self.frame_lbl.setText(f"f{f} / {max(0, self.project.count - 1)}")
 
     def set_playing(self, playing: bool) -> None:
-        self.b_play.setText("⏸" if playing else "▶")
+        icon = QStyle.StandardPixmap.SP_MediaPause if playing else QStyle.StandardPixmap.SP_MediaPlay
+        self.b_play.setIcon(control_icon(self, icon, "#0a0a0a"))
+        self.b_play.setAccessibleName("일시 정지" if playing else "재생")
 
     def set_muted(self, muted: bool) -> None:
         """버튼 표시만 맞춘다 (muteToggled 는 내보내지 않는다)."""
@@ -262,14 +295,15 @@ class SelectionPanel(QWidget):
     coverRatioChanged = Signal(str)  # 'orig' | '916'
     coverLayoutLive = Signal(object)
     coverLayoutCommit = Signal(object)
+    overlayChanged = Signal(object)  # StoryOverlay (STORY 전용)
 
-    def __init__(self, which: str, project):
+    def __init__(self, which: str, project, settings=None):
         super().__init__()
         self.which, self.project = which, project
         v = QVBoxLayout(self)
-        v.setContentsMargins(6, 6, 6, 6)
+        v.setContentsMargins(14, 14, 14, 14)
         spec = "최대 60초 · 9:16 · 1080×1920 · MP4" if which == "story" else "최대 180초 · 9:16 · 1080×1920 · MP4"
-        t = QLabel(f"<b>{which.upper()}</b> (프로젝트당 1개)")
+        t = QLabel(f"{which.upper()} 설정")
         t.setObjectName("h1")
         v.addWidget(t)
         s = QLabel(spec)
@@ -327,6 +361,13 @@ class SelectionPanel(QWidget):
         self.layout_editor.changed.connect(self.layoutLive.emit)
         self.layout_editor.committed.connect(self.layoutCommit.emit)
         v.addWidget(self.layout_editor)
+        self.overlay_editor = None
+        if which == "story" and settings is not None:
+            from .overlay_editor import OverlayEditor
+
+            self.overlay_editor = OverlayEditor(settings)
+            self.overlay_editor.changed.connect(self.overlayChanged.emit)
+            v.addWidget(self.overlay_editor)
         if which == "reels":
             self._build_cover(v)
         v.addStretch(1)
@@ -407,6 +448,12 @@ class SelectionPanel(QWidget):
             self.layout_editor.set_info(
                 f"출력 {g.canvas_w}×{g.canvas_h}" + (f" · {g.tier_note}" if g.tier_note else "")
             )
+            if self.overlay_editor is not None:
+                from ..render import overlay as ov_mod
+
+                ov = p.state.story_overlay
+                warns = ov_mod.layout(ov, g, p.rec.name).warnings if ov_mod.active(ov, p.rec.name) else []
+                self.overlay_editor.set_value(ov, warns)
         if self.which == "reels":
             c = p.state.cover
             if c.frame is None:
@@ -432,8 +479,7 @@ class FeedPanel(QWidget):
     itemSelected = Signal(str)
     includeToggled = Signal(str, bool)
     deleteClicked = Signal(str)
-    manageClicked = Signal()
-    carouselToggled = Signal(bool)
+    orderChanged = Signal(list)  # 드래그로 바꾼 항목 id 순서
     layoutLive = Signal(object)
     layoutCommit = Signal(object)
     setIn = Signal()
@@ -507,16 +553,15 @@ class FeedPanel(QWidget):
         v.addWidget(g)
         self.count_lbl = QLabel("")
         v.addWidget(self.count_lbl)
-        hb = QHBoxLayout()
-        mb = QPushButton("관리 창…")
-        mb.clicked.connect(self.manageClicked.emit)
-        self.car_btn = QPushButton("캐러셀 미리보기")
-        self.car_btn.setCheckable(True)
-        self.car_btn.toggled.connect(self.carouselToggled.emit)
-        hb.addWidget(mb)
-        hb.addWidget(self.car_btn)
-        v.addLayout(hb)
+        hint = QLabel("항목을 끌어서 순서를 바꿀 수 있습니다. 체크를 해제하면 최종 출력에서 제외됩니다.")
+        hint.setObjectName("muted")
+        hint.setWordWrap(True)
+        v.addWidget(hint)
         self.list = QListWidget()
+        self.list.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self.list.setDefaultDropAction(Qt.DropAction.MoveAction)
+        self.list.setDragEnabled(True)
+        self.list.model().rowsMoved.connect(self._rows_moved)
         self.list.setIconSize(QSize(48, 60))
         self.list.setMinimumHeight(180)
         self.list.currentItemChanged.connect(self._cur_changed)
@@ -541,6 +586,12 @@ class FeedPanel(QWidget):
         v.addWidget(self.layout_editor)
         self._block = False
         self._in = self._out = 0
+
+    def _rows_moved(self, *_a) -> None:
+        if self._block:
+            return
+        ids = [self.list.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.list.count())]
+        QTimer.singleShot(0, lambda: self.orderChanged.emit(ids))  # 드롭 처리가 끝난 뒤 목록을 다시 그린다
 
     def current_id(self) -> str | None:
         it = self.list.currentItem()
@@ -610,7 +661,7 @@ class FeedPanel(QWidget):
         over = total > FEED_MAX_FINAL
         self.count_lbl.setText(
             f"포함 {total} / 최종 {FEED_MAX_FINAL}  (등록 전체 {len(items)}개)"
-            + ("  ⚠ 20개 초과 - 관리 창에서 줄여주세요" if over else "")
+            + ("  ⚠ 20개 초과 - 체크 해제 또는 삭제로 줄여주세요" if over else "")
         )
         self.count_lbl.setStyleSheet("color:#ff5d6c;font-weight:700;" if over else "")
         w = p.feed_warnings()

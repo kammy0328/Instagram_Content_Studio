@@ -54,6 +54,28 @@ def pump(app, ms=200):
         time.sleep(0.005)
 
 
+def test_editor_and_credits_fit_laptop_viewport(qapp, win):
+    # Windows offscreen 플러그인은 시스템 폰트를 자동 검색하지 못할 수 있다. 실제 한글 글꼴 폭으로 검사한다.
+    from pathlib import Path
+
+    from PySide6.QtGui import QFontDatabase
+
+    font = Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts" / "malgun.ttf"
+    if font.is_file() and not QFontDatabase.families():
+        QFontDatabase.addApplicationFont(str(font))
+    win.project.update_info(name="아주 긴 프로젝트 이름 " * 12)
+    win.resize(1280, 800)
+    pump(qapp)
+    assert win.width() == 1280
+    assert win.height() == 800
+    assert win.preview.width() >= 320
+    assert win.transport.view_btn.isVisible()
+    win.set_tab("credits")
+    pump(qapp)
+    assert win.width() == 1280
+    assert win.credits.body.isVisible()
+
+
 def test_tabs_in_out_inclusive_and_undo(qapp, win):
     p = win.project
     win.goto(50)
@@ -80,7 +102,7 @@ def test_tabs_in_out_inclusive_and_undo(qapp, win):
     assert win.tab == "story"
 
 
-def test_feed_add_still_video_and_carousel(qapp, win):
+def test_feed_add_still_video_and_drag_reorder(qapp, win):
     p = win.project
     win.set_tab("feed")
     win.goto(30)
@@ -93,12 +115,28 @@ def test_feed_add_still_video_and_carousel(qapp, win):
     pump(qapp)
     assert [f.kind for f in p.feed_included()] == ["still", "video"]
     assert (p.feed_included()[1].start, p.feed_included()[1].end) == (60, 91)
-    win.feed_panel.car_btn.setChecked(True)
-    pump(qapp, 600)
-    assert win.center_stack.currentIndex() == 1 and len(win.carousel.items) == 2
-    win.carousel.show_index(1)
-    win.feed_panel.car_btn.setChecked(False)
-    assert win.center_stack.currentIndex() == 0
+    # 목록에서 끌어서 순서 바꾸기: 두 번째 항목을 맨 앞으로
+    lst = win.feed_panel.list
+    ids = [lst.item(i).data(Qt.ItemDataRole.UserRole) for i in range(lst.count())]
+    assert len(ids) == 2
+    item = lst.takeItem(1)
+    lst.insertItem(0, item)
+    lst.model().rowsMoved.emit(lst.rootIndex(), 1, 1, lst.rootIndex(), 0)
+    pump(qapp, 200)
+    assert [f.id for f in p.feed_ordered()] == [ids[1], ids[0]]
+    assert p.state.feed_manual
+    # 새로 추가한 항목은 맨 뒤, 순서는 저장/복원 후에도 유지
+    win.goto(10)
+    win.add_still()
+    pump(qapp)
+    assert [f.id for f in p.feed_ordered()][:2] == [ids[1], ids[0]]
+    from ics.core.model import EditState
+
+    assert [f.id for f in EditState.from_dict(p.state.to_dict()).feed][:2] == [ids[1], ids[0]]
+    p.undo()
+    pump(qapp)
+    assert [f.id for f in p.feed_ordered()] == [ids[1], ids[0]]
+    assert not hasattr(win, "carousel") and not hasattr(win.feed_panel, "car_btn")
 
 
 def test_timeline_has_no_cut_lane_but_scrubbing_the_playhead_still_works(qapp, win):
@@ -759,9 +797,43 @@ def test_render_plan_includes_pending_caption(qapp, win):
     win.project.set_range("story", 0, 4)
     win.set_tab("credits")
     win.credits.body.setPlainText("렌더 직전 본문")
-    win.open_render()
+    win.open_render({"story", "reels", "feed", "credits"})
     try:
         job = next(j for j in win.render_dialog.plan.jobs if j.kind == "captions")
         assert job.params["caption"] == "렌더 직전 본문"
     finally:
         win.render_dialog.close()
+
+
+def test_new_project_dialog_needs_only_name_and_master_and_defaults_output_to_master_folder(
+    qapp, prores_2398, tmp_path
+):
+    from ics.ui.dialogs import NewProjectDialog
+
+    d = NewProjectDialog(None, "C:/old_output")
+    assert not hasattr(d, "artist") and not hasattr(d, "title")
+    d._set_master(str(prores_2398))
+    assert d.output.text() == str(prores_2398.parent)  # 마스터링 폴더가 출력 폴더 기본값
+    assert d.name.text() == prores_2398.stem
+    d.output.setText(str(tmp_path / "custom"))
+    d._output_edited = True  # 직접 바꾼 값은 유지
+    d._set_master(str(prores_2398))
+    assert d.output.text() == str(tmp_path / "custom")
+    v = d.values()
+    assert v["artist"] == "" and v["title"] == v["name"] and v["output_dir"] == str(tmp_path / "custom")
+
+
+def test_reverse_play_button_goes_backwards_shows_frames_and_stays_silent(qapp, win):
+    fake = win.playback.audio = FakeAudio()
+    win.goto(60)
+    shown = []
+    win.preview.set_image = lambda n, img, _o=win.preview.set_image: (shown.append(n), _o(n, img))
+    win.toggle_reverse()
+    assert win.playback.playing and win.playback.rate < 0
+    pump(qapp, 900)
+    moved = win.playhead
+    win.toggle_reverse()
+    pump(qapp, 150)
+    assert moved < 55 and not win.playback.playing
+    assert len(shown) >= 3 and shown[-1] <= shown[0]  # 거꾸로 가는 프레임이 실제로 화면에 나온다
+    assert not [c for c in fake.calls if c[0] == "play"]  # 역재생 중에는 노래가 나오지 않는다

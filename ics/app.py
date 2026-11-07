@@ -20,6 +20,8 @@ from .ui import theme
 from .ui.dialogs import MediaReportDialog, NewProjectDialog, ProjectListDialog
 from .ui.main_window import EditorWindow
 from .ui.settings import Settings
+from .ui.update_ui import AutoUpdate
+from .ui.widgets import studio_icon
 
 
 class App:
@@ -31,7 +33,8 @@ class App:
         self.qt.setQuitOnLastWindowClosed(False)
         self._switching = False
         self.qt.setApplicationName(APP_NAME)
-        self.qt.setStyleSheet(theme.STYLE)
+        theme.apply(self.qt)
+        self.qt.setWindowIcon(studio_icon())
         self.settings = Settings()
         self.library = Library()
         self.iddict = IdDictionary()
@@ -58,6 +61,8 @@ class App:
             QMessageBox.critical(None, "FFmpeg 없음", str(e))
             return 2
         QTimer.singleShot(0, self.show_projects)
+        self._auto_update = AutoUpdate(self.settings)
+        QTimer.singleShot(3000, self._auto_update.start)
         return self.qt.exec()
 
     def _quit(self) -> None:
@@ -136,6 +141,7 @@ class App:
             return
         res = project.open()
         project.attach_media(info, index)
+        project.apply_default_ranges()  # 새 프로젝트: STORY/REELS 를 60초로 미리 지정 (기존 프로젝트는 그대로)
         # 원본이 바뀐 경우(크기/수정시간/길이) 경고
         summ = None
         if res["restored"]:

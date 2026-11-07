@@ -84,3 +84,9 @@ def safe_filename(name: str, replacement: str = "_", max_len: int = 120) -> str:
     if s.split(".")[0].upper() in _WIN_RESERVED:
         s = "_" + s
     return s[:max_len]
+
+
+def resource_path(rel: str) -> Path:
+    """번들(PyInstaller)된 데이터 파일 또는 소스 저장소의 같은 경로."""
+    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
+    return base / rel

@@ -36,6 +36,8 @@ class VideoSpec:
     end: int  # 미포함 끝 프레임 (exclusive)
     geo: Geometry
     fps_out: Fraction | None = None
+    overlay_png: str | None = None  # 캔버스 크기 투명 PNG (STORY 로고/제목). 여백(배경) 위에만 그려져 있다
+    bg_dim: int | None = None  # 값이 있으면 여백을 흐린 영상 배경으로 채우고 이만큼(%) 어둡게 한다
 
 
 def _assert_original(info: MediaInfo, src: str) -> None:
@@ -64,8 +66,18 @@ def build_video_cmd(
     n_out = max(1, int(round(dur * float(fps_out)))) if not index.is_cfr else nsrc
     if index.is_cfr and fps_out != index.fps:
         n_out = max(1, int(round(dur * float(fps_out))))
-    vf = filters.video_filter(info, spec.geo, fps_out if (not index.is_cfr or fps_out != index.fps) else None)
-    vf = "setpts=PTS-STARTPTS," + vf if False else vf
+    use_ov = bool(spec.overlay_png)
+    if use_ov and not os.path.isfile(spec.overlay_png):
+        raise RenderError(f"오버레이 이미지를 찾을 수 없습니다: {spec.overlay_png}")
+    use_bg = filters.has_bg(spec.geo, spec.bg_dim)
+    use_fc = use_ov or use_bg
+    vf = filters.video_filter(
+        info,
+        spec.geo,
+        fps_out if (not index.is_cfr or fps_out != index.fps) else None,
+        overlay=use_ov,
+        bg_dim=spec.bg_dim,
+    )
     enc = filters.x264_params(spec.geo, fps_out)
     af, aargs = filters.audio_filter_and_args(info, a_off, dur)
     cmd = [
@@ -81,13 +93,19 @@ def build_video_cmd(
         f"{seek:.6f}",
         "-i",
         src,
-        "-map",
-        "0:v:0",
     ]
+    if use_fc:
+        if use_ov:
+            cmd += ["-i", spec.overlay_png]
+        cmd += ["-filter_complex", vf.replace("[0:v]", "[0:v]setpts=PTS-STARTPTS,", 1)]
+        cmd += ["-map", "[vout]"]
+    else:
+        cmd += ["-map", "0:v:0"]
     if af:
         cmd += ["-map", "0:a:0"]
-    # setpts 로 첫 프레임을 0 으로 정렬한 뒤 필터 적용
-    cmd += ["-vf", "setpts=PTS-STARTPTS," + vf]
+    if not use_fc:
+        # setpts 로 첫 프레임을 0 으로 정렬한 뒤 필터 적용
+        cmd += ["-vf", "setpts=PTS-STARTPTS," + vf]
     if af:
         cmd += ["-af", af]
     cmd += (
@@ -113,6 +131,8 @@ def build_video_cmd(
         "canvas": f"{spec.geo.canvas_w}x{spec.geo.canvas_h}",
         "seek": seek,
         "audio_offset": a_off,
+        "overlay": bool(spec.overlay_png),
+        "bg_blur": use_bg,
     }
     return cmd, meta
 

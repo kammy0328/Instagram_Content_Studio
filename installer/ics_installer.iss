@@ -1,6 +1,6 @@
 ; Inno Setup 6 스크립트 - PyInstaller 결과물(dist\InstagramContentStudio)을 설치 파일로 묶는다.
 #define MyAppName "Instagram Content Studio"
-#define MyAppVersion "1.0.6"
+#define MyAppVersion "1.1.0"
 #define MyAppExe "InstagramContentStudio.exe"
 
 [Setup]
@@ -19,6 +19,7 @@ MinVersion=10.0
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 WizardStyle=modern
+SetupIconFile=..\assets\studio.ico
 UninstallDisplayIcon={app}\{#MyAppExe}
 
 [Languages]
@@ -35,6 +36,8 @@ Name: "desktopicon"; Description: "바탕 화면 아이콘 만들기"; Flags: un
 
 [Files]
 Source: "..\dist\InstagramContentStudio\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; 클라우드 중계(Cloudflare Worker) 소스: 사용자가 직접 배포한다 (README.md 의 설정 순서 참고)
+Source: "..\worker\*"; DestDir: "{app}\relay"; Excludes: "node_modules\*,.wrangler\*,test\*,.dev.vars"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"
@@ -42,5 +45,13 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"; Tasks: deskto
 
 [Run]
 Filename: "{app}\{#MyAppExe}"; Description: "{#MyAppName} 실행"; Flags: nowait postinstall skipifsilent
+; 앱 안에서 자동 업데이트로 조용히 설치된 경우(/LAUNCH=1) 끝나고 다시 실행한다
+Filename: "{app}\{#MyAppExe}"; Flags: nowait; Check: ShouldRelaunch
 
 ; 프로젝트 데이터(%APPDATA%\InstagramContentStudio)와 출력 폴더는 제거하지 않는다 (사용자 데이터 보호).
+
+[Code]
+function ShouldRelaunch: Boolean;
+begin
+  Result := ExpandConstant('{param:LAUNCH|0}') = '1';
+end;

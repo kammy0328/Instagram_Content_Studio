@@ -188,3 +188,12 @@ def test_final_render_code_never_references_proxy():
     for mod in ("planner.py", "queue.py", "filters.py"):
         text = (ROOT / "ics" / "render" / mod).read_text(encoding="utf-8").lower()
         assert "proxy" not in text, f"{mod} 이(가) 프록시를 참조합니다"
+
+
+def test_sections_export_separately(proj):
+    only = plan_render(proj, sections={"credits"})
+    assert [j.kind for j in only.jobs] == ["captions"] and not only.blocked
+    story = plan_render(proj, sections={"story"})
+    assert all(j.kind == "story" for j in story.jobs)
+    no_feed = plan_render(proj, sections={"story", "reels"})
+    assert not any(j.kind.startswith("feed") or j.kind == "captions" for j in no_feed.jobs)

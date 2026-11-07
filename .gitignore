@@ -51,3 +51,4 @@ LICENSES/FFMPEG_LICENSE.txt
 installer/Output/
 installer/Korean.isl
 release/
+ics/_build.py

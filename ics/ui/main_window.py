@@ -19,8 +19,10 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSplitter,
     QStackedWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -35,7 +37,7 @@ from . import theme
 from .credits_page import CreditsPage
 from .cutstrip import CutStrip
 from .dialogs import (
-    FeedManagerDialog,
+    ExportChooser,
     IdDictionaryDialog,
     MediaReportDialog,
     ReadyDialog,
@@ -48,6 +50,7 @@ from .preview import PreviewWidget
 from .services import Decoder, FrameService, PlaybackEngine, ProxyBuilder, ThumbService, np_to_qimage
 from .settings import DEFAULT_SHORTCUTS, Settings
 from .timeline import TimelineWidget
+from .widgets import ElidedLabel, WorkspaceButton, studio_icon
 
 
 class StillLoader(QObject):
@@ -77,94 +80,6 @@ class StillZoomDialog(QDialog):
         v.addWidget(sc)
 
 
-class CarouselView(QWidget):
-    """인스타그램 캐러셀 형태 좌우 넘김 미리보기 (영상 재생 / 스틸 확대 / 순번·포함 상태)."""
-
-    requestPlay = Signal(int, int)
-    requestStop = Signal()
-
-    def __init__(self, project):
-        super().__init__()
-        self.project = project
-        self.items = []
-        self.idx = 0
-        self.token = 0
-        self.canvas_img: QImage | None = None
-        self.loader = StillLoader()
-        self.loader.loaded.connect(self._loaded)
-        v = QVBoxLayout(self)
-        self.pw = PreviewWidget()
-        v.addWidget(self.pw, 1)
-        r = QHBoxLayout()
-        self.b_prev = QPushButton("◀ 이전")
-        self.b_next = QPushButton("다음 ▶")
-        self.lbl = QLabel("")
-        self.lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.b_play = QPushButton("▶ 영상 재생")
-        self.b_zoom = QPushButton("🔍 스틸 확대")
-        self.b_prev.clicked.connect(lambda: self.show_index(self.idx - 1))
-        self.b_next.clicked.connect(lambda: self.show_index(self.idx + 1))
-        self.b_play.clicked.connect(self._play)
-        self.b_zoom.clicked.connect(self._zoom)
-        for w in (self.b_prev, self.lbl, self.b_next, self.b_play, self.b_zoom):
-            r.addWidget(w, 1 if w is self.lbl else 0)
-        v.addLayout(r)
-        self.dots = QLabel("")
-        self.dots.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        v.addWidget(self.dots)
-
-    def refresh(self) -> None:
-        cur = self.items[self.idx].id if self.items and self.idx < len(self.items) else None
-        self.items = self.project.feed_included()
-        self.idx = next(
-            (i for i, it in enumerate(self.items) if it.id == cur), min(self.idx, max(0, len(self.items) - 1))
-        )
-        self.show_index(self.idx, keep=True)
-
-    def show_index(self, i: int, keep: bool = False) -> None:
-        if not self.items:
-            self.lbl.setText("포함된 피드 항목이 없습니다")
-            self.pw.set_image(0, None)
-            self.dots.setText("")
-            return
-        self.idx = max(0, min(len(self.items) - 1, i))
-        it = self.items[self.idx]
-        self.lbl.setText(f"{self.idx + 1} / {len(self.items)}  ·  {'스틸' if it.kind == 'still' else '영상'}")
-        self.dots.setText(" ".join("●" if k == self.idx else "○" for k in range(len(self.items))))
-        self.b_prev.setEnabled(self.idx > 0)
-        self.b_next.setEnabled(self.idx < len(self.items) - 1)
-        self.b_play.setEnabled(it.kind == "video")
-        self.b_zoom.setEnabled(it.kind == "still")
-        self.requestStop.emit()
-        m = self.project.media
-        if it.kind == "still":
-            geo = compute_geometry(m.display_w, m.display_h, self.project.feed_kind(), it.layout)
-            self.token += 1
-            self.pw.set_canvas_mode()
-            self.loader.load(self.token, m, self.project.index, it.start, geo)
-        else:
-            self.pw.set_source_size(m.display_w, m.display_h)
-            self.pw.set_output(True, self.project.feed_kind(), it.layout)
-            self.canvas_img = None
-            self.requestPlay.emit(it.start, -1)  # 첫 프레임만 표시
-
-    def _loaded(self, token: int, img) -> None:
-        if token != self.token or img is None:
-            return
-        self.canvas_img = img
-        self.pw.set_canvas_mode()
-        self.pw.set_image(0, img)
-
-    def _play(self) -> None:
-        if self.items and self.items[self.idx].kind == "video":
-            it = self.items[self.idx]
-            self.requestPlay.emit(it.start, it.end)
-
-    def _zoom(self) -> None:
-        if self.canvas_img is not None:
-            StillZoomDialog(self.canvas_img, self).exec()
-
-
 class EditorWindow(QMainWindow):
     saveStatus = Signal(str, str)
     requestProjects = Signal()
@@ -177,7 +92,8 @@ class EditorWindow(QMainWindow):
         self.project, self.settings, self.iddict = project, settings, iddict
         info, index = project.media, project.index
         self.setWindowTitle(f"{project.rec.name} - Instagram Content Studio")
-        self.resize(1560, 940)
+        self.resize(1480, 920)
+        self.setWindowIcon(studio_icon())
         self.setStyleSheet(theme.STYLE)
         # ---- 서비스
         self.decoder = Decoder(info, index)
@@ -217,7 +133,6 @@ class EditorWindow(QMainWindow):
         self.proxy.audioReady.connect(self._on_audio_ready)
         self.proxy.audioFailed.connect(self._on_audio_failed)
         self.preview.set_source_size(info.display_w, info.display_h)
-        self.carousel.pw.set_source_size(info.display_w, info.display_h)
         self._init_audio_ui()
         # 이미 만들어 둔 프록시가 있어도 항상 시작한다: 없는 것만 만들고, 소리 연결과 프록시 색인 로드를 같은 경로로 처리한다
         self.proxy.start()
@@ -248,7 +163,7 @@ class EditorWindow(QMainWindow):
         body.addWidget(self.pages, 1)
         outer.addLayout(body, 1)
         self.toast_lbl = QLabel("", root)
-        self.toast_lbl.setStyleSheet("background:#264a7a;border:1px solid #4c9dff;border-radius:6px;padding:8px 14px;")
+        self.toast_lbl.setStyleSheet("background:#262626;border:1px solid #9a9a9a;border-radius:9px;padding:10px 18px;")
         self.toast_lbl.hide()
         self._toast_timer = QTimer(self)
         self._toast_timer.setSingleShot(True)
@@ -256,62 +171,105 @@ class EditorWindow(QMainWindow):
 
     def _topbar(self) -> QWidget:
         f = QFrame()
-        f.setObjectName("panel")
-        f.setFixedHeight(46)
-        h = QHBoxLayout(f)
-        h.setContentsMargins(10, 4, 10, 4)
-        b = QPushButton("← 프로젝트")
+        f.setObjectName("topbar")
+        v = QVBoxLayout(f)
+        v.setContentsMargins(18, 12, 18, 10)
+        v.setSpacing(7)
+        h = QHBoxLayout()
+        h.setSpacing(12)
+        b = QPushButton("←")
+        b.setObjectName("ghost")
+        b.setFixedWidth(34)
+        b.setToolTip("프로젝트 목록으로 돌아가기")
+        b.setAccessibleName("프로젝트 목록으로 돌아가기")
         b.clicked.connect(self._to_projects)
         h.addWidget(b)
-        self.title_lbl = QLabel("")
+        mark = QLabel()
+        mark.setPixmap(studio_icon().pixmap(34, 34))
+        h.addWidget(mark)
+        titles = QVBoxLayout()
+        titles.setSpacing(1)
+        product = QLabel("INSTAGRAM CONTENT STUDIO")
+        product.setObjectName("eyebrow")
+        titles.addWidget(product)
+        self.title_lbl = ElidedLabel()
         self.title_lbl.setObjectName("h1")
-        h.addWidget(self.title_lbl)
-        self.save_lbl = QLabel("● 저장됨")
-        h.addWidget(self.save_lbl)
-        self.proxy_lbl = QLabel("")
-        self.proxy_lbl.setObjectName("muted")
-        h.addWidget(self.proxy_lbl)
-        h.addStretch(1)
-        self.render_lbl = QLabel("")
-        h.addWidget(self.render_lbl)
+        titles.addWidget(self.title_lbl)
+        h.addLayout(titles, 1)
         self.b_undo = QPushButton("↶")
         self.b_redo = QPushButton("↷")
         self.b_undo.clicked.connect(self.do_undo)
         self.b_redo.clicked.connect(self.do_redo)
         for x in (self.b_undo, self.b_redo):
-            x.setFixedWidth(36)
+            x.setObjectName("ghost")
+            x.setFixedWidth(34)
             h.addWidget(x)
-        bm = QPushButton("영상 정보")
-        bm.clicked.connect(lambda: MediaReportDialog(self.project.media, self).exec())
-        bs = QPushButton("단축키")
-        bs.clicked.connect(self.open_shortcuts)
-        br = QPushButton("렌더링…")
+        more = QToolButton()
+        more.setText("도구  ···")
+        more.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        menu = QMenu(more)
+        menu.addAction("영상 정보", lambda: MediaReportDialog(self.project.media, self).exec())
+        menu.addAction("단축키 설정", self.open_shortcuts)
+        menu.addSeparator()
+        menu.addAction("업로드 준비", self.open_ready)
+        menu.addAction("업데이트…", self.open_update)
+        more.setMenu(menu)
+        h.addWidget(more)
+        br = QPushButton("내보내기  ↗")
         br.setObjectName("primary")
-        br.clicked.connect(self.open_render)
-        bu = QPushButton("업로드 준비…")
-        bu.clicked.connect(self.open_ready)
-        for x in (bm, bs, bu, br):
-            h.addWidget(x)
+        br.setToolTip("STORY · REELS · FEED 파일과 캡션을 확인하고 렌더링합니다.")
+        br.clicked.connect(lambda _=False: self.open_render())
+        bp = QPushButton("게시…")
+        bp.setToolTip("Instagram 에 게시/예약합니다 (Cloudflare 중계 필요).")
+        bp.clicked.connect(self.open_publisher)
+        h.addWidget(bp)
+        h.addWidget(br)
+        v.addLayout(h)
+        status = QHBoxLayout()
+        status.setSpacing(16)
+        self.save_lbl = QLabel("● 저장됨")
+        status.addWidget(self.save_lbl)
+        self.proxy_lbl = ElidedLabel()
+        self.proxy_lbl.setObjectName("muted")
+        status.addWidget(self.proxy_lbl, 1)
+        self.render_lbl = ElidedLabel()
+        self.render_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        status.addWidget(self.render_lbl, 1)
+        v.addLayout(status)
         return f
 
     def _nav(self) -> QWidget:
         f = QFrame()
-        f.setObjectName("panel")
-        f.setFixedWidth(150)
+        f.setObjectName("sidebar")
+        f.setFixedWidth(172)
         v = QVBoxLayout(f)
-        v.setContentsMargins(8, 10, 8, 10)
+        v.setContentsMargins(12, 20, 12, 18)
+        v.setSpacing(8)
+        label = QLabel("작업 공간")
+        label.setObjectName("eyebrow")
+        v.addWidget(label)
         self.nav_group = QButtonGroup(self)
         self.nav_btns: dict[str, QPushButton] = {}
-        for key, label in (("story", "STORY"), ("reels", "REELS"), ("feed", "FEED"), ("credits", "CREDITS")):
-            b = QPushButton(label)
-            b.setObjectName("nav")
-            b.setCheckable(True)
+        specs = (
+            ("story", "STORY", "9:16 · 최대 60초"),
+            ("reels", "REELS", "영상 + 커버"),
+            ("feed", "FEED", "캐러셀 · 최대 20개"),
+            ("credits", "CREDITS", "크레딧과 캡션"),
+        )
+        for n, (key, label, subtitle) in enumerate(specs, 1):
+            b = WorkspaceButton(f"0{n}", label, subtitle)
             b.clicked.connect(lambda _=False, k=key: self.set_tab(k))
             self.nav_group.addButton(b)
             v.addWidget(b)
             self.nav_btns[key] = b
         self.nav_btns["story"].setChecked(True)
         v.addStretch(1)
+        note = QLabel("원본에서 완성까지")
+        note.setObjectName("eyebrow")
+        v.addWidget(note)
+        self.output_summary = QLabel("")
+        self.output_summary.setWordWrap(True)
+        v.addWidget(self.output_summary)
         self.nav_info = QLabel("")
         self.nav_info.setObjectName("muted")
         self.nav_info.setWordWrap(True)
@@ -320,22 +278,31 @@ class EditorWindow(QMainWindow):
 
     def _editor_page(self) -> QWidget:
         sp = QSplitter(Qt.Orientation.Vertical)
+        sp.setContentsMargins(12, 12, 12, 12)
+        sp.setChildrenCollapsible(False)
         top = QSplitter(Qt.Orientation.Horizontal)
+        top.setChildrenCollapsible(False)
         # --- 중앙
-        center = QWidget()
+        center = QFrame()
+        center.setObjectName("workspaceCard")
         cv = QVBoxLayout(center)
         cv.setContentsMargins(0, 0, 0, 0)
         cv.setSpacing(0)
-        self.center_stack = QStackedWidget()
+        preview_header = QHBoxLayout()
+        preview_header.setContentsMargins(16, 12, 16, 8)
+        self.preview_title = QLabel("STORY 미리보기")
+        self.preview_title.setObjectName("eyebrow")
+        preview_header.addWidget(self.preview_title)
+        preview_header.addStretch(1)
+        self.preview_badge = QLabel("9:16")
+        self.preview_badge.setObjectName("badge")
+        preview_header.addWidget(self.preview_badge)
+        cv.addLayout(preview_header)
         self.preview = PreviewWidget()
-        self.carousel = CarouselView(self.project)
-        self.carousel.requestPlay.connect(self._carousel_play)
-        self.carousel.requestStop.connect(self.playback.pause)
-        self.center_stack.addWidget(self.preview)
-        self.center_stack.addWidget(self.carousel)
-        cv.addWidget(self.center_stack, 1)
+        cv.addWidget(self.preview, 1)
         self.transport = TransportBar(self.project)
         self.transport.playClicked.connect(self.toggle_play)
+        self.transport.reverseClicked.connect(self.toggle_reverse)
         self.transport.stepClicked.connect(lambda d: self.step(d))
         self.transport.gotoClicked.connect(lambda w: self.goto(0 if w == "start" else self.project.count - 1))
         self.transport.frameEntered.connect(self.goto)
@@ -346,7 +313,8 @@ class EditorWindow(QMainWindow):
         top.addWidget(center)
         # --- 우측 인스펙터
         self.inspector = QStackedWidget()
-        self.story_panel = SelectionPanel("story", self.project)
+        self.inspector.setObjectName("inspector")
+        self.story_panel = SelectionPanel("story", self.project, self.settings)
         self.reels_panel = SelectionPanel("reels", self.project)
         self.feed_panel = FeedPanel(self.project, self.thumbs)
         for w in (self.story_panel, self.reels_panel, self.feed_panel):
@@ -355,7 +323,8 @@ class EditorWindow(QMainWindow):
             sc.setWidget(w)
             sc.setFrameShape(QFrame.Shape.NoFrame)
             self.inspector.addWidget(sc)
-        self.inspector.setMinimumWidth(350)
+        self.inspector.setMinimumWidth(340)
+        self.inspector.setMaximumWidth(460)
         top.addWidget(self.inspector)
         top.setSizes([900, 380])
         top.setStretchFactor(0, 1)
@@ -376,7 +345,7 @@ class EditorWindow(QMainWindow):
         self.timeline.feedItemClicked.connect(self._feed_clicked)
         bv.addWidget(self.timeline)
         sp.addWidget(bottom)
-        sp.setSizes([600, 340])
+        sp.setSizes([640, 270])
         sp.setStretchFactor(0, 1)
         # --- 패널 연결
         for which, panel in (("story", self.story_panel), ("reels", self.reels_panel)):
@@ -388,6 +357,7 @@ class EditorWindow(QMainWindow):
             panel.clearClicked.connect(lambda w=which: self.project.clear_selection(w))
             panel.layoutLive.connect(lambda lp, w=which: self._layout_live(w, lp))
             panel.layoutCommit.connect(lambda _lp: self._layout_commit())
+        self.story_panel.overlayChanged.connect(self.project.set_story_overlay)
         self.reels_panel.coverSet.connect(lambda: self.project.set_cover_frame(self.playhead))
         self.reels_panel.coverGoto.connect(self._goto_cover)
         self.reels_panel.coverChanged.connect(lambda a, o: self.project.set_cover_grid(a, o))
@@ -401,9 +371,8 @@ class EditorWindow(QMainWindow):
         fp.itemSelected.connect(self._feed_selected)
         fp.includeToggled.connect(lambda i, v: self._feed_include(i, v))
         fp.deleteClicked.connect(self._feed_delete)
-        fp.manageClicked.connect(self.open_feed_manager)
         fp.ratioChanged.connect(self._set_feed_ratio)
-        fp.carouselToggled.connect(self._carousel_toggled)
+        fp.orderChanged.connect(self.project.set_feed_order)
         fp.layoutLive.connect(lambda lp: self._layout_live("feed", lp))
         fp.layoutCommit.connect(lambda _lp: self._layout_commit())
         fp.setIn.connect(self.set_in)
@@ -421,12 +390,14 @@ class EditorWindow(QMainWindow):
 
     def _cut_toolbar(self) -> QWidget:
         f = QFrame()
-        f.setObjectName("panel")
+        f.setObjectName("timelineToolbar")
         h = QHBoxLayout(f)
-        h.setContentsMargins(8, 3, 8, 3)
+        h.setContentsMargins(10, 10, 10, 10)
+        h.setSpacing(6)
 
         def btn(text, fn, tip="", checkable=False):
             b = QPushButton(text)
+            b.setObjectName("compact")
             b.setToolTip(tip)
             b.clicked.connect(fn)
             b.setCheckable(checkable)
@@ -439,25 +410,32 @@ class EditorWindow(QMainWindow):
             self.merge_selected,
             "Shift+클릭으로 선택한 연속 컷을 하나의 논리 컷으로 병합 (오른쪽 클릭 메뉴에서도 가능)",
         )
-        btn("병합 해제", self.unmerge_selected)
         btn(
             "컷 나누기 (C)",
             self.split_at_playhead,
             "현재 재생 헤드 위치에서 컷을 둘로 나눔 (재생 헤드 프레임이 뒤쪽 컷의 첫 프레임)",
         )
-        btn("원래 컷 복원", self.restore_cuts)
-        btn("선택 컷 → In/Out", self.cuts_to_inout, "선택한 (병합) 컷 범위를 현재 탭의 In/Out 으로 지정")
+        more = QToolButton()
+        more.setText("추가 작업")
+        more.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        menu = QMenu(more)
+        menu.addAction("병합 해제", self.unmerge_selected)
+        menu.addAction("원래 컷 복원", self.restore_cuts)
+        more.setMenu(menu)
+        h.addWidget(more)
+        btn("선택 컷 → In/Out", self.cuts_to_inout, "선택한 컷 범위를 현재 탭의 In/Out으로 지정")
         self.snap_btn = btn("스냅 ✓", self.toggle_snap, "스냅 켜기/끄기 (N)")
-        h.addStretch(1)
-        self.cut_info = QLabel("")
+        self.cut_info = ElidedLabel()
         self.cut_info.setObjectName("muted")
-        h.addWidget(self.cut_info)
+        self.cut_info.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        h.addWidget(self.cut_info, 1)
         for t, fn in (
             ("－", lambda: self.timeline.zoom(0.8)),
             ("＋", lambda: self.timeline.zoom(1.25)),
             ("전체", lambda: self.timeline.fit()),
         ):
             b = QPushButton(t)
+            b.setObjectName("compact")
             b.setFixedWidth(46 if t == "전체" else 32)
             b.clicked.connect(fn)
             h.addWidget(b)
@@ -541,8 +519,6 @@ class EditorWindow(QMainWindow):
                 self.reels_panel.cover_prev.blockSignals(True)
                 self.reels_panel.cover_prev.setChecked(False)
                 self.reels_panel.cover_prev.blockSignals(False)
-            if key != "feed":
-                self.feed_panel.car_btn.setChecked(False)
             self._update_preview_layout()
             self.timeline.update()
         self.project.set_ui("tab", key)
@@ -571,26 +547,14 @@ class EditorWindow(QMainWindow):
     def _on_frame_ready(self, n: int, img: QImage) -> None:
         if self.playback.playing and self.playback.rate > 0:
             return
+        if self.playback.playing and self.playback.rate < 0:  # 역재생: 디코딩이 끝나는 대로 최신 프레임을 바로 표시
+            self.preview.set_image(n, img)
+            return
         if n == self._display_frame():
             self.preview.set_image(n, img)
-        it = (
-            self.carousel.items[self.carousel.idx]
-            if self.carousel.items and self.carousel.idx < len(self.carousel.items)
-            else None
-        )
-        if (
-            it is not None
-            and it.kind == "video"
-            and n == it.start
-            and self.center_stack.currentIndex() == 1
-            and not self.playback.playing
-        ):
-            self.carousel.pw.set_image(n, img)
 
     def _on_play_image(self, n: int, img: QImage) -> None:
         self.preview.set_image(n, img)
-        if self.center_stack.currentIndex() == 1:
-            self.carousel.pw.set_image(n, img)
 
     def _on_play_pos(self, n: int) -> None:
         self.playhead = n
@@ -635,6 +599,20 @@ class EditorWindow(QMainWindow):
         self.transport.loop.setChecked(True)
         self.playback.play(r[0], 1.0, r)
 
+    def toggle_reverse(self) -> None:
+        """역재생 버튼: 소리 없이 -1배속으로 거꾸로 재생, 재생 중이면 정지."""
+        if self.playback.playing:
+            self.playback.pause()
+            self.rate_level = 0
+            self.transport.rate_lbl.setText("")
+            return
+        loop = self._active_range() if self.transport.loop.isChecked() else None
+        start = self.playhead
+        if loop and not (loop[0] < start <= loop[1]):
+            start = loop[1] - 1
+        self.transport.rate_lbl.setText("-1×")
+        self.playback.play(start, -1.0, loop)
+
     def shuttle(self, direction: int) -> None:
         cur = self.playback.rate if self.playback.playing else 0
         if direction > 0:
@@ -660,12 +638,6 @@ class EditorWindow(QMainWindow):
         else:
             prv = [s for s in starts if s < self.playhead]
             self.goto(prv[-1] if prv else 0)
-
-    def _carousel_play(self, start: int, end: int) -> None:
-        if end < 0:
-            self.frames.request(start)
-            return
-        self.playback.play(start, 1.0, (start, end))
 
     # ================================================================ 구간/In-Out
     def apply_preset(self, which: str, preset: str) -> None:
@@ -768,7 +740,9 @@ class EditorWindow(QMainWindow):
     def _check_over(self, was: int) -> None:
         now = len(self.project.feed_included())
         if now > FEED_MAX_FINAL >= was:
-            QTimer.singleShot(50, self.open_feed_manager)
+            self.toast(
+                f"피드가 {FEED_MAX_FINAL}개를 넘었습니다. 목록에서 체크를 해제하거나 삭제해 {FEED_MAX_FINAL}개 이하로 맞춰주세요."
+            )
 
     def _feed_selected(self, item_id: str) -> None:
         it = self.project.get_feed(item_id)
@@ -810,15 +784,6 @@ class EditorWindow(QMainWindow):
     def _set_feed_ratio(self, ratio: str) -> None:
         self.project.set_feed_ratio(ratio)
         self.toast("FEED 출력 비율: " + ("원본 비율" if ratio == "orig" else "4:5"))
-
-    def open_feed_manager(self) -> None:
-        FeedManagerDialog(self.project, self.thumbs, self).exec()
-        self._refresh()
-
-    def _carousel_toggled(self, on: bool) -> None:
-        self.center_stack.setCurrentIndex(1 if on else 0)
-        if on:
-            self.carousel.refresh()
 
     # ================================================================ 컷
     def import_xml(self) -> None:
@@ -1060,6 +1025,28 @@ class EditorWindow(QMainWindow):
         self.preview.safe_zone = on
         self.preview.update()
 
+    def _story_overlay_image(self):
+        """STORY 출력 미리보기에 겹쳐 그릴 오버레이 (최종 렌더링과 같은 함수, 설정이 같으면 캐시 재사용)."""
+        from ..render import overlay as ov_mod
+
+        ov, m = self.project.state.story_overlay, self.project.media
+        if m is None or not ov_mod.active(ov, self.project.rec.name):
+            return None
+        g = compute_geometry(m.display_w, m.display_h, "916", self.project.state.story.layout)
+        key = (
+            tuple(sorted(ov.to_dict().items())),
+            self.project.rec.name,
+            g.canvas_w,
+            g.canvas_h,
+            g.pad_y,
+            g.content_h,
+            g.mode,
+        )
+        if getattr(self, "_ov_key", None) != key:
+            self._ov_key = key
+            self._ov_img = ov_mod.render(ov, g, self.project.rec.name)[0]
+        return self._ov_img
+
     def _update_preview_layout(self) -> None:
         st = self.project.state
         view_out = self.transport.view_btn.isChecked()
@@ -1078,21 +1065,47 @@ class EditorWindow(QMainWindow):
             else:
                 kind = "916"
                 lp = (st.story if self.tab == "story" else st.reels).layout
+        ov_state = self.project.state.story_overlay
+        self.preview.bg_dim = (
+            ov_state.bg_dim if (self.tab == "story" and ov_state.bg_on and not self.cover_mode) else None
+        )
+        self.preview.overlay_img = (
+            self._story_overlay_image() if (self.tab == "story" and not self.cover_mode) else None
+        )
         self.preview.set_output(view_out or self.cover_mode, kind, lp)
+        self.preview_title.setText("릴스 커버 미리보기" if self.cover_mode else f"{self.tab.upper()} 미리보기")
+        self.preview_badge.setText(
+            {"916": "9:16", "45": "4:5", "orig": "원본 비율"}[kind] if view_out or self.cover_mode else "원본 보기"
+        )
 
     # ================================================================ 렌더링 / 업로드 준비
-    def open_render(self) -> None:
+    def open_render(self, sections: set[str] | None = None) -> None:
         if self.render_queue and self.render_queue.running and self.render_dialog:
             self.render_dialog.show()
             self.render_dialog.raise_()
             return
-        if self.project.feed_over_limit():
-            self.open_feed_manager()
-            if self.project.feed_over_limit():
+        if sections is None:
+            st = self.project.state
+            avail = {
+                "story": bool(st.story.enabled),
+                "reels": bool(st.reels.enabled),
+                "feed": bool(self.project.feed_included()),
+                "credits": True,
+            }
+            chooser = ExportChooser(avail, self)
+            if chooser.exec() != QDialog.DialogCode.Accepted:
                 return
+            sections = chooser.selected()
+        if "feed" in sections and self.project.feed_over_limit():
+            QMessageBox.warning(
+                self,
+                "내보내기",
+                f"피드 항목이 {FEED_MAX_FINAL}개를 넘었습니다. FEED 목록에서 체크를 해제하거나 삭제한 뒤 다시 시도하세요.",
+            )
+            return
         self.playback.pause()
         self.credits.flush_pending()
-        plan = plan_render(self.project)
+        plan = plan_render(self.project, sections=sections)
         dlg = RenderDialog(plan, self)
         self.render_dialog = dlg
         dlg.startRequested.connect(lambda ow, d=dlg, pl=plan: self._start_render(pl, ow))
@@ -1138,6 +1151,23 @@ class EditorWindow(QMainWindow):
     def open_ready(self) -> None:
         ReadyDialog(self.project, self, self.toast).exec()
 
+    def open_update(self) -> None:
+        from .update_ui import check_and_prompt
+
+        check_and_prompt(self.settings, self)
+
+    def open_publisher(self) -> None:
+        from .. import paths
+        from ..publisher.secrets import default_secret_store
+        from ..publisher.service import PublisherService
+        from .publisher_dialog import PublisherDialog
+
+        if getattr(self, "_pub_service", None) is None:
+            d = paths.app_data_dir() / "publisher"
+            d.mkdir(parents=True, exist_ok=True)
+            self._pub_service = PublisherService(d, self.settings, default_secret_store(d / "secrets.json"))
+        PublisherDialog(self.project, self._pub_service, self, self.toast).exec()
+
     # ================================================================ Undo/Redo
     def do_undo(self) -> None:
         self._layout_commit()
@@ -1178,14 +1208,14 @@ class EditorWindow(QMainWindow):
         self.nav_btns["story"].setText("STORY" + ("  ✓" if st.story.enabled else ""))
         self.nav_btns["reels"].setText("REELS" + ("  ✓" if st.reels.enabled else ""))
         self.nav_btns["feed"].setText(f"FEED  {n}/{FEED_MAX_FINAL}")
+        selected = int(st.story.enabled) + int(st.reels.enabled)
+        self.output_summary.setText(f"영상 구간 {selected}개\n피드 콘텐츠 {n}개")
         self.nav_info.setText(
             f"{self.project.media.display_w}×{self.project.media.display_h}\n"
             f"{float(self.project.fps):.3f} fps · {self.project.count} 프레임"
         )
         if self.pages.currentIndex() == 1:
             self.credits.refresh()
-        if self.center_stack.currentIndex() == 1:
-            self.carousel.refresh()
         self._request_display_frame()
 
     def _update_title(self) -> None:
@@ -1201,7 +1231,7 @@ class EditorWindow(QMainWindow):
         text, color = {
             "saved": ("● 저장됨", "#4cd08b"),
             "saving": ("저장 중…", "#f2b84b"),
-            "dirty": ("● 변경됨", "#8b92a3"),
+            "dirty": ("● 변경됨", "#8c8c8c"),
             "error": ("⚠ 저장 오류", "#ff5d6c"),
         }[status]
         self.save_lbl.setText(text)
@@ -1259,7 +1289,7 @@ class EditorWindow(QMainWindow):
         if ok and self.proxy.index is not None:
             self.decoder.set_proxy(str(self.proxy.video_path), self.proxy.index)
             self.frames.clear_cache()
-            self.proxy_lbl.setText("프록시 준비됨 (재생 전용 · 최종 렌더링은 항상 원본)")
+            self.proxy_lbl.setText("미리보기 준비됨 · 최종 출력은 원본 사용")
             self._request_display_frame()
         elif ok:
             self.proxy_lbl.setText("프록시 준비됨")

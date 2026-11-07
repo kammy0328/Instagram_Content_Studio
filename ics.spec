@@ -19,25 +19,49 @@ if os.path.isdir(ff_dir):
 if not any(os.path.basename(src).lower() == "ffmpeg.exe" for src, _ in ff_files):
     print(f"[ics.spec] 경고: {ff_dir} 에 ffmpeg.exe 가 없어 번들에서 제외됩니다 (설치 후 PATH 의 ffmpeg 를 사용).")
 
-datas = [(os.path.join(root, "LICENSES"), "LICENSES")] + ff_files
+datas = [
+    (os.path.join(root, "LICENSES"), "LICENSES"),
+    (os.path.join(root, "assets", "fonts"), os.path.join("assets", "fonts")),
+    (os.path.join(root, "assets", "logos"), os.path.join("assets", "logos")),
+] + ff_files
+
+# collect_submodules("ics") 만으로는 다른 모듈이 import 하지 않는 모듈(예: publisher.scheduler)이 번들에서 빠진 적이 있다
+# (v1.1.0 자체 점검이 잡아냄). 하위 패키지를 개별로, 그리고 publisher 는 이름까지 명시해 확실히 포함한다.
+publisher_mods = ["adapter", "capability", "cloud", "engine", "models", "relay", "scheduler", "secrets", "service", "store",
+                  "transport", "validate"]
+hidden = collect_submodules("ics")
+for sub in ("ics.core", "ics.render", "ics.ui", "ics.publisher"):
+    hidden += collect_submodules(sub)
+hidden += ["ics.publisher." + m for m in publisher_mods] + ["ics.ui.publisher_dialog"]
 
 a = Analysis(
     ["run.py"],
     pathex=[root],
     binaries=[],
     datas=datas,
-    hiddenimports=collect_submodules("ics") + ["regex"],
+    hiddenimports=sorted(set(hidden)) + ["regex"],
     excludes=["tkinter", "PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets", "PySide6.Qt3DCore",
               "PySide6.QtQuick", "PySide6.QtQml", "PySide6.QtCharts", "PySide6.QtDataVisualization"],
     noarchive=False,
 )
+# Windows Qt는 OS ICU를 사용한다. PATH의 Poppler/Conda ICU는 같은 이름에 다른 심볼을 제공하므로
+# 섞여 들어오면 QtCore가 로드되지 않는다. Qt가 직접 제공한 ICU만 보존하고 나머지는 OS에서 찾는다.
+if os.name == "nt":
+    import PySide6
+
+    qt_root = os.path.normcase(os.path.dirname(PySide6.__file__))
+    a.binaries = [
+        entry for entry in a.binaries
+        if os.path.basename(entry[0]).lower() not in {"icuuc.dll", "icuin.dll", "icudt.dll"}
+        or os.path.normcase(entry[1]).startswith(qt_root + os.sep)
+    ]
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 exe = EXE(
     pyz, a.scripts, [],
     exclude_binaries=True,
     name="InstagramContentStudio",
-    console=False,                # 콘솔 창 없음
-    icon=None,
+    console=os.environ.get("ICS_BUILD_CONSOLE") == "1",  # 진단 빌드 외에는 콘솔 창 없음
+    icon=os.path.join(root, "assets", "studio.ico"),
     disable_windowed_traceback=False,
 )
 coll = COLLECT(exe, a.binaries, a.zipfiles, a.datas, strip=False, upx=False, name="InstagramContentStudio")

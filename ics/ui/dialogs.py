@@ -8,8 +8,8 @@ import sys
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QSize, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QDesktopServices, QIcon, QKeySequence, QPixmap
+from PySide6.QtCore import Qt, QUrl, Signal
+from PySide6.QtGui import QDesktopServices, QKeySequence, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -40,10 +40,10 @@ from PySide6.QtWidgets import (
 from .. import paths
 from ..core import media as media_mod
 from ..core import xml_import as xmlmod
-from ..core.model import FEED_MAX_FINAL
 from ..core.timecode import frame_to_tc, tc_to_frame
 from ..render.planner import RenderJob, RenderPlan
 from .settings import DEFAULT_SHORTCUTS
+from .widgets import studio_icon
 
 
 def open_path(path: str) -> None:
@@ -82,7 +82,7 @@ class MediaReportDialog(QDialog):
         box.setMaximumHeight(210)
         v.addWidget(box)
         for iss in info.issues:
-            col = {"error": "#ff5d6c", "warn": "#f2b84b", "info": "#8b92a3"}[iss.level]
+            col = {"error": "#ff5d6c", "warn": "#f2b84b", "info": "#8c8c8c"}[iss.level]
             icon = {"error": "⛔", "warn": "⚠", "info": "ℹ"}[iss.level]
             lb = QLabel(f"{icon} {iss.message}")
             lb.setWordWrap(True)
@@ -99,17 +99,30 @@ class NewProjectDialog(QDialog):
     def __init__(self, parent=None, default_output: str = ""):
         super().__init__(parent)
         self.setWindowTitle("새 프로젝트")
+        self.setWindowIcon(studio_icon())
         self.setAcceptDrops(True)
-        self.resize(560, 330)
+        self.resize(640, 360)
         self.info: media_mod.MediaInfo | None = None
         v = QVBoxLayout(self)
+        v.setContentsMargins(28, 24, 28, 24)
+        v.setSpacing(14)
+        heading = QLabel("새 프로젝트 만들기")
+        heading.setObjectName("h1")
+        v.addWidget(heading)
+        note = QLabel(
+            "프로젝트명과 마스터링 영상만 정하면 됩니다. 출력 폴더는 마스터링과 같은 폴더가 기본값이고 바꿀 수 있어요."
+        )
+        note.setObjectName("muted")
+        v.addWidget(note)
         f = QFormLayout()
         self.name = QLineEdit()
-        self.artist = QLineEdit()
-        self.title = QLineEdit()
+        self.name.setPlaceholderText("예: 아티스트_뮤직비디오")
         self.master = QLineEdit()
         self.master.setPlaceholderText("MP4/MOV 마스터링 영상을 끌어다 놓거나 선택")
         self.output = QLineEdit(default_output)
+        self.output.setPlaceholderText("비워 두면 마스터링 영상이 있는 폴더를 사용합니다")
+        self._output_edited = False  # 사용자가 직접 바꾼 뒤에는 마스터링 경로 변경이 출력 경로를 덮어쓰지 않는다
+        self.output.textEdited.connect(lambda _t: setattr(self, "_output_edited", True))
         bm = QPushButton("선택…")
         bm.clicked.connect(self._pick_master)
         bo = QPushButton("선택…")
@@ -120,8 +133,6 @@ class NewProjectDialog(QDialog):
         ro.addWidget(self.output)
         ro.addWidget(bo)
         f.addRow("프로젝트명", self.name)
-        f.addRow("아티스트", self.artist)
-        f.addRow("영상 제목", self.title)
         f.addRow("마스터링 경로", rm)
         f.addRow("출력 경로", ro)
         v.addLayout(f)
@@ -131,6 +142,8 @@ class NewProjectDialog(QDialog):
         v.addStretch(1)
         bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         bb.button(QDialogButtonBox.StandardButton.Ok).setText("프로젝트 만들기")
+        bb.button(QDialogButtonBox.StandardButton.Ok).setObjectName("primary")
+        bb.button(QDialogButtonBox.StandardButton.Cancel).setText("취소")
         bb.accepted.connect(self._ok)
         bb.rejected.connect(self.reject)
         v.addWidget(bb)
@@ -153,21 +166,24 @@ class NewProjectDialog(QDialog):
         self.master.setText(p)
         if not self.name.text():
             self.name.setText(Path(p).stem)
-        if not self.title.text():
-            self.title.setText(Path(p).stem)
+        if not self._output_edited:
+            self.output.setText(str(Path(p).parent))
 
     def _pick_output(self):
         p = QFileDialog.getExistingDirectory(self, "출력 경로", self.output.text())
         if p:
             self.output.setText(p)
+            self._output_edited = True
 
     def _ok(self):
         if not self.name.text().strip():
             self.msg.setText("프로젝트명을 입력하세요.")
             return
-        if not self.output.text().strip():
-            self.msg.setText("출력 경로를 지정하세요.")
+        if not self.master.text().strip():
+            self.msg.setText("마스터링 영상을 선택하세요.")
             return
+        if not self.output.text().strip():
+            self.output.setText(str(Path(self.master.text().strip()).parent))
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             info = media_mod.analyze(self.master.text().strip())
@@ -183,8 +199,8 @@ class NewProjectDialog(QDialog):
     def values(self) -> dict:
         return {
             "name": self.name.text().strip(),
-            "artist": self.artist.text().strip(),
-            "title": self.title.text().strip(),
+            "artist": "",
+            "title": self.name.text().strip(),
             "master_path": self.master.text().strip(),
             "output_dir": self.output.text().strip(),
         }
@@ -196,20 +212,58 @@ class ProjectListDialog(QDialog):
         super().__init__(parent)
         self.library = library
         self.setWindowTitle("Instagram Content Studio - 프로젝트")
-        self.resize(900, 460)
+        self.setWindowIcon(studio_icon())
+        self.resize(1000, 660)
         self.chosen = None
         v = QVBoxLayout(self)
-        h = QLabel("프로젝트")
-        h.setObjectName("h1")
-        v.addWidget(h)
+        v.setContentsMargins(30, 28, 30, 24)
+        v.setSpacing(16)
+        brand = QHBoxLayout()
+        mark = QLabel()
+        mark.setPixmap(studio_icon().pixmap(36, 36))
+        brand.addWidget(mark)
+        name = QLabel("INSTAGRAM CONTENT STUDIO")
+        name.setObjectName("eyebrow")
+        brand.addWidget(name)
+        brand.addStretch(1)
+        v.addLayout(brand)
+        heading = QLabel("마스터링의 다음 장면을 만들어 보세요.")
+        heading.setObjectName("hero")
+        v.addWidget(heading)
+        description = QLabel("하나의 원본에서 STORY, REELS, FEED까지. 프레임 단위로 선택하고 완성하세요.")
+        description.setObjectName("muted")
+        v.addWidget(description)
+        specs = QHBoxLayout()
+        for title, detail in (
+            ("STORY", "9:16 · 최대 60초"),
+            ("REELS", "세로 영상과 커버 이미지"),
+            ("FEED", "이미지와 영상을 캐러셀로"),
+        ):
+            card = QGroupBox(title)
+            layout = QVBoxLayout(card)
+            label = QLabel(detail)
+            label.setObjectName("muted")
+            layout.addWidget(label)
+            specs.addWidget(card)
+        v.addLayout(specs)
+        recent = QLabel("최근 프로젝트")
+        recent.setObjectName("eyebrow")
+        v.addWidget(recent)
         self.table = QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(["프로젝트명", "아티스트", "영상 제목", "마지막 수정", "마스터링 파일"])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
+        self.table.verticalHeader().hide()
+        self.table.verticalHeader().setDefaultSectionSize(44)
         self.table.doubleClicked.connect(self._open)
         v.addWidget(self.table, 1)
+        self.empty = QLabel("아직 프로젝트가 없습니다.\n아래 ‘새 프로젝트’를 눌러 마스터링 영상을 불러오세요.")
+        self.empty.setObjectName("muted")
+        self.empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty.setMinimumHeight(90)
+        v.addWidget(self.empty, 1)
         r = QHBoxLayout()
         for text, fn, name in (
             ("새 프로젝트", self._new, "primary"),
@@ -232,6 +286,8 @@ class ProjectListDialog(QDialog):
 
     def refresh(self):
         self.recs = self.library.list()
+        self.empty.setVisible(not self.recs)
+        self.table.setVisible(bool(self.recs))
         self.table.setRowCount(len(self.recs))
         for i, r in enumerate(self.recs):
             ok = os.path.isfile(r.master_path)
@@ -448,104 +504,58 @@ class XmlImportDialog(QDialog):
         self.accept()
 
 
-# ============================================================================ 피드 관리
-class FeedManagerDialog(QDialog):
-    def __init__(self, project, thumbs, parent=None):
-        super().__init__(parent)
-        self.project, self.thumbs = project, thumbs
-        self._thumb_frames: set[int] = set()
-        self._thumb_timer = QTimer(self)
-        self._thumb_timer.setSingleShot(True)
-        self._thumb_timer.setInterval(250)
-        self._thumb_timer.timeout.connect(self.refresh)
-        thumbs.thumbReady.connect(self._on_thumb)
-        self.finished.connect(lambda _r: thumbs.thumbReady.disconnect(self._on_thumb))  # 닫힌 뒤에는 갱신하지 않는다
-        self.setWindowTitle("FEED 관리 - 최종 출력 항목 선택")
-        self.resize(760, 560)
-        v = QVBoxLayout(self)
-        self.head = QLabel("")
-        self.head.setWordWrap(True)
-        v.addWidget(self.head)
-        self.table = QTableWidget(0, 6)
-        self.table.setHorizontalHeaderLabels(["포함", "순서", "썸네일", "종류", "원본 타임코드", "길이"])
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        self.table.verticalHeader().setDefaultSectionSize(64)
-        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.itemChanged.connect(self._changed)
-        v.addWidget(self.table, 1)
-        r = QHBoxLayout()
-        for text, fn in (("모두 포함", lambda: self._all(True)), ("모두 제외", lambda: self._all(False))):
-            b = QPushButton(text)
-            b.clicked.connect(fn)
-            r.addWidget(b)
-        r.addStretch(1)
-        ok = QPushButton("확인")
-        ok.setObjectName("primary")
-        ok.clicked.connect(self.accept)
-        r.addWidget(ok)
-        v.addLayout(r)
-        self._block = False
-        self.refresh()
-
-    def _on_thumb(self, n: int) -> None:
-        if n in self._thumb_frames:
-            self._thumb_timer.start()
-
-    def refresh(self):
-        p = self.project
-        self._block = True
-        items = p.feed_ordered()
-        self._thumb_frames = {it.start for it in items}
-        self.thumbs.ensure(sorted(self._thumb_frames))
-        self.table.setRowCount(len(items))
-        n = 0
-        for i, it in enumerate(items):
-            if it.included:
-                n += 1
-            chk = QTableWidgetItem()
-            chk.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
-            chk.setCheckState(Qt.CheckState.Checked if it.included else Qt.CheckState.Unchecked)
-            chk.setData(Qt.ItemDataRole.UserRole, it.id)
-            self.table.setItem(i, 0, chk)
-            self.table.setItem(i, 1, QTableWidgetItem(str(n) if it.included else "-"))
-            th = QTableWidgetItem()
-            img = self.thumbs.get(it.start)
-            if img is not None:
-                th.setIcon(QIcon(QPixmap.fromImage(img)))
-            self.table.setItem(i, 2, th)
-            self.table.setItem(i, 3, QTableWidgetItem("스틸" if it.kind == "still" else "영상"))
-            tc = frame_to_tc(it.start, p.fps) + (f" ~ {frame_to_tc(it.end, p.fps)}" if it.kind == "video" else "")
-            self.table.setItem(i, 4, QTableWidgetItem(tc))
-            self.table.setItem(
-                i, 5, QTableWidgetItem("-" if it.kind == "still" else f"{p.seconds(it.start, it.end):.2f}s")
-            )
-        self.table.setIconSize(QSize(80, 56))
-        self._block = False
-        over = n > FEED_MAX_FINAL
-        self.head.setText(
-            f"등록 {len(items)}개 · 포함 <b>{n}</b> / 최종 {FEED_MAX_FINAL}개 "
-            + (
-                "<span style='color:#ff5d6c'>- 20개를 넘어 렌더링할 수 없습니다. 항목을 제외하세요 (삭제되지 않고 보존됩니다).</span>"
-                if over
-                else "<span style='color:#4cd08b'>- 렌더링 가능</span>"
-            )
-        )
-
-    def _changed(self, item: QTableWidgetItem):
-        if self._block or item.column() != 0:
-            return
-        self.project.set_feed_included(
-            [item.data(Qt.ItemDataRole.UserRole)], item.checkState() == Qt.CheckState.Checked
-        )
-        self.refresh()
-
-    def _all(self, state: bool):
-        self.project.set_feed_included([f.id for f in self.project.state.feed], state)
-        self.refresh()
-
-
 # ============================================================================ 렌더링
+class ExportChooser(QDialog):
+    """내보낼 묶음 선택: STORY / REELS / FEED / CREDITS 를 각각 따로 내보낼 수 있다."""
+
+    LABELS = (
+        ("story", "STORY", "스토리 영상"),
+        ("reels", "REELS", "릴스 영상과 커버"),
+        ("feed", "FEED", "피드 영상·스틸과 원본 스틸"),
+        ("credits", "CREDITS", "캡션·댓글·크레딧 텍스트"),
+    )
+
+    def __init__(self, available: dict[str, bool], parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("내보내기")
+        self.setMinimumWidth(380)
+        v = QVBoxLayout(self)
+        v.setContentsMargins(24, 22, 24, 22)
+        v.setSpacing(10)
+        h = QLabel("무엇을 내보낼까요?")
+        h.setObjectName("h1")
+        v.addWidget(h)
+        self.boxes: dict[str, QCheckBox] = {}
+        for key, title, sub in self.LABELS:
+            cb = QCheckBox(f"{title}  ·  {sub}")
+            ok = available.get(key, True)
+            cb.setChecked(ok)
+            cb.setEnabled(ok)
+            if not ok:
+                cb.setToolTip("현재 프로젝트에서 사용하지 않는 항목입니다.")
+            self.boxes[key] = cb
+            v.addWidget(cb)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        cancel = QPushButton("취소")
+        cancel.clicked.connect(self.reject)
+        self.ok = QPushButton("다음")
+        self.ok.setObjectName("primary")
+        self.ok.clicked.connect(self.accept)
+        row.addWidget(cancel)
+        row.addWidget(self.ok)
+        v.addLayout(row)
+        for cb in self.boxes.values():
+            cb.toggled.connect(self._sync)
+        self._sync()
+
+    def _sync(self) -> None:
+        self.ok.setEnabled(any(cb.isChecked() for cb in self.boxes.values()))
+
+    def selected(self) -> set[str]:
+        return {k for k, cb in self.boxes.items() if cb.isChecked()}
+
+
 class RenderDialog(QDialog):
     startRequested = Signal(bool)  # overwrite
     cancelRequested = Signal()
@@ -555,9 +565,14 @@ class RenderDialog(QDialog):
     def __init__(self, plan: RenderPlan, parent=None, running=False):
         super().__init__(parent)
         self.plan = plan
-        self.setWindowTitle("렌더링")
+        self.setWindowTitle("내보내기")
         self.resize(900, 640)
         v = QVBoxLayout(self)
+        v.setContentsMargins(24, 22, 24, 22)
+        v.setSpacing(12)
+        heading = QLabel("내보내기 준비")
+        heading.setObjectName("h1")
+        v.addWidget(heading)
         n_files = len([j for j in plan.jobs])
         self.head = QLabel(
             f"<b>출력 폴더</b> {plan.root}<br>파일 {n_files}개 · 예상 최대 용량 {fmt_bytes(plan.total_est_bytes)} "
@@ -567,7 +582,7 @@ class RenderDialog(QDialog):
         self.head.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         v.addWidget(self.head)
         for iss in plan.issues:
-            col = {"error": "#ff5d6c", "warn": "#f2b84b", "info": "#8b92a3"}[iss.level]
+            col = {"error": "#ff5d6c", "warn": "#f2b84b", "info": "#8c8c8c"}[iss.level]
             icon = {"error": "⛔", "warn": "⚠", "info": "ℹ"}[iss.level]
             lb = QLabel(f"{icon} {iss.message}")
             lb.setStyleSheet(f"color:{col};")
@@ -666,8 +681,6 @@ class RenderDialog(QDialog):
         self.bars[j.id].setValue(int(j.progress * 100))
         self.table.item(i, 3).setText("" if not j.eta or j.status != "running" else f"약 {int(j.eta)}초")
         note = j.error or (("약 " + fmt_bytes(j.result.get("size_bytes", 0))) if j.status == "done" else "")
-        if j.status == "done" and j.result.get("audio_check", {}).get("clipping_risk"):
-            note += "  ⚠ 오디오 피크가 0dBFS 근처 (클리핑 주의, 볼륨은 변경하지 않음)"
         if j.status == "skipped":
             note = "기존 파일 유지"
         self.table.item(i, 4).setText(note)
@@ -699,7 +712,7 @@ class ReadyDialog(QDialog):
         v = QVBoxLayout(self)
         top = QLabel(
             f"<b>{project.rec.name}</b> · 출력 폴더: {root}<br>"
-            "<span style='color:#8b92a3'>자동 게시는 하지 않습니다. 파일을 열어 직접 업로드한 뒤 '업로드 완료'를 체크하세요.</span>"
+            "<span style='color:#8c8c8c'>자동 게시는 하지 않습니다. 파일을 열어 직접 업로드한 뒤 '업로드 완료'를 체크하세요.</span>"
         )
         top.setWordWrap(True)
         v.addWidget(top)
@@ -760,7 +773,7 @@ class ReadyDialog(QDialog):
             col = QVBoxLayout()
             th = QLabel()
             th.setFixedSize(110, 130 if "FEED" in title or "COVER" in label.upper() or "커버" in label else 100)
-            th.setStyleSheet("background:#12141a;border:1px solid #323744;")
+            th.setStyleSheet("background:#0e0e0e;border:1px solid #2b2b2b;")
             th.setAlignment(Qt.AlignmentFlag.AlignCenter)
             if ok and str(path).lower().endswith(".jpg"):
                 pm = QPixmap(str(path))
