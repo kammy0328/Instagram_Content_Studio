@@ -5,7 +5,7 @@ name: Windows build
 on:
   workflow_dispatch:
   push:
-    branches: ["feature/windows_build", "fix/**", "feature/publisher"]
+    branches: ["feature/windows_build", "fix/**", "feature/publisher", "feature/dark_perf"]
     tags: ["v*"]
   pull_request:
     paths:
@@ -13,6 +13,10 @@ on:
       - installer/**
       - requirements*.txt
       - .github/workflows/windows-build.yml
+
+permissions:
+  contents: write  # 설치 파일을 GitHub Release 로 올린다
+  actions: write  # 오래된 artifact 를 지워 저장 공간 한도를 막는다
 
 jobs:
   build:
@@ -23,6 +27,14 @@ jobs:
         shell: pwsh
     steps:
       - uses: actions/checkout@v4
+
+      - name: 오래된 artifact 정리 (저장 공간 한도 방지)
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ids = gh api --paginate "repos/${{ github.repository }}/actions/artifacts?per_page=100" -q '.artifacts[].id'
+          foreach ($id in $ids) { gh api -X DELETE "repos/${{ github.repository }}/actions/artifacts/$id" | Out-Null }
 
       - uses: actions/setup-python@v5
         with:
@@ -153,9 +165,25 @@ jobs:
           if-no-files-found: ignore
 
       - name: 설치 파일/포터블 업로드
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: InstagramContentStudio_Windows
           path: release/*
           compression-level: 0
           retention-days: 14
+
+      - name: GitHub Release 로 올리기 (누구나 내려받기)
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $slug = ("${{ github.ref_name }}" -replace '[^A-Za-z0-9._-]', '-')
+          $tag = "build-$slug"
+          gh release view $tag 2>$null | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag --prerelease --target ${{ github.sha }} --title "Windows 빌드 ($slug)" --notes "브랜치 $slug 의 최신 Windows 빌드 (커밋 ${{ github.sha }}). 설치 파일과 포터블 zip 이 들어 있습니다."
+          } else {
+            gh release edit $tag --target ${{ github.sha }} --notes "브랜치 $slug 의 최신 Windows 빌드 (커밋 ${{ github.sha }})." | Out-Null
+          }
+          gh release upload $tag (Get-ChildItem release/* | ForEach-Object FullName) --clobber
