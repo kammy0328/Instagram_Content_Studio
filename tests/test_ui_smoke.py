@@ -102,7 +102,7 @@ def test_tabs_in_out_inclusive_and_undo(qapp, win):
     assert win.tab == "story"
 
 
-def test_feed_add_still_video_and_carousel(qapp, win):
+def test_feed_add_still_video_and_drag_reorder(qapp, win):
     p = win.project
     win.set_tab("feed")
     win.goto(30)
@@ -115,12 +115,28 @@ def test_feed_add_still_video_and_carousel(qapp, win):
     pump(qapp)
     assert [f.kind for f in p.feed_included()] == ["still", "video"]
     assert (p.feed_included()[1].start, p.feed_included()[1].end) == (60, 91)
-    win.feed_panel.car_btn.setChecked(True)
-    pump(qapp, 600)
-    assert win.center_stack.currentIndex() == 1 and len(win.carousel.items) == 2
-    win.carousel.show_index(1)
-    win.feed_panel.car_btn.setChecked(False)
-    assert win.center_stack.currentIndex() == 0
+    # 목록에서 끌어서 순서 바꾸기: 두 번째 항목을 맨 앞으로
+    lst = win.feed_panel.list
+    ids = [lst.item(i).data(Qt.ItemDataRole.UserRole) for i in range(lst.count())]
+    assert len(ids) == 2
+    item = lst.takeItem(1)
+    lst.insertItem(0, item)
+    lst.model().rowsMoved.emit(lst.rootIndex(), 1, 1, lst.rootIndex(), 0)
+    pump(qapp, 200)
+    assert [f.id for f in p.feed_ordered()] == [ids[1], ids[0]]
+    assert p.state.feed_manual
+    # 새로 추가한 항목은 맨 뒤, 순서는 저장/복원 후에도 유지
+    win.goto(10)
+    win.add_still()
+    pump(qapp)
+    assert [f.id for f in p.feed_ordered()][:2] == [ids[1], ids[0]]
+    from ics.core.model import EditState
+
+    assert [f.id for f in EditState.from_dict(p.state.to_dict()).feed][:2] == [ids[1], ids[0]]
+    p.undo()
+    pump(qapp)
+    assert [f.id for f in p.feed_ordered()] == [ids[1], ids[0]]
+    assert not hasattr(win, "carousel") and not hasattr(win.feed_panel, "car_btn")
 
 
 def test_timeline_has_no_cut_lane_but_scrubbing_the_playhead_still_works(qapp, win):

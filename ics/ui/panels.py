@@ -5,6 +5,7 @@ from __future__ import annotations
 from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QButtonGroup,
     QCheckBox,
     QComboBox,
@@ -288,8 +289,9 @@ class SelectionPanel(QWidget):
     coverRatioChanged = Signal(str)  # 'orig' | '916'
     coverLayoutLive = Signal(object)
     coverLayoutCommit = Signal(object)
+    overlayChanged = Signal(object)  # StoryOverlay (STORY 전용)
 
-    def __init__(self, which: str, project):
+    def __init__(self, which: str, project, settings=None):
         super().__init__()
         self.which, self.project = which, project
         v = QVBoxLayout(self)
@@ -353,6 +355,13 @@ class SelectionPanel(QWidget):
         self.layout_editor.changed.connect(self.layoutLive.emit)
         self.layout_editor.committed.connect(self.layoutCommit.emit)
         v.addWidget(self.layout_editor)
+        self.overlay_editor = None
+        if which == "story" and settings is not None:
+            from .overlay_editor import OverlayEditor
+
+            self.overlay_editor = OverlayEditor(settings)
+            self.overlay_editor.changed.connect(self.overlayChanged.emit)
+            v.addWidget(self.overlay_editor)
         if which == "reels":
             self._build_cover(v)
         v.addStretch(1)
@@ -433,6 +442,12 @@ class SelectionPanel(QWidget):
             self.layout_editor.set_info(
                 f"출력 {g.canvas_w}×{g.canvas_h}" + (f" · {g.tier_note}" if g.tier_note else "")
             )
+            if self.overlay_editor is not None:
+                from ..render import overlay as ov_mod
+
+                ov = p.state.story_overlay
+                warns = ov_mod.layout(ov, g, p.rec.name).warnings if ov_mod.active(ov, p.rec.name) else []
+                self.overlay_editor.set_value(ov, warns)
         if self.which == "reels":
             c = p.state.cover
             if c.frame is None:
@@ -458,8 +473,7 @@ class FeedPanel(QWidget):
     itemSelected = Signal(str)
     includeToggled = Signal(str, bool)
     deleteClicked = Signal(str)
-    manageClicked = Signal()
-    carouselToggled = Signal(bool)
+    orderChanged = Signal(list)  # 드래그로 바꾼 항목 id 순서
     layoutLive = Signal(object)
     layoutCommit = Signal(object)
     setIn = Signal()
@@ -533,16 +547,15 @@ class FeedPanel(QWidget):
         v.addWidget(g)
         self.count_lbl = QLabel("")
         v.addWidget(self.count_lbl)
-        hb = QHBoxLayout()
-        mb = QPushButton("관리 창…")
-        mb.clicked.connect(self.manageClicked.emit)
-        self.car_btn = QPushButton("캐러셀 미리보기")
-        self.car_btn.setCheckable(True)
-        self.car_btn.toggled.connect(self.carouselToggled.emit)
-        hb.addWidget(mb)
-        hb.addWidget(self.car_btn)
-        v.addLayout(hb)
+        hint = QLabel("항목을 끌어서 순서를 바꿀 수 있습니다. 체크를 해제하면 최종 출력에서 제외됩니다.")
+        hint.setObjectName("muted")
+        hint.setWordWrap(True)
+        v.addWidget(hint)
         self.list = QListWidget()
+        self.list.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self.list.setDefaultDropAction(Qt.DropAction.MoveAction)
+        self.list.setDragEnabled(True)
+        self.list.model().rowsMoved.connect(self._rows_moved)
         self.list.setIconSize(QSize(48, 60))
         self.list.setMinimumHeight(180)
         self.list.currentItemChanged.connect(self._cur_changed)
@@ -567,6 +580,12 @@ class FeedPanel(QWidget):
         v.addWidget(self.layout_editor)
         self._block = False
         self._in = self._out = 0
+
+    def _rows_moved(self, *_a) -> None:
+        if self._block:
+            return
+        ids = [self.list.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.list.count())]
+        QTimer.singleShot(0, lambda: self.orderChanged.emit(ids))  # 드롭 처리가 끝난 뒤 목록을 다시 그린다
 
     def current_id(self) -> str | None:
         it = self.list.currentItem()
@@ -636,7 +655,7 @@ class FeedPanel(QWidget):
         over = total > FEED_MAX_FINAL
         self.count_lbl.setText(
             f"포함 {total} / 최종 {FEED_MAX_FINAL}  (등록 전체 {len(items)}개)"
-            + ("  ⚠ 20개 초과 - 관리 창에서 줄여주세요" if over else "")
+            + ("  ⚠ 20개 초과 - 체크 해제 또는 삭제로 줄여주세요" if over else "")
         )
         self.count_lbl.setStyleSheet("color:#ff5d6c;font-weight:700;" if over else "")
         w = p.feed_warnings()

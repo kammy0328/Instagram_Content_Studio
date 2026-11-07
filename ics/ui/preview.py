@@ -28,6 +28,7 @@ class PreviewWidget(QWidget):
         self.safe_zone = False
         self.cover_grid: tuple[str, float] | None = None  # (비율 '3:4', 세로 위치)
         self.label = ""
+        self.overlay_img: QImage | None = None  # 출력 보기에서 캔버스 위에 겹쳐 그리는 오버레이 (STORY 로고/제목)
         self._drag: QPointF | None = None
         self._drag_start_layout: LayoutParams | None = None
         self.setMouseTracking(True)
@@ -100,6 +101,8 @@ class PreviewWidget(QWidget):
             k = iw / self.disp[0]
             src = QRectF(g.crop_x * k, g.crop_y * (ih / self.disp[1]), g.crop_w * k, g.crop_h * (ih / self.disp[1]))
             p.drawImage(cr, self.image, src)
+        if self.overlay_img is not None and not self.overlay_img.isNull() and self.kind == "916":
+            p.drawImage(cr, self.overlay_img)
         p.setPen(QPen(theme.C["BORDER"], 1))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawRect(cr)

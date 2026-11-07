@@ -37,7 +37,6 @@ from . import theme
 from .credits_page import CreditsPage
 from .cutstrip import CutStrip
 from .dialogs import (
-    FeedManagerDialog,
     IdDictionaryDialog,
     MediaReportDialog,
     ReadyDialog,
@@ -78,94 +77,6 @@ class StillZoomDialog(QDialog):
         lb.setPixmap(QPixmap.fromImage(img))
         sc.setWidget(lb)
         v.addWidget(sc)
-
-
-class CarouselView(QWidget):
-    """인스타그램 캐러셀 형태 좌우 넘김 미리보기 (영상 재생 / 스틸 확대 / 순번·포함 상태)."""
-
-    requestPlay = Signal(int, int)
-    requestStop = Signal()
-
-    def __init__(self, project):
-        super().__init__()
-        self.project = project
-        self.items = []
-        self.idx = 0
-        self.token = 0
-        self.canvas_img: QImage | None = None
-        self.loader = StillLoader()
-        self.loader.loaded.connect(self._loaded)
-        v = QVBoxLayout(self)
-        self.pw = PreviewWidget()
-        v.addWidget(self.pw, 1)
-        r = QHBoxLayout()
-        self.b_prev = QPushButton("◀ 이전")
-        self.b_next = QPushButton("다음 ▶")
-        self.lbl = QLabel("")
-        self.lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.b_play = QPushButton("▶ 영상 재생")
-        self.b_zoom = QPushButton("🔍 스틸 확대")
-        self.b_prev.clicked.connect(lambda: self.show_index(self.idx - 1))
-        self.b_next.clicked.connect(lambda: self.show_index(self.idx + 1))
-        self.b_play.clicked.connect(self._play)
-        self.b_zoom.clicked.connect(self._zoom)
-        for w in (self.b_prev, self.lbl, self.b_next, self.b_play, self.b_zoom):
-            r.addWidget(w, 1 if w is self.lbl else 0)
-        v.addLayout(r)
-        self.dots = QLabel("")
-        self.dots.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        v.addWidget(self.dots)
-
-    def refresh(self) -> None:
-        cur = self.items[self.idx].id if self.items and self.idx < len(self.items) else None
-        self.items = self.project.feed_included()
-        self.idx = next(
-            (i for i, it in enumerate(self.items) if it.id == cur), min(self.idx, max(0, len(self.items) - 1))
-        )
-        self.show_index(self.idx, keep=True)
-
-    def show_index(self, i: int, keep: bool = False) -> None:
-        if not self.items:
-            self.lbl.setText("포함된 피드 항목이 없습니다")
-            self.pw.set_image(0, None)
-            self.dots.setText("")
-            return
-        self.idx = max(0, min(len(self.items) - 1, i))
-        it = self.items[self.idx]
-        self.lbl.setText(f"{self.idx + 1} / {len(self.items)}  ·  {'스틸' if it.kind == 'still' else '영상'}")
-        self.dots.setText(" ".join("●" if k == self.idx else "○" for k in range(len(self.items))))
-        self.b_prev.setEnabled(self.idx > 0)
-        self.b_next.setEnabled(self.idx < len(self.items) - 1)
-        self.b_play.setEnabled(it.kind == "video")
-        self.b_zoom.setEnabled(it.kind == "still")
-        self.requestStop.emit()
-        m = self.project.media
-        if it.kind == "still":
-            geo = compute_geometry(m.display_w, m.display_h, self.project.feed_kind(), it.layout)
-            self.token += 1
-            self.pw.set_canvas_mode()
-            self.loader.load(self.token, m, self.project.index, it.start, geo)
-        else:
-            self.pw.set_source_size(m.display_w, m.display_h)
-            self.pw.set_output(True, self.project.feed_kind(), it.layout)
-            self.canvas_img = None
-            self.requestPlay.emit(it.start, -1)  # 첫 프레임만 표시
-
-    def _loaded(self, token: int, img) -> None:
-        if token != self.token or img is None:
-            return
-        self.canvas_img = img
-        self.pw.set_canvas_mode()
-        self.pw.set_image(0, img)
-
-    def _play(self) -> None:
-        if self.items and self.items[self.idx].kind == "video":
-            it = self.items[self.idx]
-            self.requestPlay.emit(it.start, it.end)
-
-    def _zoom(self) -> None:
-        if self.canvas_img is not None:
-            StillZoomDialog(self.canvas_img, self).exec()
 
 
 class EditorWindow(QMainWindow):
@@ -221,7 +132,6 @@ class EditorWindow(QMainWindow):
         self.proxy.audioReady.connect(self._on_audio_ready)
         self.proxy.audioFailed.connect(self._on_audio_failed)
         self.preview.set_source_size(info.display_w, info.display_h)
-        self.carousel.pw.set_source_size(info.display_w, info.display_h)
         self._init_audio_ui()
         # 이미 만들어 둔 프록시가 있어도 항상 시작한다: 없는 것만 만들고, 소리 연결과 프록시 색인 로드를 같은 경로로 처리한다
         self.proxy.start()
@@ -387,14 +297,8 @@ class EditorWindow(QMainWindow):
         self.preview_badge.setObjectName("badge")
         preview_header.addWidget(self.preview_badge)
         cv.addLayout(preview_header)
-        self.center_stack = QStackedWidget()
         self.preview = PreviewWidget()
-        self.carousel = CarouselView(self.project)
-        self.carousel.requestPlay.connect(self._carousel_play)
-        self.carousel.requestStop.connect(self.playback.pause)
-        self.center_stack.addWidget(self.preview)
-        self.center_stack.addWidget(self.carousel)
-        cv.addWidget(self.center_stack, 1)
+        cv.addWidget(self.preview, 1)
         self.transport = TransportBar(self.project)
         self.transport.playClicked.connect(self.toggle_play)
         self.transport.stepClicked.connect(lambda d: self.step(d))
@@ -408,7 +312,7 @@ class EditorWindow(QMainWindow):
         # --- 우측 인스펙터
         self.inspector = QStackedWidget()
         self.inspector.setObjectName("inspector")
-        self.story_panel = SelectionPanel("story", self.project)
+        self.story_panel = SelectionPanel("story", self.project, self.settings)
         self.reels_panel = SelectionPanel("reels", self.project)
         self.feed_panel = FeedPanel(self.project, self.thumbs)
         for w in (self.story_panel, self.reels_panel, self.feed_panel):
@@ -451,6 +355,7 @@ class EditorWindow(QMainWindow):
             panel.clearClicked.connect(lambda w=which: self.project.clear_selection(w))
             panel.layoutLive.connect(lambda lp, w=which: self._layout_live(w, lp))
             panel.layoutCommit.connect(lambda _lp: self._layout_commit())
+        self.story_panel.overlayChanged.connect(self.project.set_story_overlay)
         self.reels_panel.coverSet.connect(lambda: self.project.set_cover_frame(self.playhead))
         self.reels_panel.coverGoto.connect(self._goto_cover)
         self.reels_panel.coverChanged.connect(lambda a, o: self.project.set_cover_grid(a, o))
@@ -464,9 +369,8 @@ class EditorWindow(QMainWindow):
         fp.itemSelected.connect(self._feed_selected)
         fp.includeToggled.connect(lambda i, v: self._feed_include(i, v))
         fp.deleteClicked.connect(self._feed_delete)
-        fp.manageClicked.connect(self.open_feed_manager)
         fp.ratioChanged.connect(self._set_feed_ratio)
-        fp.carouselToggled.connect(self._carousel_toggled)
+        fp.orderChanged.connect(self.project.set_feed_order)
         fp.layoutLive.connect(lambda lp: self._layout_live("feed", lp))
         fp.layoutCommit.connect(lambda _lp: self._layout_commit())
         fp.setIn.connect(self.set_in)
@@ -613,8 +517,6 @@ class EditorWindow(QMainWindow):
                 self.reels_panel.cover_prev.blockSignals(True)
                 self.reels_panel.cover_prev.setChecked(False)
                 self.reels_panel.cover_prev.blockSignals(False)
-            if key != "feed":
-                self.feed_panel.car_btn.setChecked(False)
             self._update_preview_layout()
             self.timeline.update()
         self.project.set_ui("tab", key)
@@ -645,24 +547,9 @@ class EditorWindow(QMainWindow):
             return
         if n == self._display_frame():
             self.preview.set_image(n, img)
-        it = (
-            self.carousel.items[self.carousel.idx]
-            if self.carousel.items and self.carousel.idx < len(self.carousel.items)
-            else None
-        )
-        if (
-            it is not None
-            and it.kind == "video"
-            and n == it.start
-            and self.center_stack.currentIndex() == 1
-            and not self.playback.playing
-        ):
-            self.carousel.pw.set_image(n, img)
 
     def _on_play_image(self, n: int, img: QImage) -> None:
         self.preview.set_image(n, img)
-        if self.center_stack.currentIndex() == 1:
-            self.carousel.pw.set_image(n, img)
 
     def _on_play_pos(self, n: int) -> None:
         self.playhead = n
@@ -732,12 +619,6 @@ class EditorWindow(QMainWindow):
         else:
             prv = [s for s in starts if s < self.playhead]
             self.goto(prv[-1] if prv else 0)
-
-    def _carousel_play(self, start: int, end: int) -> None:
-        if end < 0:
-            self.frames.request(start)
-            return
-        self.playback.play(start, 1.0, (start, end))
 
     # ================================================================ 구간/In-Out
     def apply_preset(self, which: str, preset: str) -> None:
@@ -840,7 +721,9 @@ class EditorWindow(QMainWindow):
     def _check_over(self, was: int) -> None:
         now = len(self.project.feed_included())
         if now > FEED_MAX_FINAL >= was:
-            QTimer.singleShot(50, self.open_feed_manager)
+            self.toast(
+                f"피드가 {FEED_MAX_FINAL}개를 넘었습니다. 목록에서 체크를 해제하거나 삭제해 {FEED_MAX_FINAL}개 이하로 맞춰주세요."
+            )
 
     def _feed_selected(self, item_id: str) -> None:
         it = self.project.get_feed(item_id)
@@ -882,15 +765,6 @@ class EditorWindow(QMainWindow):
     def _set_feed_ratio(self, ratio: str) -> None:
         self.project.set_feed_ratio(ratio)
         self.toast("FEED 출력 비율: " + ("원본 비율" if ratio == "orig" else "4:5"))
-
-    def open_feed_manager(self) -> None:
-        FeedManagerDialog(self.project, self.thumbs, self).exec()
-        self._refresh()
-
-    def _carousel_toggled(self, on: bool) -> None:
-        self.center_stack.setCurrentIndex(1 if on else 0)
-        if on:
-            self.carousel.refresh()
 
     # ================================================================ 컷
     def import_xml(self) -> None:
@@ -1132,6 +1006,28 @@ class EditorWindow(QMainWindow):
         self.preview.safe_zone = on
         self.preview.update()
 
+    def _story_overlay_image(self):
+        """STORY 출력 미리보기에 겹쳐 그릴 오버레이 (최종 렌더링과 같은 함수, 설정이 같으면 캐시 재사용)."""
+        from ..render import overlay as ov_mod
+
+        ov, m = self.project.state.story_overlay, self.project.media
+        if m is None or not ov_mod.active(ov, self.project.rec.name):
+            return None
+        g = compute_geometry(m.display_w, m.display_h, "916", self.project.state.story.layout)
+        key = (
+            tuple(sorted(ov.to_dict().items())),
+            self.project.rec.name,
+            g.canvas_w,
+            g.canvas_h,
+            g.pad_y,
+            g.content_h,
+            g.mode,
+        )
+        if getattr(self, "_ov_key", None) != key:
+            self._ov_key = key
+            self._ov_img = ov_mod.render(ov, g, self.project.rec.name)[0]
+        return self._ov_img
+
     def _update_preview_layout(self) -> None:
         st = self.project.state
         view_out = self.transport.view_btn.isChecked()
@@ -1150,6 +1046,9 @@ class EditorWindow(QMainWindow):
             else:
                 kind = "916"
                 lp = (st.story if self.tab == "story" else st.reels).layout
+        self.preview.overlay_img = (
+            self._story_overlay_image() if (self.tab == "story" and not self.cover_mode) else None
+        )
         self.preview.set_output(view_out or self.cover_mode, kind, lp)
         self.preview_title.setText("릴스 커버 미리보기" if self.cover_mode else f"{self.tab.upper()} 미리보기")
         self.preview_badge.setText(
@@ -1163,9 +1062,12 @@ class EditorWindow(QMainWindow):
             self.render_dialog.raise_()
             return
         if self.project.feed_over_limit():
-            self.open_feed_manager()
-            if self.project.feed_over_limit():
-                return
+            QMessageBox.warning(
+                self,
+                "내보내기",
+                f"피드 항목이 {FEED_MAX_FINAL}개를 넘었습니다. FEED 목록에서 체크를 해제하거나 삭제한 뒤 다시 시도하세요.",
+            )
+            return
         self.playback.pause()
         self.credits.flush_pending()
         plan = plan_render(self.project)
@@ -1279,8 +1181,6 @@ class EditorWindow(QMainWindow):
         )
         if self.pages.currentIndex() == 1:
             self.credits.refresh()
-        if self.center_stack.currentIndex() == 1:
-            self.carousel.refresh()
         self._request_display_frame()
 
     def _update_title(self) -> None:

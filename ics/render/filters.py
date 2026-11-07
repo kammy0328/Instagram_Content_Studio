@@ -41,8 +41,16 @@ def is_cropped(info: MediaInfo, geo: Geometry) -> bool:
 OUTPUT_TAGS_FILTER = "setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv"
 
 
-def video_filter(info: MediaInfo, geo: Geometry, fps_out: Fraction | None, pix_fmt: str = "yuv420p") -> str:
-    """원본 디코딩 프레임 -> (디인터레이스) -> [크롭] -> 스케일(+색변환, 디더) -> pad(검정) -> setsar=1."""
+OVERLAY_PREP = (
+    "format=rgba,scale=out_color_matrix=bt709:out_range=tv:flags=bicubic+accurate_rnd+full_chroma_int,format=yuva420p"
+)
+
+
+def video_filter(
+    info: MediaInfo, geo: Geometry, fps_out: Fraction | None, pix_fmt: str = "yuv420p", overlay: bool = False
+) -> str:
+    """원본 디코딩 프레임 -> (디인터레이스) -> [크롭] -> 스케일(+색변환, 디더) -> pad(검정) -> setsar=1.
+    overlay=True 면 filter_complex 문자열을 돌려준다: 입력 1 번(투명 PNG)을 캔버스 전체에 합성하고 출력 라벨은 [vout]."""
     parts: list[str] = pre_filters(info)
     scale_opts = f"flags={SCALE_FLAGS}:{in_color_opts(info)}:out_color_matrix=bt709:out_range=tv:" f"sws_dither=ed"
     if geo.mode == "fill":
@@ -63,6 +71,13 @@ def video_filter(info: MediaInfo, geo: Geometry, fps_out: Fraction | None, pix_f
         parts.append(f"fps=fps={fps_out.numerator}/{fps_out.denominator}:round=near")
     # 출력 색 태그를 프레임 속성으로도 명시한다. FFmpeg 7.1+ 는 인코더 옵션(-color_primaries/-color_trc)보다 프레임 속성을
     # 우선해서 기록하므로, 이 줄이 없으면 primaries/trc 태그가 비어 나온다 (Windows 번들 FFmpeg 8.1 에서 확인).
+    if overlay:
+        # 로고/텍스트 PNG(캔버스 크기, 투명 배경)는 BT.709 limited 로 맞춰 합성한다 (색이 달라지지 않게). 정지 이미지라 마지막 프레임을 반복.
+        base = ",".join(parts)
+        return (
+            f"[0:v]{base}[base];[1:v]{OVERLAY_PREP}[ov];"
+            f"[base][ov]overlay=0:0:format=yuv420:eof_action=repeat,format={pix_fmt},setsar=1,{OUTPUT_TAGS_FILTER}[vout]"
+        )
     parts.append(OUTPUT_TAGS_FILTER)
     return ",".join(parts)
 

@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import os
 import shutil
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..core.layout import compute_geometry
 from ..core.model import FEED_MAX_FINAL, FEED_VIDEO_MAX_SEC, REELS_MAX_SEC, STORY_MAX_SEC
 from ..core.project import Project
+from . import overlay
 
 
 @dataclass
@@ -106,11 +108,24 @@ def plan_render(project: Project, include_original_stills: bool = True) -> Rende
             plan.issues.append(PlanIssue("error", f"STORY 길이가 {dur:.2f}초로 60초를 넘습니다."))
         else:
             geo = compute_geometry(info.display_w, info.display_h, "916", s.layout)
+            sp = {"start": s.start, "end": s.end, "layout": s.layout.to_dict(), "geo": geo.to_dict()}
+            ov = st.story_overlay
+            if overlay.active(ov, project.rec.name):
+                png, res = overlay.save_png(
+                    ov,
+                    geo,
+                    project.rec.name,
+                    Path(tempfile.gettempdir()) / "ics_overlay" / f"{project.rec.id}_story.png",
+                )
+                if png:
+                    sp["overlay_png"] = png
+                for w in res.warnings:
+                    plan.issues.append(PlanIssue("warn", f"STORY {w}"))
             add(
                 "story",
                 f"STORY ({dur:.1f}s)",
                 root / "STORY" / f"{name}_STORY_01.mp4",
-                {"start": s.start, "end": s.end, "layout": s.layout.to_dict(), "geo": geo.to_dict()},
+                sp,
                 estimate_video_bytes(geo.canvas_w, geo.canvas_h, fps, dur),
             )
             if geo.tier_note:

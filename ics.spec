@@ -19,7 +19,11 @@ if os.path.isdir(ff_dir):
 if not any(os.path.basename(src).lower() == "ffmpeg.exe" for src, _ in ff_files):
     print(f"[ics.spec] 경고: {ff_dir} 에 ffmpeg.exe 가 없어 번들에서 제외됩니다 (설치 후 PATH 의 ffmpeg 를 사용).")
 
-datas = [(os.path.join(root, "LICENSES"), "LICENSES")] + ff_files
+datas = [
+    (os.path.join(root, "LICENSES"), "LICENSES"),
+    (os.path.join(root, "assets", "fonts"), os.path.join("assets", "fonts")),
+    (os.path.join(root, "assets", "logos"), os.path.join("assets", "logos")),
+] + ff_files
 
 # collect_submodules("ics") 만으로는 다른 모듈이 import 하지 않는 모듈(예: publisher.scheduler)이 번들에서 빠진 적이 있다
 # (v1.1.0 자체 점검이 잡아냄). 하위 패키지를 개별로, 그리고 publisher 는 이름까지 명시해 확실히 포함한다.

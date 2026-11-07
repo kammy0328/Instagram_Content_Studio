@@ -8,8 +8,8 @@ import sys
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QSize, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QDesktopServices, QIcon, QKeySequence, QPixmap
+from PySide6.QtCore import Qt, QUrl, Signal
+from PySide6.QtGui import QDesktopServices, QKeySequence, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -40,7 +40,6 @@ from PySide6.QtWidgets import (
 from .. import paths
 from ..core import media as media_mod
 from ..core import xml_import as xmlmod
-from ..core.model import FEED_MAX_FINAL
 from ..core.timecode import frame_to_tc, tc_to_frame
 from ..render.planner import RenderJob, RenderPlan
 from .settings import DEFAULT_SHORTCUTS
@@ -503,103 +502,6 @@ class XmlImportDialog(QDialog):
         }
         self.project.import_cuts(self.report.cuts, meta)
         self.accept()
-
-
-# ============================================================================ 피드 관리
-class FeedManagerDialog(QDialog):
-    def __init__(self, project, thumbs, parent=None):
-        super().__init__(parent)
-        self.project, self.thumbs = project, thumbs
-        self._thumb_frames: set[int] = set()
-        self._thumb_timer = QTimer(self)
-        self._thumb_timer.setSingleShot(True)
-        self._thumb_timer.setInterval(250)
-        self._thumb_timer.timeout.connect(self.refresh)
-        thumbs.thumbReady.connect(self._on_thumb)
-        self.finished.connect(lambda _r: thumbs.thumbReady.disconnect(self._on_thumb))  # 닫힌 뒤에는 갱신하지 않는다
-        self.setWindowTitle("FEED 관리 - 최종 출력 항목 선택")
-        self.resize(760, 560)
-        v = QVBoxLayout(self)
-        self.head = QLabel("")
-        self.head.setWordWrap(True)
-        v.addWidget(self.head)
-        self.table = QTableWidget(0, 6)
-        self.table.setHorizontalHeaderLabels(["포함", "순서", "썸네일", "종류", "원본 타임코드", "길이"])
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        self.table.verticalHeader().setDefaultSectionSize(64)
-        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.itemChanged.connect(self._changed)
-        v.addWidget(self.table, 1)
-        r = QHBoxLayout()
-        for text, fn in (("모두 포함", lambda: self._all(True)), ("모두 제외", lambda: self._all(False))):
-            b = QPushButton(text)
-            b.clicked.connect(fn)
-            r.addWidget(b)
-        r.addStretch(1)
-        ok = QPushButton("확인")
-        ok.setObjectName("primary")
-        ok.clicked.connect(self.accept)
-        r.addWidget(ok)
-        v.addLayout(r)
-        self._block = False
-        self.refresh()
-
-    def _on_thumb(self, n: int) -> None:
-        if n in self._thumb_frames:
-            self._thumb_timer.start()
-
-    def refresh(self):
-        p = self.project
-        self._block = True
-        items = p.feed_ordered()
-        self._thumb_frames = {it.start for it in items}
-        self.thumbs.ensure(sorted(self._thumb_frames))
-        self.table.setRowCount(len(items))
-        n = 0
-        for i, it in enumerate(items):
-            if it.included:
-                n += 1
-            chk = QTableWidgetItem()
-            chk.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
-            chk.setCheckState(Qt.CheckState.Checked if it.included else Qt.CheckState.Unchecked)
-            chk.setData(Qt.ItemDataRole.UserRole, it.id)
-            self.table.setItem(i, 0, chk)
-            self.table.setItem(i, 1, QTableWidgetItem(str(n) if it.included else "-"))
-            th = QTableWidgetItem()
-            img = self.thumbs.get(it.start)
-            if img is not None:
-                th.setIcon(QIcon(QPixmap.fromImage(img)))
-            self.table.setItem(i, 2, th)
-            self.table.setItem(i, 3, QTableWidgetItem("스틸" if it.kind == "still" else "영상"))
-            tc = frame_to_tc(it.start, p.fps) + (f" ~ {frame_to_tc(it.end, p.fps)}" if it.kind == "video" else "")
-            self.table.setItem(i, 4, QTableWidgetItem(tc))
-            self.table.setItem(
-                i, 5, QTableWidgetItem("-" if it.kind == "still" else f"{p.seconds(it.start, it.end):.2f}s")
-            )
-        self.table.setIconSize(QSize(80, 56))
-        self._block = False
-        over = n > FEED_MAX_FINAL
-        self.head.setText(
-            f"등록 {len(items)}개 · 포함 <b>{n}</b> / 최종 {FEED_MAX_FINAL}개 "
-            + (
-                "<span style='color:#ff5d6c'>- 20개를 넘어 렌더링할 수 없습니다. 항목을 제외하세요 (삭제되지 않고 보존됩니다).</span>"
-                if over
-                else "<span style='color:#4cd08b'>- 렌더링 가능</span>"
-            )
-        )
-
-    def _changed(self, item: QTableWidgetItem):
-        if self._block or item.column() != 0:
-            return
-        self.project.set_feed_included(
-            [item.data(Qt.ItemDataRole.UserRole)], item.checkState() == Qt.CheckState.Checked
-        )
-        self.refresh()
-
-    def _all(self, state: bool):
-        self.project.set_feed_included([f.id for f in self.project.state.feed], state)
-        self.refresh()
 
 
 # ============================================================================ 렌더링
