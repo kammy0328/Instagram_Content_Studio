@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parent.parent
 LOGO = str(ROOT / "assets" / "logos" / "diap_light.png")
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="session")
 def qapp():
     return QApplication.instance() or QApplication([])
 
