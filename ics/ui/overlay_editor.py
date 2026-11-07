@@ -35,6 +35,14 @@ def _shrinkable(c: QComboBox) -> None:
     c.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
 
 
+FONT_STYLES = (
+    ("Black Han Sans · 임팩트 (한글/영문)", "Black Han Sans", False),
+    ("Pretendard Bold · 깔끔한 산세리프", "Pretendard", True),
+    ("Montserrat · 모던 영문", "Montserrat", False),
+    ("Playfair Display · 세리프 영문", "Playfair Display", False),
+)
+
+
 class OverlayEditor(QGroupBox):
     changed = Signal(object)  # StoryOverlay (확정된 변경)
 
@@ -117,6 +125,21 @@ class OverlayEditor(QGroupBox):
         self.text.setPlaceholderText("비워 두면 프로젝트명")
         self.text.textEdited.connect(self._edited_slider)
         v.addWidget(self.text)
+        sr = QHBoxLayout()
+        sr.addWidget(QLabel("스타일"))
+        self.style = QComboBox()
+        for label, fam, bold in FONT_STYLES:
+            self.style.addItem(label, (fam, bold))
+        self.style.setToolTip("추천 글꼴 모음 (아래에서 다른 글꼴을 직접 고를 수도 있습니다)")
+        _shrinkable(self.style)
+        self.style.activated.connect(self._style_picked)
+        sr.addWidget(self.style, 1)
+        sr.addWidget(QLabel("자간"))
+        self.spacing = QSlider(Qt.Orientation.Horizontal)
+        self.spacing.setRange(-10, 40)
+        self.spacing.valueChanged.connect(self._edited_slider)
+        sr.addWidget(self.spacing, 1)
+        v.addLayout(sr)
         tr = QHBoxLayout()
         self.font = QFontComboBox()
         self.font.setEditable(False)
@@ -169,6 +192,11 @@ class OverlayEditor(QGroupBox):
         if not self.text.hasFocus():
             self.text.setText(ov.text)
         self.font.setCurrentFont(QFont(ov.text_font))
+        self.spacing.setValue(ov.text_spacing)
+        for i in range(self.style.count()):
+            if self.style.itemData(i) == (ov.text_font, ov.text_bold):
+                self.style.setCurrentIndex(i)
+                break
         self.size.setValue(ov.text_size)
         self.bold.setChecked(ov.text_bold)
         self.text_pos.setCurrentIndex(0 if ov.text_pos == "top" else 1)
@@ -191,8 +219,17 @@ class OverlayEditor(QGroupBox):
         o.text_font = self.font.currentFont().family()
         o.text_size = self.size.value()
         o.text_bold = self.bold.isChecked()
+        o.text_spacing = self.spacing.value()
         o.text_pos = self.text_pos.currentData()
         return o
+
+    def _style_picked(self, i: int) -> None:
+        fam, bold = self.style.itemData(i)
+        self._block = True
+        self.font.setCurrentFont(QFont(fam))
+        self.bold.setChecked(bold)
+        self._block = False
+        self._commit()
 
     def _edited(self, *_a) -> None:
         if not self._block:
