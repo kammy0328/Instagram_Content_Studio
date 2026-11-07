@@ -132,7 +132,7 @@ class TransportBar(QWidget):
             "|▶": QStyle.StandardPixmap.SP_MediaSeekForward,
             "⏭": QStyle.StandardPixmap.SP_MediaSkipForward,
         }
-        b.setIcon(control_icon(self, icons[text], "#121a32" if text == "▶" else "#edf1f7"))
+        b.setIcon(control_icon(self, icons[text], "#0a0a0a" if text == "▶" else "#ececec"))
         b.setText("")
         b.setAccessibleName(tip)
         b.setToolTip(tip)
@@ -147,7 +147,7 @@ class TransportBar(QWidget):
 
     def set_playing(self, playing: bool) -> None:
         icon = QStyle.StandardPixmap.SP_MediaPause if playing else QStyle.StandardPixmap.SP_MediaPlay
-        self.b_play.setIcon(control_icon(self, icon, "#121a32"))
+        self.b_play.setIcon(control_icon(self, icon, "#0a0a0a"))
         self.b_play.setAccessibleName("일시 정지" if playing else "재생")
 
     def set_muted(self, muted: bool) -> None:

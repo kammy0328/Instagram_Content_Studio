@@ -83,7 +83,7 @@ class MediaReportDialog(QDialog):
         box.setMaximumHeight(210)
         v.addWidget(box)
         for iss in info.issues:
-            col = {"error": "#ff5d6c", "warn": "#f2b84b", "info": "#8b92a3"}[iss.level]
+            col = {"error": "#ff5d6c", "warn": "#f2b84b", "info": "#8c8c8c"}[iss.level]
             icon = {"error": "⛔", "warn": "⚠", "info": "ℹ"}[iss.level]
             lb = QLabel(f"{icon} {iss.message}")
             lb.setWordWrap(True)
@@ -625,7 +625,7 @@ class RenderDialog(QDialog):
         self.head.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         v.addWidget(self.head)
         for iss in plan.issues:
-            col = {"error": "#ff5d6c", "warn": "#f2b84b", "info": "#8b92a3"}[iss.level]
+            col = {"error": "#ff5d6c", "warn": "#f2b84b", "info": "#8c8c8c"}[iss.level]
             icon = {"error": "⛔", "warn": "⚠", "info": "ℹ"}[iss.level]
             lb = QLabel(f"{icon} {iss.message}")
             lb.setStyleSheet(f"color:{col};")
@@ -757,7 +757,7 @@ class ReadyDialog(QDialog):
         v = QVBoxLayout(self)
         top = QLabel(
             f"<b>{project.rec.name}</b> · 출력 폴더: {root}<br>"
-            "<span style='color:#8b92a3'>자동 게시는 하지 않습니다. 파일을 열어 직접 업로드한 뒤 '업로드 완료'를 체크하세요.</span>"
+            "<span style='color:#8c8c8c'>자동 게시는 하지 않습니다. 파일을 열어 직접 업로드한 뒤 '업로드 완료'를 체크하세요.</span>"
         )
         top.setWordWrap(True)
         v.addWidget(top)
@@ -818,7 +818,7 @@ class ReadyDialog(QDialog):
             col = QVBoxLayout()
             th = QLabel()
             th.setFixedSize(110, 130 if "FEED" in title or "COVER" in label.upper() or "커버" in label else 100)
-            th.setStyleSheet("background:#12141a;border:1px solid #323744;")
+            th.setStyleSheet("background:#0e0e0e;border:1px solid #2b2b2b;")
             th.setAlignment(Qt.AlignmentFlag.AlignCenter)
             if ok and str(path).lower().endswith(".jpg"):
                 pm = QPixmap(str(path))

@@ -60,7 +60,7 @@ class _TileDelegate(QStyledItemDelegate):
         p.drawRoundedRect(r, 5, 5)
         # 썸네일 (가로세로 비율 유지)
         th = QRectF(r.x() + 2, r.y() + 2, r.width() - 4, r.height() - 4 - 22)
-        p.fillRect(th, QColor("#101216"))
+        p.fillRect(th, QColor("#0c0c0c"))
         img = self.strip.thumb(d["rep"])
         if img is not None and img.height() > 0:
             sc = min(th.width() / img.width(), th.height() / img.height())

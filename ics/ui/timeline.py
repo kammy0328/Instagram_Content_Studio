@@ -188,7 +188,7 @@ class TimelineWidget(QWidget):
     def _paint_ranges(self, p: QPainter) -> None:
         st = self.project.state
         for sel, y, name, col in ((st.story, Y_STORY, "STORY", theme.ACCENT2), (st.reels, Y_REELS, "REELS", theme.OK)):
-            p.fillRect(0, y, self.width(), SEL_H, QColor("#14161b"))
+            p.fillRect(0, y, self.width(), SEL_H, QColor("#101010"))
             if not sel.enabled:
                 p.setPen(theme.C["MUTED"])
                 p.setFont(QFont(self.font().family(), 8))
@@ -201,7 +201,7 @@ class TimelineWidget(QWidget):
             p.fillRect(r, c)
             p.setPen(QPen(QColor(col), 2))
             p.drawRect(r)
-            p.setPen(QColor("#0b0d11"))
+            p.setPen(QColor("#050505"))
             p.setFont(QFont(self.font().family(), 8, QFont.Weight.Bold))
             p.drawText(
                 r.adjusted(5, 0, 0, 0),
@@ -210,12 +210,12 @@ class TimelineWidget(QWidget):
             )
 
     def _paint_feed(self, p: QPainter) -> None:
-        p.fillRect(0, Y_FEED, self.width(), FEED_H, QColor("#14161b"))
+        p.fillRect(0, Y_FEED, self.width(), FEED_H, QColor("#101010"))
         items = self.project.feed_ordered()
         order = {it.id: n + 1 for n, it in enumerate([i for i in items if i.included])}
         p.setFont(QFont(self.font().family(), 8, QFont.Weight.Bold))
         for it in items:
-            col = QColor(theme.ACCENT if it.included else "#5b6171")
+            col = QColor(theme.ACCENT if it.included else "#555555")
             selected = it.id == self.sel_feed
             if it.kind == "video":
                 x0, x1 = self.x_of(it.start), self.x_of(it.end)
@@ -226,7 +226,7 @@ class TimelineWidget(QWidget):
                 p.setPen(QPen(QColor(theme.WARN) if selected else col, 2 if selected else 1))
                 p.drawRect(r)
                 if it.id in order:
-                    p.setPen(QColor("#0b0d11"))
+                    p.setPen(QColor("#050505"))
                     p.drawText(r.adjusted(4, 0, 0, 0), Qt.AlignmentFlag.AlignVCenter, f"{order[it.id]}▶")
             else:
                 x = self.x_of(it.start)

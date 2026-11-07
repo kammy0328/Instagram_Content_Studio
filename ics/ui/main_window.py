@@ -252,7 +252,7 @@ class EditorWindow(QMainWindow):
         body.addWidget(self.pages, 1)
         outer.addLayout(body, 1)
         self.toast_lbl = QLabel("", root)
-        self.toast_lbl.setStyleSheet("background:#2c3c5b;border:1px solid #92aaff;border-radius:9px;padding:10px 18px;")
+        self.toast_lbl.setStyleSheet("background:#262626;border:1px solid #9a9a9a;border-radius:9px;padding:10px 18px;")
         self.toast_lbl.hide()
         self._toast_timer = QTimer(self)
         self._toast_timer.setSingleShot(True)
@@ -1290,7 +1290,7 @@ class EditorWindow(QMainWindow):
         text, color = {
             "saved": ("● 저장됨", "#4cd08b"),
             "saving": ("저장 중…", "#f2b84b"),
-            "dirty": ("● 변경됨", "#8b92a3"),
+            "dirty": ("● 변경됨", "#8c8c8c"),
             "error": ("⚠ 저장 오류", "#ff5d6c"),
         }[status]
         self.save_lbl.setText(text)
