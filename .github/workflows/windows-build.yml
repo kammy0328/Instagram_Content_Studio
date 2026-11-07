@@ -5,7 +5,7 @@ name: Windows build
 on:
   workflow_dispatch:
   push:
-    branches: ["feature/windows_build", "fix/**", "feature/publisher", "feature/dark_perf"]
+    branches: ["main", "feature/windows_build", "fix/**", "feature/publisher", "feature/dark_perf"]
     tags: ["v*"]
   pull_request:
     paths:
@@ -71,6 +71,12 @@ jobs:
           & "$dest/ffmpeg.exe" -hide_banner -version | Select-Object -First 3
           & "$dest/ffmpeg.exe" -hide_banner -encoders | Select-String -Pattern "libx264 |prores_ks|aac "
           Get-ChildItem $dest | Select-Object Name, @{n="MB";e={[math]::Round($_.Length/1MB,1)}}
+
+      - name: 빌드 ID 기록 (앱 자동 업데이트가 비교에 사용)
+        run: |
+          $slug = ("${{ github.ref_name }}" -replace '[^A-Za-z0-9._-]', '-')
+          $id = "${{ github.sha }}".Substring(0, 7)
+          Set-Content -Path ics/_build.py -Value "BUILD_ID = `"$id`"`nBUILD_CHANNEL = `"$slug`"`n" -Encoding utf8
 
       - name: 의존성 설치
         run: |
@@ -173,6 +179,24 @@ jobs:
           path: release/*
           compression-level: 0
           retention-days: 14
+
+      - name: update.json 만들기 (앱 자동 업데이트용)
+        env:
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+        run: |
+          $slug = ("${{ github.ref_name }}" -replace '[^A-Za-z0-9._-]', '-')
+          $setup = Get-Item release/InstagramContentStudio_Setup.exe
+          $ver = (Select-String -Path ics/__init__.py -Pattern '__version__ = "(.+)"').Matches[0].Groups[1].Value
+          $meta = [ordered]@{
+            build_id = "${{ github.sha }}".Substring(0, 7)
+            version = $ver
+            channel = $slug
+            installer = $setup.Name
+            sha256 = (Get-FileHash $setup.FullName -Algorithm SHA256).Hash.ToLower()
+            notes = ("$env:COMMIT_MSG".Split("`n")[0])
+            built_at = (Get-Date).ToUniversalTime().ToString("s") + "Z"
+          }
+          $meta | ConvertTo-Json | Set-Content -Path release/update.json -Encoding utf8
 
       - name: GitHub Release 로 올리기 (누구나 내려받기)
         if: github.event_name != 'pull_request'

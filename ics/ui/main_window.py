@@ -301,6 +301,7 @@ class EditorWindow(QMainWindow):
         menu.addAction("단축키 설정", self.open_shortcuts)
         menu.addSeparator()
         menu.addAction("업로드 준비", self.open_ready)
+        menu.addAction("업데이트…", self.open_update)
         more.setMenu(menu)
         h.addWidget(more)
         br = QPushButton("내보내기  ↗")
@@ -1212,6 +1213,11 @@ class EditorWindow(QMainWindow):
 
     def open_ready(self) -> None:
         ReadyDialog(self.project, self, self.toast).exec()
+
+    def open_update(self) -> None:
+        from .update_ui import UpdateSettingsDialog
+
+        UpdateSettingsDialog(self.settings, self).exec()
 
     def open_publisher(self) -> None:
         from .. import paths

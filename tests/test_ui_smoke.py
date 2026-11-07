@@ -787,3 +787,21 @@ def test_render_plan_includes_pending_caption(qapp, win):
         assert job.params["caption"] == "렌더 직전 본문"
     finally:
         win.render_dialog.close()
+
+
+def test_new_project_dialog_needs_only_name_and_master_and_defaults_output_to_master_folder(
+    qapp, prores_2398, tmp_path
+):
+    from ics.ui.dialogs import NewProjectDialog
+
+    d = NewProjectDialog(None, "C:/old_output")
+    assert not hasattr(d, "artist") and not hasattr(d, "title")
+    d._set_master(str(prores_2398))
+    assert d.output.text() == str(prores_2398.parent)  # 마스터링 폴더가 출력 폴더 기본값
+    assert d.name.text() == prores_2398.stem
+    d.output.setText(str(tmp_path / "custom"))
+    d._output_edited = True  # 직접 바꾼 값은 유지
+    d._set_master(str(prores_2398))
+    assert d.output.text() == str(tmp_path / "custom")
+    v = d.values()
+    assert v["artist"] == "" and v["title"] == v["name"] and v["output_dir"] == str(tmp_path / "custom")

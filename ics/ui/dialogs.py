@@ -102,7 +102,7 @@ class NewProjectDialog(QDialog):
         self.setWindowTitle("새 프로젝트")
         self.setWindowIcon(studio_icon())
         self.setAcceptDrops(True)
-        self.resize(640, 450)
+        self.resize(640, 360)
         self.info: media_mod.MediaInfo | None = None
         v = QVBoxLayout(self)
         v.setContentsMargins(28, 24, 28, 24)
@@ -110,17 +110,20 @@ class NewProjectDialog(QDialog):
         heading = QLabel("새 프로젝트 만들기")
         heading.setObjectName("h1")
         v.addWidget(heading)
-        note = QLabel("마스터링 원본과 결과물을 저장할 폴더를 선택하세요.")
+        note = QLabel(
+            "프로젝트명과 마스터링 영상만 정하면 됩니다. 출력 폴더는 마스터링과 같은 폴더가 기본값이고 바꿀 수 있어요."
+        )
         note.setObjectName("muted")
         v.addWidget(note)
         f = QFormLayout()
         self.name = QLineEdit()
         self.name.setPlaceholderText("예: 아티스트_뮤직비디오")
-        self.artist = QLineEdit()
-        self.title = QLineEdit()
         self.master = QLineEdit()
         self.master.setPlaceholderText("MP4/MOV 마스터링 영상을 끌어다 놓거나 선택")
         self.output = QLineEdit(default_output)
+        self.output.setPlaceholderText("비워 두면 마스터링 영상이 있는 폴더를 사용합니다")
+        self._output_edited = False  # 사용자가 직접 바꾼 뒤에는 마스터링 경로 변경이 출력 경로를 덮어쓰지 않는다
+        self.output.textEdited.connect(lambda _t: setattr(self, "_output_edited", True))
         bm = QPushButton("선택…")
         bm.clicked.connect(self._pick_master)
         bo = QPushButton("선택…")
@@ -131,8 +134,6 @@ class NewProjectDialog(QDialog):
         ro.addWidget(self.output)
         ro.addWidget(bo)
         f.addRow("프로젝트명", self.name)
-        f.addRow("아티스트", self.artist)
-        f.addRow("영상 제목", self.title)
         f.addRow("마스터링 경로", rm)
         f.addRow("출력 경로", ro)
         v.addLayout(f)
@@ -166,21 +167,24 @@ class NewProjectDialog(QDialog):
         self.master.setText(p)
         if not self.name.text():
             self.name.setText(Path(p).stem)
-        if not self.title.text():
-            self.title.setText(Path(p).stem)
+        if not self._output_edited:
+            self.output.setText(str(Path(p).parent))
 
     def _pick_output(self):
         p = QFileDialog.getExistingDirectory(self, "출력 경로", self.output.text())
         if p:
             self.output.setText(p)
+            self._output_edited = True
 
     def _ok(self):
         if not self.name.text().strip():
             self.msg.setText("프로젝트명을 입력하세요.")
             return
-        if not self.output.text().strip():
-            self.msg.setText("출력 경로를 지정하세요.")
+        if not self.master.text().strip():
+            self.msg.setText("마스터링 영상을 선택하세요.")
             return
+        if not self.output.text().strip():
+            self.output.setText(str(Path(self.master.text().strip()).parent))
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             info = media_mod.analyze(self.master.text().strip())
@@ -196,8 +200,8 @@ class NewProjectDialog(QDialog):
     def values(self) -> dict:
         return {
             "name": self.name.text().strip(),
-            "artist": self.artist.text().strip(),
-            "title": self.title.text().strip(),
+            "artist": "",
+            "title": self.name.text().strip(),
             "master_path": self.master.text().strip(),
             "output_dir": self.output.text().strip(),
         }

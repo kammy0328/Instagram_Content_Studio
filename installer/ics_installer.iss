@@ -45,5 +45,13 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"; Tasks: deskto
 
 [Run]
 Filename: "{app}\{#MyAppExe}"; Description: "{#MyAppName} 실행"; Flags: nowait postinstall skipifsilent
+; 앱 안에서 자동 업데이트로 조용히 설치된 경우(/LAUNCH=1) 끝나고 다시 실행한다
+Filename: "{app}\{#MyAppExe}"; Flags: nowait; Check: ShouldRelaunch
 
 ; 프로젝트 데이터(%APPDATA%\InstagramContentStudio)와 출력 폴더는 제거하지 않는다 (사용자 데이터 보호).
+
+[Code]
+function ShouldRelaunch: Boolean;
+begin
+  Result := ExpandConstant('{param:LAUNCH|0}') = '1';
+end;

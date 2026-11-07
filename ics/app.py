@@ -20,6 +20,7 @@ from .ui import theme
 from .ui.dialogs import MediaReportDialog, NewProjectDialog, ProjectListDialog
 from .ui.main_window import EditorWindow
 from .ui.settings import Settings
+from .ui.update_ui import AutoUpdate
 from .ui.widgets import studio_icon
 
 
@@ -60,6 +61,8 @@ class App:
             QMessageBox.critical(None, "FFmpeg 없음", str(e))
             return 2
         QTimer.singleShot(0, self.show_projects)
+        self._auto_update = AutoUpdate(self.settings)
+        QTimer.singleShot(3000, self._auto_update.start)
         return self.qt.exec()
 
     def _quit(self) -> None:
