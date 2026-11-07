@@ -520,8 +520,10 @@ class AudioPlayer:
             sink = QAudioSink(dev, fmt)
             sink.start(f)
             self._sink, self._file = sink, f
-            if sink.error() != QAudio.Error.NoError:
-                self.error = f"소리 출력 오류({sink.error().name}) - 출력 장치: {dev.description()}"
+            error = sink.error()
+            # Qt 버전에 따라 QtAudio.Error와 QAudio.Error가 다른 Python Enum이 될 수 있다.
+            if error.value != QAudio.Error.NoError.value:
+                self.error = f"소리 출력 오류({error.name}) - 출력 장치: {dev.description()}"
         except Exception as e:  # noqa: BLE001
             self.error = f"소리를 재생하지 못했습니다: {e}"
 
