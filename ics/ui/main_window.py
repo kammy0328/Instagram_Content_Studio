@@ -307,6 +307,10 @@ class EditorWindow(QMainWindow):
         br.setObjectName("primary")
         br.setToolTip("STORY · REELS · FEED 파일과 캡션을 확인하고 렌더링합니다.")
         br.clicked.connect(self.open_render)
+        bp = QPushButton("게시…")
+        bp.setToolTip("Instagram 에 게시/예약합니다 (Cloudflare 중계 필요).")
+        bp.clicked.connect(self.open_publisher)
+        h.addWidget(bp)
         h.addWidget(br)
         v.addLayout(h)
         status = QHBoxLayout()
@@ -1208,6 +1212,18 @@ class EditorWindow(QMainWindow):
 
     def open_ready(self) -> None:
         ReadyDialog(self.project, self, self.toast).exec()
+
+    def open_publisher(self) -> None:
+        from .. import paths
+        from ..publisher.secrets import default_secret_store
+        from ..publisher.service import PublisherService
+        from .publisher_dialog import PublisherDialog
+
+        if getattr(self, "_pub_service", None) is None:
+            d = paths.app_data_dir() / "publisher"
+            d.mkdir(parents=True, exist_ok=True)
+            self._pub_service = PublisherService(d, self.settings, default_secret_store(d / "secrets.json"))
+        PublisherDialog(self.project, self._pub_service, self, self.toast).exec()
 
     # ================================================================ Undo/Redo
     def do_undo(self) -> None:

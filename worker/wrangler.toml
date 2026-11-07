@@ -1,0 +1,31 @@
+name = "ics-publisher-relay"
+main = "src/index.js"
+compatibility_date = "2025-01-01"
+
+# 1분마다: 예약 시각이 된 작업 실행, 처리 중인 컨테이너 상태 확인, 오래된 임시 영상 정리.
+# (무료 플랜: Cron Triggers 계정당 5개, 호출당 CPU 10ms. 대기 시간은 CPU 로 세지 않는다.)
+[triggers]
+crons = ["* * * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "ics-publisher"
+database_id = "REPLACE_WITH_YOUR_D1_ID"
+
+[[r2_buckets]]
+binding = "MEDIA"
+bucket_name = "ics-publisher-media"
+
+[vars]
+# 배포 후 workers.dev 주소 (예: https://ics-publisher-relay.<계정>.workers.dev). Meta 가 영상을 가져갈 공개 HTTPS 주소의 기준.
+PUBLIC_BASE = "https://REPLACE.workers.dev"
+# 예약 시각에서 이 시간(분)이 넘어 실행되지 못한 작업은 자동 게시하지 않고 사용자 확인(MISSED)으로 둔다.
+MISSED_GRACE_MIN = "10"
+# 게시 완료 후 임시 영상을 지우기까지의 유예(분). 실패/취소 건은 7일 보존.
+CLEANUP_DELAY_MIN = "60"
+GRAPH_HOST = "https://graph.facebook.com"
+
+# 비밀값은 wrangler secret put 으로만 넣는다 (파일/저장소에 쓰지 않는다):
+#   RELAY_API_KEY      앱 <-> 중계 인증 키 (긴 무작위 문자열)
+#   TOKEN_KEY          토큰 암호화 키 (base64, 32바이트)
+#   MEDIA_SIGNING_KEY  임시 영상 URL 서명 키 (긴 무작위 문자열)

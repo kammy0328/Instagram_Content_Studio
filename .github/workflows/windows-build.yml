@@ -5,7 +5,7 @@ name: Windows build
 on:
   workflow_dispatch:
   push:
-    branches: ["feature/windows_build", "fix/**"]
+    branches: ["feature/windows_build", "fix/**", "feature/publisher"]
     tags: ["v*"]
   pull_request:
     paths:

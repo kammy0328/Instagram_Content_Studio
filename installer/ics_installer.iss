@@ -36,6 +36,8 @@ Name: "desktopicon"; Description: "바탕 화면 아이콘 만들기"; Flags: un
 
 [Files]
 Source: "..\dist\InstagramContentStudio\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; 클라우드 중계(Cloudflare Worker) 소스: 사용자가 직접 배포한다 (README.md 의 설정 순서 참고)
+Source: "..\worker\*"; DestDir: "{app}\relay"; Excludes: "node_modules\*,.wrangler\*,test\*,.dev.vars"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"
