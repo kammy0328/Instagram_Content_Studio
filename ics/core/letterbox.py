@@ -79,4 +79,64 @@ def detect_letterbox(
     bottom = int((h - y - ch) * info.display_h / h) // 2 * 2
     if not any((left, top, right, bottom)):
         return None
+    left, top, right, bottom = refine_margins(info, index, samples, (left, top, right, bottom), cancel)
+    if not any((left, top, right, bottom)):
+        return None
     return left, top, info.display_w - left - right, info.display_h - top - bottom
+
+
+EDGE_LEVEL = 32  # 띠 경계로 볼 밝기 (압축 잡음/링잉으로 띠가 16을 조금 넘어도 영상으로 오인하지 않게)
+STEP_LEVEL = 40  # 경계로 인정할 행 사이 밝기 증가량
+EDGE_WINDOW = 8  # 축소 샘플 경계 오차를 보정하는 범위(원본 픽셀)
+
+
+def edge_offsets(light: np.ndarray, margin: int, window: int = EDGE_WINDOW, level: int = EDGE_LEVEL) -> int:
+    """한쪽 띠 경계를 원본 해상도에서 다듬는다. light: 띠 쪽 가장자리부터 안쪽 방향으로 정렬한 행(또는 열)별 밝기 분위수.
+    margin 근처에서 처음으로 밝아지는 행을 영상의 시작으로 본다."""
+    lo = max(1, margin - window)
+    hi = min(len(light) - 1, margin + window)
+    if hi >= lo:
+        steps = np.diff(light[lo - 1 : hi + 1].astype(float))  # steps[i] = light[lo+i] - light[lo+i-1]
+        i = int(np.argmax(steps))
+        if steps[i] >= STEP_LEVEL:
+            return lo + i  # 압축 링잉으로 띠가 흐려져도 가장 크게 밝아지는 지점이 영상의 시작이다
+    for r in range(max(0, margin - window), hi + 1):
+        if light[r] > level:
+            return r
+    return margin
+
+
+def refine_margins(
+    info: MediaInfo,
+    index: FrameIndex,
+    samples: list[int],
+    margins: tuple[int, int, int, int],
+    cancel: Event | None = None,
+) -> tuple[int, int, int, int]:
+    """축소(최대 960px) 감지 결과를 원본 해상도 프레임 몇 장으로 다듬는다. 압축 잡음 때문에 경계가 1~수 픽셀 안쪽/바깥쪽으로
+    어긋나 검정 선이 남거나 영상이 깎이는 것을 줄인다. 프레임마다 가장 덜 자르는 값을 쓰고, 짝수 정렬은 띠를 남기지 않도록 올림한다."""
+    left, top, right, bottom = margins
+    picks = samples[:: max(1, len(samples) // 5)][:5]
+    best = [10**9] * 4
+    used = 0
+    for frame in picks:
+        if cancel is not None and cancel.is_set():
+            raise InterruptedError("검정 띠 감지를 취소했습니다.")
+        a = decode_frame_rgb(info, index, frame)[0]
+        light = a.max(axis=2)
+        if np.quantile(light, 0.99) <= 32:
+            continue  # 암전 프레임은 경계 판단에 쓰지 않는다
+        used += 1
+        rows = np.quantile(light, 0.995, axis=1)
+        cols = np.quantile(light, 0.995, axis=0)
+        cur = (
+            edge_offsets(cols, left) if left else 0,
+            edge_offsets(rows, top) if top else 0,
+            edge_offsets(cols[::-1], right) if right else 0,
+            edge_offsets(rows[::-1], bottom) if bottom else 0,
+        )
+        best = [min(b, c) for b, c in zip(best, cur)]
+    if not used:
+        return margins
+    out = tuple(0 if m == 0 else min(m + EDGE_WINDOW, (b + 1) // 2 * 2) for m, b in zip(margins, best))
+    return out  # type: ignore[return-value]
