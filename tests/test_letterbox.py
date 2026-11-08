@@ -200,3 +200,30 @@ def test_detect_display_coordinates_with_sar_and_rotation(tmp_path, opener, tran
     g = compute_geometry(info.display_w, info.display_h, "orig", LayoutParams(auto_crop=True, source_crop=rect))
     arr = engine.decode_still_rgb(info, idx, 3, g)
     assert arr[4:-4, 4:-4].mean(axis=2).min() > 70
+
+
+@pytest.mark.parametrize("crf", [23, 34])
+@pytest.mark.parametrize(
+    "bars", [("crop=1920:800:0:140,pad=1920:1080:0:140:black", (0, 140, 1920, 800)), ("crop=1500:700:210:190,pad=1920:1080:210:190:black", (210, 190, 1500, 700))]
+)  # fmt: skip
+def test_detected_edges_are_exact_even_with_compression_ringing(tmp_path, opener, crf, bars):
+    """축소 샘플만으로는 압축 링잉 때문에 경계가 최대 수 픽셀 어긋나 검정 선이 남았다. 원본 해상도 보정 후에는 정확해야 한다."""
+    from ics.core import ffbin
+    from ics.core.letterbox import detect_letterbox
+
+    vf, ideal = bars
+    src = tmp_path / "bars.mp4"
+    cmd = [ffbin.ffmpeg(), "-v", "error", "-y", "-f", "lavfi", "-i", f"testsrc2=size=1920x1080:rate=24,{vf}", "-t", "2"]
+    cmd += ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", str(crf), str(src)]
+    assert ffbin.run(cmd, timeout=120).returncode == 0
+    info, idx = opener(src)
+    got = detect_letterbox(info, idx, 0, idx.count)
+    assert got is not None
+    # 검정이 남지 않아야 하고(바깥쪽 오차 0), 영상이 깎이더라도 2px 이내
+    inward = (
+        got[0] - ideal[0],
+        got[1] - ideal[1],
+        ideal[0] + ideal[2] - got[0] - got[2],
+        ideal[1] + ideal[3] - got[1] - got[3],
+    )
+    assert all(0 <= v <= 2 for v in inward), (got, ideal)
