@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from fractions import Fraction
 
 ASPECT_916 = Fraction(9, 16)
@@ -23,6 +23,8 @@ class LayoutParams:
     pos_x: float = 0.5  # 0..1  (여백이 있으면 여백 안에서의 위치, 크롭하면 크롭 창 위치)
     pos_y: float = 0.5
     zv: int = 2  # 데이터 버전. 1 이하(옛 저장본)의 fit 은 확대가 비활성이었으므로 남아 있는 zoom 값을 무시한다
+    auto_crop: bool = False
+    source_crop: tuple[int, int, int, int] | None = None  # 감지한 원본 표시 좌표 (x, y, w, h)
 
     def to_dict(self):
         return asdict(self)
@@ -34,7 +36,18 @@ class LayoutParams:
         zoom = float(d.get("zoom", 1.0))
         if mode == "fit" and int(d.get("zv", 1)) < 2:
             zoom = 1.0  # 예전에는 fit 에서 확대가 꺼져 있었다: fill 때 남은 값으로 결과가 바뀌면 안 된다
-        return cls(mode=mode, zoom=zoom, pos_x=float(d.get("pos_x", 0.5)), pos_y=float(d.get("pos_y", 0.5)), zv=2)
+        crop = d.get("source_crop")
+        if not isinstance(crop, (list, tuple)) or len(crop) != 4 or not all(type(v) is int for v in crop):
+            crop = None
+        return cls(
+            mode=mode,
+            zoom=zoom,
+            pos_x=float(d.get("pos_x", 0.5)),
+            pos_y=float(d.get("pos_y", 0.5)),
+            zv=2,
+            auto_crop=bool(d.get("auto_crop", False)),
+            source_crop=tuple(crop) if crop else None,
+        )
 
 
 @dataclass
@@ -55,6 +68,7 @@ class Geometry:
     scale: float = 1.0  # 소스 -> 출력 배율 (1 초과 = 업스케일)
     upscaled: bool = False
     tier_note: str = ""
+    source_crop: tuple[int, int, int, int] | None = None  # 배경 채우기도 같은 원본 영역을 사용
 
     def to_dict(self):
         return asdict(self)
@@ -68,9 +82,26 @@ def _even_floor(v: float) -> int:
     return max(2, int(v // 2) * 2)
 
 
+def source_bounds(disp_w: int, disp_h: int, params: LayoutParams) -> tuple[int, int, int, int] | None:
+    crop = params.source_crop if params.auto_crop else None
+    if crop and len(crop) == 4 and all(type(v) is int for v in crop):
+        x, y, w, h = crop
+        if x >= 0 and y >= 0 and w >= 2 and h >= 2 and x + w <= disp_w and y + h <= disp_h:
+            return tuple(crop)
+    return None
+
+
 def compute_geometry(disp_w: int, disp_h: int, kind: str, params: LayoutParams | None = None) -> Geometry:
     """kind: '916' | '45' | 'orig'(원본 비율).  disp_*: SAR/회전 반영한 정사각 픽셀 기준 표시 크기."""
     params = params or LayoutParams()
+    crop = source_bounds(disp_w, disp_h, params)
+    if crop:
+        x, y, w, h = crop
+        g = compute_geometry(w, h, kind, replace(params, auto_crop=False))
+        g.crop_x += x
+        g.crop_y += y
+        g.source_crop = crop
+        return g
     orig = kind == "orig"
     if orig:
         w0 = _even(min(1080, disp_w))

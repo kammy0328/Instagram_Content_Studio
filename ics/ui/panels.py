@@ -198,6 +198,7 @@ class LayoutEditor(QGroupBox):
 
     changed = Signal(object)  # LayoutParams
     committed = Signal(object)
+    cropRequested = Signal(bool)  # True: 다시 감지, False: 기존 원본 감지 결과 재사용 가능
 
     def __init__(self, title="화면 배치"):
         super().__init__(title)
@@ -209,6 +210,24 @@ class LayoutEditor(QGroupBox):
         row.addWidget(self.r_fit)
         row.addWidget(self.r_fill)
         v.addLayout(row)
+        self._source_crop = None
+        self.auto_crop = QCheckBox("검정 띠 자동 크롭")
+        self.auto_crop.setToolTip(
+            "원본 전체의 최대 15개 프레임에서 공통 검정 띠를 감지합니다.\n"
+            "켜면 Fit/Fill 전에 띠를 제거하고, 끄면 원본 영역으로 돌아갑니다.\n"
+            "장면마다 띠나 화면 비율이 달라지면 놓칠 수 있으므로 출력 미리보기를 확인하세요."
+        )
+        self.detect_crop = QPushButton("다시 감지")
+        self.detect_crop.setEnabled(False)
+        self.detect_crop.clicked.connect(lambda: self.cropRequested.emit(True))
+        crop_row = QHBoxLayout()
+        crop_row.addWidget(self.auto_crop, 1)
+        crop_row.addWidget(self.detect_crop)
+        v.addLayout(crop_row)
+        self.crop_info = QLabel("원본의 위·아래 / 좌·우 검정 띠를 감지합니다.")
+        self.crop_info.setObjectName("muted")
+        self.crop_info.setWordWrap(True)
+        v.addWidget(self.crop_info)
         f = QFormLayout()
         self.zoom = slider(100, 400, 100)
         self.px = slider(0, 100, 50)
@@ -229,6 +248,8 @@ class LayoutEditor(QGroupBox):
         btn.clicked.connect(self.reset)
         v.addWidget(btn)
         self._block = False
+        self._crop_busy = False
+        self.auto_crop.toggled.connect(self._crop_toggled)
         for w in (self.r_fit, self.r_fill):
             w.toggled.connect(self._emit)
         for s in (self.zoom, self.px, self.py):
@@ -239,6 +260,21 @@ class LayoutEditor(QGroupBox):
 
     def _sync_enabled(self):
         self.zoom.setEnabled(True)
+        self.detect_crop.setEnabled(self.auto_crop.isChecked() and not self._crop_busy)
+
+    def _crop_toggled(self, on: bool) -> None:
+        self._sync_enabled()
+        if self._block:
+            return
+        self.changed.emit(self.value())
+        self.committed.emit(self.value())
+        if on and self._source_crop is None:
+            self.cropRequested.emit(False)
+
+    def set_crop_busy(self, busy: bool) -> None:
+        self._crop_busy = busy
+        self.detect_crop.setText("감지 중…" if busy else "다시 감지")
+        self._sync_enabled()
 
     def set_original_ratio(self, on: bool) -> None:
         """원본 비율 출력이면 여백/크롭 선택이 의미 없으므로 Fit/Fill 선택을 숨긴다."""
@@ -251,10 +287,23 @@ class LayoutEditor(QGroupBox):
             self.zoom.value() / 100.0,
             self.px.value() / 100.0,
             self.py.value() / 100.0,
+            auto_crop=self.auto_crop.isChecked(),
+            source_crop=self._source_crop,
         )
 
     def set_value(self, lp: LayoutParams) -> None:
         self._block = True
+        self._source_crop = lp.source_crop
+        self.auto_crop.setChecked(lp.auto_crop)
+        self.crop_info.setText(
+            (
+                f"감지 영역 {lp.source_crop[2]}×{lp.source_crop[3]} · 크롭 켜짐"
+                if lp.source_crop
+                else "검정 띠 감지 대기 중…"
+            )
+            if lp.auto_crop
+            else "자동 크롭 꺼짐 · 원본 영역 유지"
+        )
         (self.r_fill if lp.mode == "fill" else self.r_fit).setChecked(True)
         self.zoom.setValue(int(lp.zoom * 100))
         self.px.setValue(int(round(lp.pos_x * 100)))
@@ -264,7 +313,9 @@ class LayoutEditor(QGroupBox):
         self._block = False
 
     def reset(self):
-        self.set_value(LayoutParams(self.value().mode))
+        self.set_value(
+            LayoutParams(self.value().mode, auto_crop=self.auto_crop.isChecked(), source_crop=self._source_crop)
+        )
         self.changed.emit(self.value())
         self.committed.emit(self.value())
 

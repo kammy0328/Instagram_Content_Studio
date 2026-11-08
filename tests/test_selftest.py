@@ -18,6 +18,7 @@ def test_selftest_passes_and_writes_report(tmp_path, monkeypatch):
     text = out.read_text(encoding="utf-8")
     assert code == 0, text
     assert "RESULT: ALL PASSED" in text and "[FAIL]" not in text
+    assert "[PASS] 검정 띠 감지와 자동 크롭 출력" in text
     assert (
         "[PASS] 소리: 재생용 WAV 생성과 출력 장치" in text and "출력 장치 없음" in text
     )  # 테스트는 오디오 장치에 닿지 않는다

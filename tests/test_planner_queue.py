@@ -197,3 +197,37 @@ def test_sections_export_separately(proj):
     assert all(j.kind == "story" for j in story.jobs)
     no_feed = plan_render(proj, sections={"story", "reels"})
     assert not any(j.kind.startswith("feed") or j.kind == "captions" for j in no_feed.jobs)
+
+
+def test_letterbox_plan_pending_crop_and_original_still_preservation(proj):
+    from ics.core.layout import LayoutParams
+
+    proj.set_selection_layout("story", LayoutParams(auto_crop=True))
+    plan = plan_render(proj, sections={"story"})
+    assert plan.blocked
+    assert any("검정 띠 감지" in i.message for i in plan.issues)
+    assert not plan_render(proj, sections={"reels"}).blocked
+    lp = LayoutParams(auto_crop=True, source_crop=(0, 60, 960, 420))
+    proj.set_selection_layout("story", lp)
+    proj.set_selection_layout("reels", lp)
+    proj.set_cover_layout(lp)
+    for item in proj.state.feed:
+        proj.set_feed_layout(item.id, lp)
+    plan = plan_render(proj)
+    assert not plan.blocked
+    processed = [j for j in plan.jobs if j.kind in ("story", "reels", "reels_cover", "feed_still", "feed_video")]
+    assert len(processed) == 6
+    assert all(j.params["geo"]["source_crop"] == (0, 60, 960, 420) for j in processed)
+    assert all(j.params["geo"]["crop_y"] >= 60 for j in processed)
+    originals = [j for j in plan.jobs if j.kind == "original_still"]
+    assert originals
+    assert all("source_crop" not in j.params for j in originals)
+
+
+def test_letterbox_feed_warning_uses_cropped_aspect(proj):
+    from ics.core.layout import LayoutParams
+
+    proj.set_feed_ratio("orig")
+    for item in proj.state.feed:
+        proj.set_feed_layout(item.id, LayoutParams(auto_crop=True, source_crop=(0, 60, 960, 420)))
+    assert any("허용 범위" in issue.message for issue in plan_render(proj, sections={"feed"}).issues)

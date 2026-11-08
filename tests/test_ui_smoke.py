@@ -54,6 +54,78 @@ def pump(app, ms=200):
         time.sleep(0.005)
 
 
+@pytest.mark.parametrize("target", ["story", "reels", "cover", "feed_still", "feed_video"])
+def test_letterbox_toggle_async_target_and_layout_preservation(qapp, win, monkeypatch, target):
+    from ics.core.layout import compute_geometry
+
+    p = win.project
+    item = None
+    if target.startswith("feed"):
+        item = p.add_feed_still(10) if target == "feed_still" else p.add_feed_video(10, 20)[0]
+        win.set_tab("feed")
+        pump(qapp)
+        win.feed_panel.select(item.id)
+        editor = win.feed_panel.layout_editor
+    else:
+        win.set_tab("reels" if target == "cover" else target)
+        editor = win.reels_panel.cover_layout if target == "cover" else getattr(win, f"{target}_panel").layout_editor
+    pump(qapp)
+
+    def start():
+        win.letterbox.busy = True
+
+    monkeypatch.setattr(win.letterbox, "start", start)
+    editor.auto_crop.setChecked(True)
+    assert win._crop_pending
+    # 감지를 기다리는 동안 한 확대 조작은 결과 도착 후에도 유지한다.
+    editor.zoom.setValue(125)
+    win._layout_commit()
+    if item:
+        other = p.add_feed_still(40)
+        pump(qapp)
+        win.feed_panel.select(other.id)
+        pump(qapp)
+    win.letterbox.busy = False
+    win._letterbox_finished((0, 60, 960, 420), "")
+    pump(qapp)
+    lp = item.layout if item else (p.state.cover.layout if target == "cover" else getattr(p.state, target).layout)
+    assert lp.auto_crop and lp.source_crop == (0, 60, 960, 420)
+    assert lp.zoom == 1.25
+    if item:
+        assert not other.layout.auto_crop
+        win.feed_panel.select(item.id)
+        pump(qapp)
+    editor.auto_crop.setChecked(False)
+    pump(qapp)
+    lp = item.layout if item else (p.state.cover.layout if target == "cover" else getattr(p.state, target).layout)
+    assert not lp.auto_crop and lp.source_crop == (0, 60, 960, 420)
+    assert compute_geometry(960, 540, "916", lp).source_crop is None
+    win.do_undo()
+    pump(qapp)
+    lp, _ = win._crop_target("feed" if item else target, item.id if item else None)
+    assert lp.auto_crop
+
+
+def test_letterbox_result_cannot_reenable_crop_after_toggle_off(qapp, win, monkeypatch):
+    monkeypatch.setattr(win.letterbox, "start", lambda: None)
+    editor = win.story_panel.layout_editor
+    editor.auto_crop.setChecked(True)
+    editor.auto_crop.setChecked(False)
+    win._letterbox_finished((0, 60, 960, 420), "")
+    pump(qapp)
+    assert not win.project.state.story.layout.auto_crop
+    assert win.project.state.story.layout.source_crop is None
+
+
+def test_letterbox_detection_error_leaves_crop_off(qapp, win, monkeypatch):
+    monkeypatch.setattr(win.letterbox, "start", lambda: None)
+    win.story_panel.layout_editor.auto_crop.setChecked(True)
+    win._letterbox_finished(None, "검정 띠 감지 실패: 테스트 오류")
+    pump(qapp)
+    assert not win.project.state.story.layout.auto_crop
+    assert not win._crop_pending
+
+
 def test_editor_and_credits_fit_laptop_viewport(qapp, win):
     # Windows offscreen 플러그인은 시스템 폰트를 자동 검색하지 못할 수 있다. 실제 한글 글꼴 폭으로 검사한다.
     from pathlib import Path

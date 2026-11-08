@@ -8,7 +8,7 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ..core.layout import compute_geometry
+from ..core.layout import compute_geometry, source_bounds
 from ..core.model import FEED_MAX_FINAL, FEED_VIDEO_MAX_SEC, REELS_MAX_SEC, STORY_MAX_SEC
 from ..core.project import Project
 from . import overlay
@@ -98,6 +98,18 @@ def plan_render(
     plan.root = str(root)
     name = project.project_folder_name()
     fps = float(info.fps_frac)
+    layouts = []
+    for section in ("story", "reels"):
+        sel = getattr(st, section)
+        if want(section) and sel.enabled:
+            layouts.append((section.upper(), sel.layout))
+    if want("reels") and st.cover.frame is not None:
+        layouts.append(("REELS 커버", st.cover.layout))
+    if want("feed"):
+        layouts.extend((f"FEED #{n}", item.layout) for n, item in enumerate(project.feed_included(), 1))
+    for label, lp in layouts:
+        if lp.auto_crop and source_bounds(info.display_w, info.display_h, lp) is None:
+            plan.issues.append(PlanIssue("error", f"{label}: 검정 띠 감지를 완료하거나 자동 크롭을 꺼 주세요."))
     jid = 0
 
     def add(kind, label, out, params, est=0) -> RenderJob:
@@ -185,18 +197,17 @@ def plan_render(
     else:
         done_orig: set[int] = set()
         feed_kind = project.feed_kind()
-        if feed_kind == "orig" and included:
-            ar = info.display_w / info.display_h
-            if not (0.8 - 1e-3 <= ar <= 1.91 + 1e-3):
+        for n, it in enumerate(included, start=1):
+            geo = compute_geometry(info.display_w, info.display_h, feed_kind, it.layout)
+            ar = geo.canvas_w / geo.canvas_h
+            if feed_kind == "orig" and not (0.8 - 1e-3 <= ar <= 1.91 + 1e-3):
                 plan.issues.append(
                     PlanIssue(
                         "warn",
-                        f"FEED 원본 비율({info.display_w}:{info.display_h})이 인스타그램 피드 허용 범위(4:5 ~ 1.91:1)를 "
+                        f"FEED #{n} 출력 비율({geo.canvas_w}:{geo.canvas_h})이 인스타그램 피드 허용 범위(4:5 ~ 1.91:1)를 "
                         "벗어납니다. 인스타그램이 피드에서 가장자리를 잘라 보여 줄 수 있습니다.",
                     )
                 )
-        for n, it in enumerate(included, start=1):
-            geo = compute_geometry(info.display_w, info.display_h, feed_kind, it.layout)
             if it.kind == "video":
                 dur = project.seconds(it.start, it.end)
                 if index.time_of(it.end) - index.time_of(it.start) > FEED_VIDEO_MAX_SEC:
