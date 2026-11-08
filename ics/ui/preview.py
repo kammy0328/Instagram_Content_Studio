@@ -6,7 +6,7 @@ from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QImage, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
-from ..core.layout import Geometry, LayoutParams, compute_geometry, profile_grid_window
+from ..core.layout import Geometry, LayoutParams, compute_geometry, profile_grid_window, source_bounds
 from . import theme
 
 
@@ -85,13 +85,19 @@ class PreviewWidget(QWidget):
 
     def _paint_blur_bg(self, p: QPainter, cr: QRectF) -> None:
         """영상을 캔버스에 가득 차게 잘라 아주 작게 줄였다 키워(=흐림) 그리고, 최종 렌더링처럼 어둡게 한다."""
-        iw, ih = self.image.width(), self.image.height()
+        image = self.image
+        crop = source_bounds(*self.disp, self.layout)
+        if crop:
+            x, y, w, h = crop
+            kx, ky = image.width() / self.disp[0], image.height() / self.disp[1]
+            image = image.copy(int(x * kx), int(y * ky), max(1, int(w * kx)), max(1, int(h * ky)))
+        iw, ih = image.width(), image.height()
         ar = cr.width() / cr.height()
         if iw / ih > ar:
             sw, sh = ih * ar, ih
         else:
             sw, sh = iw, iw / ar
-        src = self.image.copy(int((iw - sw) / 2), int((ih - sh) / 2), max(1, int(sw)), max(1, int(sh)))
+        src = image.copy(int((iw - sw) / 2), int((ih - sh) / 2), max(1, int(sw)), max(1, int(sh)))
         # 아주 작게 줄인 뒤 두 단계로 키워 마름모/블록 무늬 없이 부드럽게 퍼지게 한다
         sm = Qt.TransformationMode.SmoothTransformation
         im = src.scaled(32, max(2, int(32 / ar)), Qt.AspectRatioMode.IgnoreAspectRatio, sm)

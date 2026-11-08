@@ -41,6 +41,39 @@ def np_to_qimage(arr: np.ndarray) -> QImage:
     return img.copy()
 
 
+class LetterboxService(QObject):
+    """원본 전체의 검정 띠를 백그라운드에서 한 건씩 감지한다."""
+
+    finished = Signal(object, str)
+
+    def __init__(self, info: MediaInfo, index: FrameIndex, parent=None):
+        super().__init__(parent)
+        self.info, self.index = info, index
+        self.busy = False
+        self._cancel = threading.Event()
+
+    def start(self) -> None:
+        if self.busy or self._cancel.is_set():
+            return
+        self.busy = True
+        threading.Thread(target=self._run, name="ics-letterbox", daemon=True).start()
+
+    def cancel(self) -> None:
+        self._cancel.set()
+
+    def _run(self) -> None:
+        from ..core.letterbox import detect_letterbox
+
+        crop, error = None, ""
+        try:
+            crop = detect_letterbox(self.info, self.index, 0, self.index.count, self._cancel)
+            crop = crop or (0, 0, self.info.display_w, self.info.display_h)
+        except Exception as e:  # noqa: BLE001
+            error = f"검정 띠 감지 실패: {e}"
+        if not self._cancel.is_set():
+            self.finished.emit(crop, error)
+
+
 # ======================================================================= 프록시
 class ProxyBuilder(QObject):
     """고해상도 재생용 프록시(MJPEG all-intra, 프레임 번호 1:1)와 오디오 WAV 생성. 최종 렌더링에는 사용하지 않는다."""

@@ -182,6 +182,38 @@ def _check_pipeline(work: Path, qt_pump) -> str:
         proj.close()
 
 
+def _check_letterbox(work: Path) -> str:
+    from .core import ffbin, frameindex, media
+    from .core.layout import LayoutParams, compute_geometry
+    from .core.letterbox import detect_letterbox
+    from .render import engine
+
+    src = work / "letterbox.mp4"
+    p = ffbin.run([
+        ffbin.ffmpeg(), "-v", "error", "-y", "-f", "lavfi", "-i",
+        "color=c=0x80a0c0:s=320x132:r=24:d=1,pad=320:180:0:24:black",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", str(src),
+    ], timeout=60)  # fmt: skip
+    if p.returncode:
+        raise RuntimeError("검정 띠 테스트 영상 생성 실패")
+    info = media.analyze(str(src))
+    idx = frameindex.build_frame_index(info)
+    crop = detect_letterbox(info, idx, 0, idx.count)
+    if crop != (0, 24, 320, 132):
+        raise RuntimeError(f"검정 띠 감지 영역 불일치: {crop}")
+    for kind in ("916", "45", "orig"):
+        g = compute_geometry(320, 180, kind, LayoutParams(auto_crop=True, source_crop=crop))
+        arr = engine.decode_still_rgb(info, idx, 3, g)
+        if g.mode == "fit":
+            arr = arr[g.pad_y : g.pad_y + g.content_h, g.pad_x : g.pad_x + g.content_w]
+        if arr[4:-4, 4:-4].mean(axis=2).min() < 70:
+            raise RuntimeError(f"{kind}: 크롭 후 검정 띠가 남았습니다.")
+        result = engine.render_video(info, idx, engine.VideoSpec(3, 9, g), str(work / f"crop_{kind}.mp4"))
+        if result["frames"] != 6:
+            raise RuntimeError(f"{kind}: 출력 프레임 수 불일치")
+    return "영역 320×132 감지, 9:16/4:5/원본 비율 스틸·영상 출력 통과"
+
+
 def _check_audio(work: Path, qt_pump) -> str:
     """소리 경로: 번들 FFmpeg 로 재생용 WAV 가 만들어지는지, Qt Multimedia 가 로드되는지, 출력 장치가 있으면 재생이 시작되는지.
 
@@ -303,6 +335,7 @@ def run_selftest(outfile: str | None = None) -> int:
         rep.run("FFmpeg/FFprobe 탐색과 인코더", _check_ffmpeg)
         rep.run("Qt 로드와 플랫폼 플러그인", _check_qt)
         rep.run("영상 생성 -> 분석 -> 렌더 -> 편집 창", lambda: _check_pipeline(work, pump))
+        rep.run("검정 띠 감지와 자동 크롭 출력", lambda: _check_letterbox(work))
         rep.run("소리: 재생용 WAV 생성과 출력 장치", lambda: _check_audio(work, pump))
         rep.run("Publisher: 모듈/비밀값 보관/수동 내보내기", lambda: _check_publisher(work))
     except Exception:  # noqa: BLE001

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
@@ -47,7 +48,7 @@ from .dialogs import (
 )
 from .panels import FeedPanel, SelectionPanel, TransportBar
 from .preview import PreviewWidget
-from .services import Decoder, FrameService, PlaybackEngine, ProxyBuilder, ThumbService, np_to_qimage
+from .services import Decoder, FrameService, LetterboxService, PlaybackEngine, ProxyBuilder, ThumbService, np_to_qimage
 from .settings import DEFAULT_SHORTCUTS, Settings
 from .timeline import TimelineWidget
 from .widgets import ElidedLabel, WorkspaceButton, studio_icon
@@ -103,6 +104,10 @@ class EditorWindow(QMainWindow):
         self.cut_thumbs = ThumbService(self.decoder, cache_dir, info, height=72, subdir="cut_thumbs", coarse=False)
         self.playback = PlaybackEngine(self.decoder, self.frames)
         self.proxy = ProxyBuilder(info, cache_dir)
+        self.letterbox = LetterboxService(info, index, self)
+        self.letterbox.finished.connect(self._letterbox_finished)
+        self._crop_pending: set[tuple[str, str | None]] = set()
+        self._crop_result = None
         self.render_queue: RenderQueue | None = None
         self.render_dialog: RenderDialog | None = None
         self._audio_notices: set[str] = set()
@@ -140,6 +145,7 @@ class EditorWindow(QMainWindow):
         self.goto(self.playhead)
         self._refresh()
         QTimer.singleShot(150, self.timeline.fit)
+        QTimer.singleShot(0, self._resume_letterbox)
 
     # ================================================================ UI 구성
     def _build_ui(self) -> None:
@@ -357,6 +363,7 @@ class EditorWindow(QMainWindow):
             panel.clearClicked.connect(lambda w=which: self.project.clear_selection(w))
             panel.layoutLive.connect(lambda lp, w=which: self._layout_live(w, lp))
             panel.layoutCommit.connect(lambda _lp: self._layout_commit())
+            panel.layout_editor.cropRequested.connect(lambda again, w=which: self._request_letterbox(w, again))
         self.story_panel.overlayChanged.connect(self.project.set_story_overlay)
         self.reels_panel.coverSet.connect(lambda: self.project.set_cover_frame(self.playhead))
         self.reels_panel.coverGoto.connect(self._goto_cover)
@@ -365,6 +372,7 @@ class EditorWindow(QMainWindow):
         self.reels_panel.coverRatioChanged.connect(self._set_cover_ratio)
         self.reels_panel.coverLayoutLive.connect(lambda lp: self._layout_live("cover", lp))
         self.reels_panel.coverLayoutCommit.connect(lambda _lp: self._layout_commit())
+        self.reels_panel.cover_layout.cropRequested.connect(lambda again: self._request_letterbox("cover", again))
         fp = self.feed_panel
         fp.addStill.connect(self.add_still)
         fp.addVideo.connect(self.add_video)
@@ -375,6 +383,7 @@ class EditorWindow(QMainWindow):
         fp.orderChanged.connect(self.project.set_feed_order)
         fp.layoutLive.connect(lambda lp: self._layout_live("feed", lp))
         fp.layoutCommit.connect(lambda _lp: self._layout_commit())
+        fp.layout_editor.cropRequested.connect(lambda again: self._request_letterbox("feed", again))
         fp.setIn.connect(self.set_in)
         fp.setOut.connect(self.set_out)
         fp.inOutEntered.connect(self._feed_inout_entered)
@@ -979,6 +988,82 @@ class EditorWindow(QMainWindow):
         self.cut_info.setText(txt)
 
     # ================================================================ 레이아웃 편집
+    def _resume_letterbox(self) -> None:
+        for target in ("story", "reels", "cover"):
+            lp, _ = self._crop_target(target)
+            if lp.auto_crop and lp.source_crop is None:
+                self._request_letterbox(target)
+        for item in self.project.state.feed:
+            if item.layout.auto_crop and item.layout.source_crop is None:
+                self._request_letterbox("feed", item_id=item.id)
+
+    def _crop_target(self, target: str, item_id: str | None = None):
+        p = self.project
+        if target in ("story", "reels"):
+            return getattr(p.state, target).layout, lambda lp: p.set_selection_layout(target, lp)
+        if target == "cover":
+            return p.state.cover.layout, p.set_cover_layout
+        item = p.get_feed(item_id) if item_id else None
+        if item:
+            return item.layout, lambda lp: p.set_feed_layout(item_id, lp)
+        return None, None
+
+    def _request_letterbox(self, target: str, again: bool = False, item_id: str | None = None) -> None:
+        if self._closing:
+            return
+        if target == "feed" and item_id is None:
+            item_id = self.feed_panel.current_id()
+        lp, _ = self._crop_target(target, item_id)
+        if lp is None or not lp.auto_crop:
+            return
+        self._layout_commit()
+        self._crop_pending.add((target, item_id))
+        editors = {
+            "story": self.story_panel.layout_editor,
+            "reels": self.reels_panel.layout_editor,
+            "cover": self.reels_panel.cover_layout,
+            "feed": self.feed_panel.layout_editor,
+        }
+        editors[target].set_crop_busy(True)
+        if self.letterbox.busy:
+            return
+        if self._crop_result is not None and not again:
+            self._letterbox_finished(self._crop_result, "")
+        else:
+            self.toast("원본 전체에서 검정 띠를 감지하고 있습니다…", 5000)
+            self.letterbox.start()
+
+    def _letterbox_finished(self, crop, error: str) -> None:
+        self.letterbox.busy = False
+        if self._closing:
+            return
+        self._layout_commit()
+        pending, self._crop_pending = self._crop_pending, set()
+        if not error:
+            self._crop_result = tuple(crop)
+        self.project.begin_group("검정 띠 자동 크롭")
+        try:
+            for target, item_id in pending:
+                lp, setter = self._crop_target(target, item_id)
+                if lp is not None and lp.auto_crop:
+                    setter(replace(lp, source_crop=tuple(crop)) if not error else replace(lp, auto_crop=False))
+        finally:
+            self.project.end_group()
+        for editor in (
+            self.story_panel.layout_editor,
+            self.reels_panel.layout_editor,
+            self.reels_panel.cover_layout,
+            self.feed_panel.layout_editor,
+        ):
+            editor.set_crop_busy(False)
+        self._on_project_change("state")
+        if error:
+            self.toast(error, 7000)
+        elif tuple(crop) == (0, 0, self.project.media.display_w, self.project.media.display_h):
+            self.toast("공통 검정 띠를 찾지 못해 원본 영역을 유지합니다.", 5000)
+        else:
+            self.toast(f"검정 띠 감지 완료 · 영상 영역 {crop[2]}×{crop[3]}", 5000)
+
     def _layout_live(self, target: str, lp: LayoutParams) -> None:
         if not self._layout_group:
             self.project.begin_group("화면 배치")
@@ -1333,6 +1418,7 @@ class EditorWindow(QMainWindow):
         self._closing = True
         self.playback.shutdown()
         self.proxy.cancel()
+        self.letterbox.cancel()
         self.frames.stop()
         self.thumbs.stop()
         self.cut_thumbs.stop()

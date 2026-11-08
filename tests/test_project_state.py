@@ -198,3 +198,26 @@ def test_split_cut_without_xml_starts_from_whole_video(env):
         p.split_cut_at(0)  # 첫 프레임에서는 나눌 수 없다
     assert p.state.cuts == []
     p.close()
+
+
+def test_letterbox_layout_survives_save_reopen_and_undo(env):
+    _, _, make = env
+    p = make()
+    lp = LayoutParams(auto_crop=True, source_crop=(0, 60, 960, 420))
+    p.set_selection_layout("story", lp)
+    p.set_selection_layout("reels", lp)
+    p.set_cover_layout(lp)
+    item = p.add_feed_still(10)
+    p.set_feed_layout(item.id, lp)
+    p.close()
+    p = make()
+    assert p.state.story.layout == lp
+    assert p.state.reels.layout == lp
+    assert p.state.cover.layout == lp
+    assert p.get_feed(item.id).layout == lp
+    p.set_selection_layout("story", LayoutParams(auto_crop=False, source_crop=lp.source_crop))
+    p.undo()
+    assert p.state.story.layout == lp
+    p.redo()
+    assert not p.state.story.layout.auto_crop
+    p.close()

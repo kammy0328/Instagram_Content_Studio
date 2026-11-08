@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from fractions import Fraction
 
 from ..core.decode import SCALE_FLAGS, in_color_opts, pre_filters
@@ -59,7 +59,23 @@ def _bg_chain(info: MediaInfo, geo: Geometry, scale_opts: str, bg_dim: int, pix_
     # 밴딩 방지: 블러/확대/밝기 조절을 10비트로 하고, 8비트로 내릴 때 오차 확산 디더를 쓴다.
     # (noise 필터는 10비트 색 성분을 망가뜨려 배경이 초록색으로 쏠리므로 쓰지 않는다.)
     return ",".join(
-        [
+        (
+            [
+                crop_filter(
+                    info,
+                    replace(
+                        geo,
+                        crop_x=geo.source_crop[0],
+                        crop_y=geo.source_crop[1],
+                        crop_w=geo.source_crop[2],
+                        crop_h=geo.source_crop[3],
+                    ),
+                )
+            ]
+            if geo.source_crop
+            else []
+        )
+        + [
             "format=yuv420p10le",
             f"scale={bw}:{bh}:force_original_aspect_ratio=increase:{scale_opts}",
             f"crop={bw}:{bh}",
