@@ -19,7 +19,8 @@ htmlcov/
 
 # 빌드 산출물
 build/
-dist/
+dist/*
+!dist/README.md
 installer/Output/
 *.spec.bak
 

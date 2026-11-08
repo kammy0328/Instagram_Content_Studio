@@ -52,6 +52,10 @@
 | `pyinstaller --noconfirm ics.spec` | **Build complete!** |
 | 배포 EXE `--selftest` | **RESULT: ALL PASSED**, 검정 띠 감지와 9:16/4:5/원본 비율 스틸·영상 출력 포함 |
 | `git diff --check` | 오류 없음 |
+| `ISCC.exe installer/ics_installer.iss` | **Successful compile (114.328 sec)** |
+
+설치 EXE와 포터블 ZIP은 `letterbox-1.2.0-preview` GitHub 미리보기 릴리스로 배포한다.
+`dist/README.md`에서 다운로드할 수 있다. 코드와 테스트만 PR로 제공하며 실행 파일/FFmpeg/미디어는 커밋하지 않는다.
 
 회전 테스트 미디어는 `-display_rotation` 입력 옵션으로 생성한다. 이 옵션은
 [FFmpeg 6.1 소스](https://github.com/FFmpeg/FFmpeg/blob/n6.1/fftools/ffmpeg_opt.c#L1547)에도 존재한다.
