@@ -540,8 +540,8 @@ class EditorWindow(QMainWindow):
             self._request_display_frame()
 
     def _display_frame(self) -> int:
-        if self.cover_mode and self.project.state.cover.frame is not None:
-            return self.project.state.cover.frame
+        """화면에 보여 줄 프레임. 커버 미리보기도 현재 재생헤드 프레임을 쓴다 (지정한 커버 프레임에 고정하지 않는다:
+        다른 위치에서도 커버 크롭/그리드를 미리 볼 수 있어야 한다. 지정한 커버로 가려면 '커버 위치로 이동')."""
         return self.playhead
 
     def _request_display_frame(self) -> None:
@@ -1115,7 +1115,7 @@ class EditorWindow(QMainWindow):
         if self.cover_mode:
             kind, lp = self.project.cover_kind(), st.cover.layout
             self.preview.cover_grid = (st.cover.grid_aspect, st.cover.grid_offset)
-            self.preview.label = "릴스 커버 미리보기"
+            self.preview.label = "릴스 커버 미리보기 (현재 프레임 기준)"
         else:
             self.preview.cover_grid = None
             self.preview.label = ""
