@@ -467,7 +467,11 @@ class SelectionPanel(QWidget):
                 from ..render import overlay as ov_mod
 
                 ov = p.state.story_overlay
-                warns = ov_mod.layout(ov, g, p.rec.name).warnings if ov_mod.active(ov, p.rec.name) else []
+                title = p.rec.title or p.rec.name
+                warns = (
+                    ov_mod.layout(ov, g, title, p.rec.artist).warnings if ov_mod.active(ov, title, p.rec.artist) else []
+                )
+                self.overlay_editor.set_fill_mode(g.mode == "fill")
                 self.overlay_editor.set_value(ov, warns)
         if self.which == "reels":
             c = p.state.cover

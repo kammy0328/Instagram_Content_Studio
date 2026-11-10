@@ -52,8 +52,9 @@ def test_no_margin_means_nothing_is_drawn_with_a_reason(qapp):
     res = overlay.layout(ov(), vertical, "x")
     assert res.empty and len(res.warnings) == 2
     fill = compute_geometry(1920, 1080, "916", LayoutParams(mode="fill"))
-    assert overlay.layout(ov(), fill, "x").empty
-    assert overlay.render(ov(), fill, "x")[0] is None
+    img = overlay.render(ov(), fill, "x")[0]  # Fill 은 영상 위에 직접 올리므로 여백이 없어도 그린다
+    assert img is not None and (img.width(), img.height()) == (fill.canvas_w, fill.canvas_h)
+    assert overlay.render(StoryOverlay(logo_on=False, text_on=False), fill, "x")[0] is None
 
 
 def test_empty_text_uses_project_name_and_logo_pos_bottom(qapp):
@@ -309,3 +310,44 @@ def test_blur_background_keeps_the_source_hue(qapp, tmp_path, kind):
     b = mean_rgb(0)
     ra, rb = [c / max(1.0, sum(a)) for c in a], [c / max(1.0, sum(b)) for c in b]
     assert all(abs(x - y) < 0.06 for x, y in zip(ra, rb)), (ra, rb)
+
+
+def test_caption_follows_work_types(qapp):
+    from ics.render import overlay
+
+    assert overlay.caption_text(StoryOverlay()) == "BEAUTY & CLEANUP BY"
+    assert overlay.caption_text(StoryOverlay(work_cleanup=False)) == "BEAUTY BY"
+    assert overlay.caption_text(StoryOverlay(work_beauty=False)) == "CLEANUP BY"
+    assert overlay.caption_text(StoryOverlay(work_beauty=False, work_cleanup=False)) == ""
+
+
+def test_fill_lines_are_uppercase_and_fall_back_to_project(qapp):
+    from ics.render import overlay
+
+    assert overlay.fill_lines(StoryOverlay(), "bananas", "lngshot") == ("LNGSHOT", "BANANAS")
+    assert overlay.fill_lines(StoryOverlay(artist="Aldi", text="Choose"), "x", "y") == ("ALDI", "CHOOSE")
+    assert overlay.fill_lines(StoryOverlay(upper=False), "Bananas", "LngShot") == ("LngShot", "Bananas")
+
+
+def test_fill_overlay_draws_scrim_text_and_logo_with_opacity(qapp):
+    from ics.render import overlay
+
+    geo = compute_geometry(1920, 1080, "916", LayoutParams(mode="fill"))
+    img = overlay.render(StoryOverlay(logo_path=LOGO), geo, "Bananas", "LngShot")[0]
+    W, H = img.width(), img.height()
+    assert img.pixelColor(W // 2, H // 2).alpha() == 0  # 가운데 영상 영역은 건드리지 않는다
+    assert img.pixelColor(W // 2, int(H * 0.99)).alpha() > 200  # 아래 그라데이션
+    assert img.pixelColor(5, 5).alpha() > 60  # 위 그라데이션
+    no_scrim = overlay.render(StoryOverlay(logo_path=LOGO, scrim=0), geo, "Bananas", "LngShot")[0]
+    assert no_scrim.pixelColor(W // 2, int(H * 0.99)).alpha() == 0
+    # 글자가 그려진 영역(좌상단 제목 줄)의 흰색 픽셀은 불투명도 85% 이하
+    ys = range(int(H * 0.10), int(H * 0.15))
+    peak = max(no_scrim.pixelColor(x, y).alpha() for x in range(70, 600, 3) for y in ys)
+    assert 150 < peak <= 218
+
+
+def test_new_story_defaults_to_fill_and_old_saves_keep_overlay_off(qapp):
+    st = EditState()
+    assert st.story.layout.mode == "fill" and st.story_overlay.logo_on and st.story_overlay.text_on
+    old = EditState.from_dict({"story": {"enabled": True, "start": 0, "end": 10}})
+    assert not old.story_overlay.logo_on and not old.story_overlay.text_on

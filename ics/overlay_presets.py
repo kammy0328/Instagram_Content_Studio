@@ -13,7 +13,7 @@ from pathlib import Path
 from . import paths
 
 BUILTIN = (
-    ("diap 로고 (밝은색, 검정 여백용)", "diap_light.png"),
+    ("diap 로고 (밝은색)", "diap_light.png"),
     ("diap 로고 (어두운색)", "diap_dark.png"),
 )
 
@@ -44,7 +44,7 @@ class LogoPresets:
 
     def all(self) -> list[LogoPreset]:
         out = [
-            LogoPreset(n, str(paths.resource_path("assets/logos") / f), 22, "bottom", True)
+            LogoPreset(n, str(paths.resource_path("assets/logos") / f), 13, "bottom", True)
             for n, f in BUILTIN
             if (paths.resource_path("assets/logos") / f).is_file()
         ]

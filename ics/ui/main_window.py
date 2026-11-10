@@ -1089,12 +1089,15 @@ class EditorWindow(QMainWindow):
         from ..render import overlay as ov_mod
 
         ov, m = self.project.state.story_overlay, self.project.media
-        if m is None or not ov_mod.active(ov, self.project.rec.name):
+        rec = self.project.rec
+        if m is None or not ov_mod.active(ov, rec.title or rec.name, rec.artist):
             return None
         g = compute_geometry(m.display_w, m.display_h, "916", self.project.state.story.layout)
         key = (
             tuple(sorted(ov.to_dict().items())),
-            self.project.rec.name,
+            rec.name,
+            rec.artist,
+            rec.title,
             g.canvas_w,
             g.canvas_h,
             g.pad_y,
@@ -1103,7 +1106,7 @@ class EditorWindow(QMainWindow):
         )
         if getattr(self, "_ov_key", None) != key:
             self._ov_key = key
-            self._ov_img = ov_mod.render(ov, g, self.project.rec.name)[0]
+            self._ov_img = ov_mod.render(ov, g, rec.title or rec.name, rec.artist)[0]
         return self._ov_img
 
     def _update_preview_layout(self) -> None:

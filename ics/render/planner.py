@@ -134,12 +134,13 @@ def plan_render(
             ov = st.story_overlay
             if ov.bg_on and any(m > 0 for m in overlay.margins(geo)):
                 sp["bg_dim"] = ov.bg_dim
-            if overlay.active(ov, project.rec.name):
+            if overlay.active(ov, project.rec.title or project.rec.name, project.rec.artist):
                 png, res = overlay.save_png(
                     ov,
                     geo,
-                    project.rec.name,
+                    project.rec.title or project.rec.name,
                     Path(tempfile.gettempdir()) / "ics_overlay" / f"{project.rec.id}_story.png",
+                    project.rec.artist,
                 )
                 if png:
                     sp["overlay_png"] = png
