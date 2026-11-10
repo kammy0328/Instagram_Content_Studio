@@ -7,7 +7,7 @@ import sys
 import traceback
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox, QProgressDialog
+from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
 
 from . import APP_NAME, paths
 from .core import ffbin
@@ -18,6 +18,7 @@ from .core.project import Project
 from .core.store import Library, ProjectRecord
 from .ui import theme
 from .ui.dialogs import MediaReportDialog, NewProjectDialog, ProjectListDialog
+from .ui.loading import LoadingDialog, run_in_thread
 from .ui.main_window import EditorWindow
 from .ui.settings import Settings
 from .ui.update_ui import AutoUpdate
@@ -113,29 +114,29 @@ class App:
             if p:
                 rec.master_path = p
                 self.library.upsert(rec)
-        prog = QProgressDialog("영상 분석 중…", None, 0, 0)
-        prog.setWindowModality(Qt.WindowModality.ApplicationModal)
-        prog.setMinimumDuration(0)
+        prog = LoadingDialog("프로젝트 여는 중")
         prog.show()
-        self.qt.processEvents()
+        prog.set_step("영상 분석 중")
         try:
-            info = analyze(rec.master_path)
+            info = run_in_thread(analyze, rec.master_path)
             if info.errors:
                 prog.close()
                 MediaReportDialog(info).exec()
                 QTimer.singleShot(0, self.show_projects)
                 return
             cache = paths.cache_dir(rec.id)
-            index = build_frame_index(info, cache)
+            prog.set_step("프레임 인덱스 구성 중")
+            index = run_in_thread(build_frame_index, info, cache)
         except Exception as e:  # noqa: BLE001
             prog.close()
             QMessageBox.critical(None, "영상 분석 실패", f"파일을 읽을 수 없습니다.\n{e}")
             QTimer.singleShot(0, self.show_projects)
             return
-        prog.close()
+        prog.set_step("프로젝트 불러오는 중")
         try:
             project = Project(rec, self.library)
         except RuntimeError as err:
+            prog.close()
             QMessageBox.warning(None, "프로젝트 열기 실패", str(err))
             QTimer.singleShot(0, self.show_projects)
             return
@@ -147,11 +148,14 @@ class App:
         if res["restored"]:
             snap, _ = project.store.load_latest()
             summ = (snap or {}).get("media_summary")
+        prog.set_step("편집 화면 준비 중")
         win = EditorWindow(project, self.settings, self.iddict, cache)
         self.window = win
         win.requestProjects.connect(self._back_to_projects)
         win.closed.connect(self._on_window_closed)
         win.show()
+        self.qt.processEvents()
+        prog.close()
         msgs = []
         if res["crashed"] and res["restored"]:
             msgs.append("이전 세션이 비정상 종료되어 마지막으로 정상 저장된 상태를 복구했습니다.")

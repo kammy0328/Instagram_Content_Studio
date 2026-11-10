@@ -22,7 +22,6 @@ DEFAULT_SHORTCUTS = {
     "next_cut": ("다음 컷", "Down"),
     "set_in": ("In 지점 (I)", "I"),
     "set_out": ("Out 지점 (O)", "O"),
-    "loop_play": ("선택 구간 반복 재생", "Shift+Space"),
     "undo": ("실행 취소", "Ctrl+Z"),
     "redo": ("다시 실행", "Ctrl+Shift+Z"),
     "zoom_in": ("타임라인 확대", "="),

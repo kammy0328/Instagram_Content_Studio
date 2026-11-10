@@ -356,11 +356,6 @@ class EditorWindow(QMainWindow):
         # --- 패널 연결
         for which, panel in (("story", self.story_panel), ("reels", self.reels_panel)):
             panel.presetClicked.connect(lambda p, w=which: self.apply_preset(w, p))
-            panel.inOutEntered.connect(lambda a, b, w=which: self._warn(self.project.set_range(w, a, b)))
-            panel.setIn.connect(self.set_in)
-            panel.setOut.connect(self.set_out)
-            panel.playRange.connect(self.play_range)
-            panel.clearClicked.connect(lambda w=which: self.project.clear_selection(w))
             panel.layoutLive.connect(lambda lp, w=which: self._layout_live(w, lp))
             panel.layoutCommit.connect(lambda _lp: self._layout_commit())
             panel.layout_editor.cropRequested.connect(lambda again, w=which: self._request_letterbox(w, again))
@@ -468,7 +463,6 @@ class EditorWindow(QMainWindow):
             "next_cut": lambda: self.jump_cut(1),
             "set_in": self.set_in,
             "set_out": self.set_out,
-            "loop_play": self.play_range,
             "undo": self.do_undo,
             "redo": self.do_redo,
             "zoom_in": lambda: self.timeline.zoom(1.25),
@@ -600,14 +594,6 @@ class EditorWindow(QMainWindow):
         self.playback.play(start, 1.0, loop)
         self._notify_audio_problem()
 
-    def play_range(self) -> None:
-        r = self._active_range()
-        if not r:
-            self.toast("재생할 구간이 지정되지 않았습니다.")
-            return
-        self.transport.loop.setChecked(True)
-        self.playback.play(r[0], 1.0, r)
-
     def toggle_reverse(self) -> None:
         """역재생 버튼: 소리 없이 -1배속으로 거꾸로 재생, 재생 중이면 정지."""
         if self.playback.playing:
@@ -654,15 +640,7 @@ class EditorWindow(QMainWindow):
 
     def set_in(self) -> None:
         p = self.project
-        if self.tab in ("story", "reels"):
-            sel = p.state.story if self.tab == "story" else p.state.reels
-            end = (
-                sel.end
-                if sel.enabled and sel.end > self.playhead
-                else min(p.count, self.playhead + p.max_len_frames(self.tab))
-            )
-            self._warn(p.set_range(self.tab, self.playhead, end))
-        elif self.tab == "feed":
+        if self.tab == "feed":
             self._adopt_cut_range()
             p.set_ui("feed_in", self.playhead)
             if p.state.ui.get("feed_out", 0) <= self.playhead:
@@ -673,11 +651,7 @@ class EditorWindow(QMainWindow):
     def set_out(self) -> None:
         p = self.project
         end = self.playhead + 1  # Out 은 현재 프레임을 포함
-        if self.tab in ("story", "reels"):
-            sel = p.state.story if self.tab == "story" else p.state.reels
-            start = sel.start if sel.enabled and sel.start < end else max(0, end - 1)
-            self._warn(p.set_range(self.tab, start, end))
-        elif self.tab == "feed":
+        if self.tab == "feed":
             self._adopt_cut_range()
             p.set_ui("feed_out", end)
             if p.state.ui.get("feed_in", 0) >= end:

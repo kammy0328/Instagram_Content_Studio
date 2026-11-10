@@ -186,15 +186,32 @@ class TransportBar(QWidget):
         )
 
 
-def slider(minv, maxv, val) -> QSlider:
-    s = QSlider(Qt.Orientation.Horizontal)
-    s.setRange(minv, maxv)
-    s.setValue(val)
-    return s
+class ResetSlider(QSlider):
+    """마우스 휠로는 값이 바뀌지 않고(인스펙터 스크롤 중 오조작 방지), 더블클릭하면 기본값으로 돌아간다."""
+
+    def __init__(self, minv=0, maxv=100, val=0, default=None):
+        super().__init__(Qt.Orientation.Horizontal)
+        self.setRange(minv, maxv)
+        self.setValue(val)
+        self.default = val if default is None else default
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setToolTip("더블클릭: 기본값으로 초기화")
+
+    def wheelEvent(self, e):  # noqa: N802
+        e.ignore()  # 부모(스크롤 영역)가 처리하도록 넘긴다
+
+    def mouseDoubleClickEvent(self, e):  # noqa: N802
+        self.setValue(self.default)
+        self.sliderReleased.emit()
+        e.accept()
+
+
+def slider(minv, maxv, val, default=None) -> QSlider:
+    return ResetSlider(minv, maxv, val, default)
 
 
 class LayoutEditor(QGroupBox):
-    """Fit / Fill(크롭) + 확대 + 위치 조정. 확대는 Fit 에서도 된다 (넘치는 부분은 잘림). 원본 비율 출력에서는 Fit/Fill 구분이 없다."""
+    """Fit / Fill(크롭) + 세로 위치. 원본 비율 출력에서는 Fit/Fill 구분이 없다."""
 
     changed = Signal(object)  # LayoutParams
     committed = Signal(object)
@@ -229,15 +246,7 @@ class LayoutEditor(QGroupBox):
         self.crop_info.setWordWrap(True)
         v.addWidget(self.crop_info)
         f = QFormLayout()
-        self.zoom = slider(100, 400, 100)
-        self.px = slider(0, 100, 50)
         self.py = slider(0, 100, 50)
-        self.zoom_lbl = QLabel("100%")
-        zr = QHBoxLayout()
-        zr.addWidget(self.zoom)
-        zr.addWidget(self.zoom_lbl)
-        f.addRow("확대", zr)
-        f.addRow("가로 위치", self.px)
         f.addRow("세로 위치", self.py)
         v.addLayout(f)
         self.info = QLabel("")
@@ -252,14 +261,12 @@ class LayoutEditor(QGroupBox):
         self.auto_crop.toggled.connect(self._crop_toggled)
         for w in (self.r_fit, self.r_fill):
             w.toggled.connect(self._emit)
-        for s in (self.zoom, self.px, self.py):
-            s.valueChanged.connect(self._emit)
-            s.sliderReleased.connect(lambda: self.committed.emit(self.value()))
+        self.py.valueChanged.connect(self._emit)
+        self.py.sliderReleased.connect(lambda: self.committed.emit(self.value()))
         self.r_fit.toggled.connect(self._sync_enabled)
         self._sync_enabled()
 
     def _sync_enabled(self):
-        self.zoom.setEnabled(True)
         self.detect_crop.setEnabled(self.auto_crop.isChecked() and not self._crop_busy)
 
     def _crop_toggled(self, on: bool) -> None:
@@ -284,8 +291,8 @@ class LayoutEditor(QGroupBox):
     def value(self) -> LayoutParams:
         return LayoutParams(
             "fill" if self.r_fill.isChecked() else "fit",
-            self.zoom.value() / 100.0,
-            self.px.value() / 100.0,
+            1.0,
+            0.5,
             self.py.value() / 100.0,
             auto_crop=self.auto_crop.isChecked(),
             source_crop=self._source_crop,
@@ -305,10 +312,7 @@ class LayoutEditor(QGroupBox):
             else "자동 크롭 꺼짐 · 원본 영역 유지"
         )
         (self.r_fill if lp.mode == "fill" else self.r_fit).setChecked(True)
-        self.zoom.setValue(int(lp.zoom * 100))
-        self.px.setValue(int(round(lp.pos_x * 100)))
         self.py.setValue(int(round(lp.pos_y * 100)))
-        self.zoom_lbl.setText(f"{self.zoom.value()}%")
         self._sync_enabled()
         self._block = False
 
@@ -320,7 +324,6 @@ class LayoutEditor(QGroupBox):
         self.committed.emit(self.value())
 
     def _emit(self, *_):
-        self.zoom_lbl.setText(f"{self.zoom.value()}%")
         if not self._block:
             self.changed.emit(self.value())
 
@@ -332,13 +335,8 @@ class SelectionPanel(QWidget):
     """STORY / REELS 인스펙터."""
 
     presetClicked = Signal(str)
-    inOutEntered = Signal(int, int)
-    setIn = Signal()
-    setOut = Signal()
-    playRange = Signal()
     layoutLive = Signal(object)
     layoutCommit = Signal(object)
-    clearClicked = Signal()
     coverSet = Signal()
     coverGoto = Signal()
     coverChanged = Signal(str, float)
@@ -380,33 +378,8 @@ class SelectionPanel(QWidget):
         self.start_note.setObjectName("muted")
         self.start_note.setWordWrap(True)
         gl.addWidget(self.start_note)
-        io = QFormLayout()
-        self.in_edit, self.out_edit = TCEdit(project), TCEdit(project)
-        self.in_edit.frameEntered.connect(lambda f: self.inOutEntered.emit(f, self._cur_out()))
-        self.out_edit.frameEntered.connect(lambda f: self.inOutEntered.emit(self._cur_in(), f + 1))
-        ri = QHBoxLayout()
-        ri.addWidget(self.in_edit)
-        bi = QPushButton("현재=In (I)")
-        bi.clicked.connect(self.setIn.emit)
-        ri.addWidget(bi)
-        ro = QHBoxLayout()
-        ro.addWidget(self.out_edit)
-        bo = QPushButton("현재=Out (O)")
-        bo.clicked.connect(self.setOut.emit)
-        ro.addWidget(bo)
-        io.addRow("In", ri)
-        io.addRow("Out(포함)", ro)
-        gl.addLayout(io)
         self.len_lbl = QLabel("")
         gl.addWidget(self.len_lbl)
-        row = QHBoxLayout()
-        pb = QPushButton("구간 재생")
-        pb.clicked.connect(self.playRange.emit)
-        cb = QPushButton("선택 해제")
-        cb.clicked.connect(self.clearClicked.emit)
-        row.addWidget(pb)
-        row.addWidget(cb)
-        gl.addLayout(row)
         v.addWidget(g)
         self.layout_editor = LayoutEditor()
         self.layout_editor.changed.connect(self.layoutLive.emit)
@@ -423,12 +396,6 @@ class SelectionPanel(QWidget):
             self._build_cover(v)
         v.addStretch(1)
         self._in = self._out = 0
-
-    def _cur_in(self):
-        return self._in
-
-    def _cur_out(self):
-        return self._out
 
     def _build_cover(self, v: QVBoxLayout) -> None:
         g = QGroupBox("릴스 커버 (JPG)")
@@ -461,11 +428,10 @@ class SelectionPanel(QWidget):
         f = QFormLayout()
         self.grid_combo = QComboBox()
         self.grid_combo.addItems(["4:5", "3:4", "1:1"])
-        self.grid_combo.currentTextChanged.connect(lambda t: self.coverChanged.emit(t, self.grid_off.value() / 100))
-        self.grid_off = slider(0, 100, 50)
-        self.grid_off.valueChanged.connect(lambda v_: self.coverChanged.emit(self.grid_combo.currentText(), v_ / 100))
+        self.grid_combo.currentTextChanged.connect(
+            lambda t: self.coverChanged.emit(t, self.project.state.cover.grid_offset)
+        )
         f.addRow("그리드 비율", self.grid_combo)
-        f.addRow("그리드 세로 위치", self.grid_off)
         gl.addLayout(f)
         self.cover_layout = LayoutEditor("커버 화면 배치 / 위치 조정")
         self.cover_layout.changed.connect(self.coverLayoutLive.emit)
@@ -478,8 +444,6 @@ class SelectionPanel(QWidget):
         sel = p.state.story if self.which == "story" else p.state.reels
         self._in, self._out = sel.start, sel.end
         if sel.enabled:
-            self.in_edit.set_frame(sel.start)
-            self.out_edit.set_frame(max(0, sel.end - 1))
             dur = p.seconds(sel.start, sel.end)
             lim = 60.0 if self.which == "story" else 180.0
             ok = dur <= lim + 1e-6
@@ -514,9 +478,6 @@ class SelectionPanel(QWidget):
             self.grid_combo.blockSignals(True)
             self.grid_combo.setCurrentText(c.grid_aspect)
             self.grid_combo.blockSignals(False)
-            self.grid_off.blockSignals(True)
-            self.grid_off.setValue(int(c.grid_offset * 100))
-            self.grid_off.blockSignals(False)
             self.cover_layout.set_value(c.layout)
             self.cover_ratio_combo.blockSignals(True)
             self.cover_ratio_combo.setCurrentIndex(0 if p.cover_kind() == "orig" else 1)

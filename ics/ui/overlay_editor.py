@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QTimer, Signal
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -18,7 +18,6 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSizePolicy,
-    QSlider,
     QSpinBox,
     QVBoxLayout,
 )
@@ -26,6 +25,7 @@ from PySide6.QtWidgets import (
 from ..core.model import StoryOverlay
 from ..overlay_presets import LogoPresets
 from ..render import overlay as ov_mod
+from .panels import ResetSlider
 
 
 def _shrinkable(c: QComboBox) -> None:
@@ -64,8 +64,9 @@ class OverlayEditor(QGroupBox):
         v.addWidget(self.bg_on)
         br = QHBoxLayout()
         br.addWidget(QLabel("배경 어둡기"))
-        self.bg_dim = QSlider(Qt.Orientation.Horizontal)
+        self.bg_dim = ResetSlider()
         self.bg_dim.setRange(0, 90)
+        self.bg_dim.default = 45
         self.bg_dim.valueChanged.connect(self._edited_slider)
         br.addWidget(self.bg_dim, 1)
         self.bg_dim_lbl = QLabel("")
@@ -74,7 +75,7 @@ class OverlayEditor(QGroupBox):
 
         # ---- 로고
         self.logo_on = QCheckBox("로고 표시")
-        self.logo_on.toggled.connect(self._edited)
+        self.logo_on.toggled.connect(self._logo_toggled)
         v.addWidget(self.logo_on)
         pr = QHBoxLayout()
         self.preset_combo = QComboBox()
@@ -109,8 +110,9 @@ class OverlayEditor(QGroupBox):
         self.logo_pos.currentIndexChanged.connect(self._edited)
         lr.addWidget(self.logo_pos)
         lr.addWidget(QLabel("크기"))
-        self.logo_size = QSlider(Qt.Orientation.Horizontal)
+        self.logo_size = ResetSlider()
         self.logo_size.setRange(10, 100)
+        self.logo_size.default = 22
         self.logo_size.valueChanged.connect(self._edited_slider)
         lr.addWidget(self.logo_size, 1)
         self.logo_size_lbl = QLabel("")
@@ -135,8 +137,9 @@ class OverlayEditor(QGroupBox):
         self.style.activated.connect(self._style_picked)
         sr.addWidget(self.style, 1)
         sr.addWidget(QLabel("자간"))
-        self.spacing = QSlider(Qt.Orientation.Horizontal)
+        self.spacing = ResetSlider()
         self.spacing.setRange(-10, 40)
+        self.spacing.default = 4
         self.spacing.valueChanged.connect(self._edited_slider)
         sr.addWidget(self.spacing, 1)
         v.addLayout(sr)
@@ -229,6 +232,21 @@ class OverlayEditor(QGroupBox):
         self.font.setCurrentFont(QFont(fam))
         self.bold.setChecked(bold)
         self._block = False
+        self._commit()
+
+    def _logo_toggled(self, on: bool) -> None:
+        """체크만 해도 바로 적용: 로고 파일이 아직 없으면 선택된 프리셋(없으면 첫 프리셋)을 자동으로 넣는다."""
+        if self._block:
+            return
+        if on and not self._ov.logo_path:
+            p = self.presets.get(self.preset_combo.currentText())
+            if p is not None:
+                o = self._gather()
+                o.logo_on, o.logo_path, o.logo_size, o.logo_pos = True, self.presets.materialize(p), p.size, p.pos
+                self._ov = o
+                self.changed.emit(o)
+                return
+            self.logo_lbl.setText("로고 파일 없음: '로고 파일…' 로 선택하거나 프리셋을 저장하세요.")
         self._commit()
 
     def _edited(self, *_a) -> None:
