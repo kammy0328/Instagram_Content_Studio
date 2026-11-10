@@ -164,6 +164,10 @@ def _norm_role_key(s: str) -> str:
 def canon_role(role: str) -> tuple[str, bool]:
     """(표준화된 역할, 사전에 있는 역할인지)"""
     r = re.sub(r"\s+", " ", role.strip().strip("[]()<>*-–—·•:").strip())
+    # 역할 안의 'and' 는 '&' 로 통일하고 '&' 앞뒤는 띄운다 (Beauty and Cleanup -> Beauty & Cleanup, Hair&Make -> Hair & Make).
+    # 'R&D' 처럼 한 글자 약어는 건드리지 않는다.
+    r = re.sub(r"(?i)(?<=\w\w)\s+and\s+(?=\w\w)", " & ", r)
+    r = re.sub(r"(?<=\w\w)\s*&\s*(?=\w\w)", " & ", r)
     k = _norm_role_key(r)
     if k in ROLE_CANON:
         return ROLE_CANON[k], True
