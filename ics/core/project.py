@@ -448,6 +448,14 @@ class Project:
         with self.edit("STORY 오버레이", ("story", "state")):
             self.state.story_overlay = ov
 
+    def apply_default_story_overlay(self, logo_path: str) -> None:
+        """새 프로젝트: STORY 로고를 기본 diap 로고로 채운다 (켜 둔 오버레이가 바로 출력되도록). 이미 정한 값은 건드리지 않는다."""
+        ov = self.state.story_overlay
+        if ov.logo_path or not logo_path:
+            return
+        ov.logo_path = logo_path
+        self.request_save()
+
     def feed_kind(self) -> str:
         """compute_geometry 에 넘기는 FEED 출력 종류: 'orig'(원본 비율) | '45'."""
         return "45" if self.state.feed_ratio == "45" else "orig"

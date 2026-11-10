@@ -142,7 +142,15 @@ class App:
             return
         res = project.open()
         project.attach_media(info, index)
+        fresh = not project.state.defaults_applied
         project.apply_default_ranges()  # 새 프로젝트: STORY/REELS 를 60초로 미리 지정 (기존 프로젝트는 그대로)
+        if fresh:
+            from .overlay_presets import LogoPresets
+
+            lp = LogoPresets(self.settings)
+            builtin = next((p for p in lp.all() if p.builtin), None)
+            if builtin is not None:
+                project.apply_default_story_overlay(lp.materialize(builtin))
         # 원본이 바뀐 경우(크기/수정시간/길이) 경고
         summ = None
         if res["restored"]:

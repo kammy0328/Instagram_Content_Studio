@@ -1,4 +1,4 @@
-"""STORY 인스펙터의 오버레이 편집기: 로고(프리셋) + 제목 텍스트. 항상 검정 여백에만 표시된다."""
+"""STORY 인스펙터의 오버레이 편집기. Fill(9:16 꽉 참): 아티스트/제목 + 로고 + 문구를 영상 위에, Fit: 검정 여백 안에."""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSpinBox,
     QVBoxLayout,
+    QWidget,
 )
 
 from ..core.model import StoryOverlay
@@ -47,7 +48,7 @@ class OverlayEditor(QGroupBox):
     changed = Signal(object)  # StoryOverlay (확정된 변경)
 
     def __init__(self, settings, parent=None):
-        super().__init__("배경 · 로고 · 제목 (로고와 제목은 영상 위가 아닌 여백에만 표시)", parent)
+        super().__init__("로고 · 제목 · 문구", parent)
         ov_mod.ensure_fonts()
         self.presets = LogoPresets(settings)
         self._ov = StoryOverlay()
@@ -58,10 +59,13 @@ class OverlayEditor(QGroupBox):
         self._timer.timeout.connect(self._commit)
         v = QVBoxLayout(self)
 
-        # ---- 배경
+        # ---- 배경 (Fit 전용)
+        self.legacy_bg = QWidget()
+        lv = QVBoxLayout(self.legacy_bg)
+        lv.setContentsMargins(0, 0, 0, 0)
         self.bg_on = QCheckBox("검정 여백 대신 영상을 흐리게 채운 배경 (렌즈 블러)")
         self.bg_on.toggled.connect(self._edited)
-        v.addWidget(self.bg_on)
+        lv.addWidget(self.bg_on)
         br = QHBoxLayout()
         br.addWidget(QLabel("배경 어둡기"))
         self.bg_dim = ResetSlider()
@@ -71,7 +75,9 @@ class OverlayEditor(QGroupBox):
         br.addWidget(self.bg_dim, 1)
         self.bg_dim_lbl = QLabel("")
         br.addWidget(self.bg_dim_lbl)
-        v.addLayout(br)
+        lv.addLayout(br)
+
+        v.addWidget(self.legacy_bg)
 
         # ---- 로고
         self.logo_on = QCheckBox("로고 표시")
@@ -103,7 +109,8 @@ class OverlayEditor(QGroupBox):
         self.logo_lbl.setWordWrap(True)
         v.addWidget(self.logo_lbl)
         lr = QHBoxLayout()
-        lr.addWidget(QLabel("위치"))
+        self.logo_pos_lbl = QLabel("위치")
+        lr.addWidget(self.logo_pos_lbl)
         self.logo_pos = QComboBox()
         self.logo_pos.addItem("아래 여백", "bottom")
         self.logo_pos.addItem("위 여백", "top")
@@ -111,8 +118,8 @@ class OverlayEditor(QGroupBox):
         lr.addWidget(self.logo_pos)
         lr.addWidget(QLabel("크기"))
         self.logo_size = ResetSlider()
-        self.logo_size.setRange(10, 100)
-        self.logo_size.default = 22
+        self.logo_size.setRange(5, 100)
+        self.logo_size.default = 13
         self.logo_size.valueChanged.connect(self._edited_slider)
         lr.addWidget(self.logo_size, 1)
         self.logo_size_lbl = QLabel("")
@@ -123,10 +130,78 @@ class OverlayEditor(QGroupBox):
         self.text_on = QCheckBox("제목 텍스트 표시")
         self.text_on.toggled.connect(self._edited)
         v.addWidget(self.text_on)
+        self.f_artist = QLineEdit()
+        self.f_artist.setPlaceholderText("1줄: 아티스트 (비우면 프로젝트 아티스트)")
+        self.f_artist.textEdited.connect(self._edited_slider)
+        v.addWidget(self.f_artist)
         self.text = QLineEdit()
-        self.text.setPlaceholderText("비워 두면 프로젝트명")
+        self.text.setPlaceholderText("2줄: 제목 (비우면 프로젝트 곡 제목)")
         self.text.textEdited.connect(self._edited_slider)
         v.addWidget(self.text)
+
+        # ---- Fill 전용: 대문자, 문구, 불투명도, 그라데이션, 위치
+        self.fill_box = QWidget()
+        fv = QVBoxLayout(self.fill_box)
+        fv.setContentsMargins(0, 0, 0, 0)
+        self.upper = QCheckBox("아티스트/제목 항상 대문자")
+        self.upper.toggled.connect(self._edited)
+        fv.addWidget(self.upper)
+        self.cap_on = QCheckBox("로고 위 문구")
+        self.cap_on.toggled.connect(self._edited)
+        wr = QHBoxLayout()
+        wr.addWidget(self.cap_on)
+        self.work_beauty = QCheckBox("BEAUTY")
+        self.work_cleanup = QCheckBox("CLEANUP")
+        for c in (self.work_beauty, self.work_cleanup):
+            c.toggled.connect(self._edited)
+            wr.addWidget(c)
+        wr.addStretch(1)
+        fv.addLayout(wr)
+        self.cap_preview = QLabel("")
+        self.cap_preview.setObjectName("muted")
+        fv.addWidget(self.cap_preview)
+
+        def row(label, sl, lbl):
+            r = QHBoxLayout()
+            r.addWidget(QLabel(label))
+            r.addWidget(sl, 1)
+            r.addWidget(lbl)
+            fv.addLayout(r)
+
+        self.opacity = ResetSlider()
+        self.opacity.setRange(10, 100)
+        self.opacity.default = 85
+        self.opacity_lbl = QLabel("")
+        self.scrim = ResetSlider()
+        self.scrim.setRange(0, 150)
+        self.scrim.default = 100
+        self.scrim_lbl = QLabel("")
+        self.title_y = ResetSlider()
+        self.title_y.setRange(60, 400)
+        self.title_y.default = 131
+        self.title_y_lbl = QLabel("")
+        self.logo_y = ResetSlider()
+        self.logo_y.setRange(600, 950)
+        self.logo_y.default = 838
+        self.logo_y_lbl = QLabel("")
+        row("불투명도", self.opacity, self.opacity_lbl)
+        row("어둡게(위/아래)", self.scrim, self.scrim_lbl)
+        row("제목 높이", self.title_y, self.title_y_lbl)
+        row("로고 높이", self.logo_y, self.logo_y_lbl)
+        for sl in (self.opacity, self.scrim, self.title_y, self.logo_y):
+            sl.valueChanged.connect(self._edited_slider)
+        tip = QLabel(
+            "인스타 스토리 UI(위 프로필 줄, 아래 메시지 바)에 가려지지 않는 기본 위치입니다. 더블클릭하면 기본값."
+        )
+        tip.setObjectName("muted")
+        tip.setWordWrap(True)
+        fv.addWidget(tip)
+        v.addWidget(self.fill_box)
+
+        # ---- Fit(검정 여백) 전용 글꼴 설정
+        self.legacy_text = QWidget()
+        lt = QVBoxLayout(self.legacy_text)
+        lt.setContentsMargins(0, 0, 0, 0)
         sr = QHBoxLayout()
         sr.addWidget(QLabel("스타일"))
         self.style = QComboBox()
@@ -142,7 +217,7 @@ class OverlayEditor(QGroupBox):
         self.spacing.default = 4
         self.spacing.valueChanged.connect(self._edited_slider)
         sr.addWidget(self.spacing, 1)
-        v.addLayout(sr)
+        lt.addLayout(sr)
         tr = QHBoxLayout()
         self.font = QFontComboBox()
         self.font.setEditable(False)
@@ -158,7 +233,7 @@ class OverlayEditor(QGroupBox):
         self.bold = QCheckBox("굵게")
         self.bold.toggled.connect(self._edited)
         tr.addWidget(self.bold)
-        v.addLayout(tr)
+        lt.addLayout(tr)
         tr2 = QHBoxLayout()
         tr2.addWidget(QLabel("위치"))
         self.text_pos = QComboBox()
@@ -170,7 +245,8 @@ class OverlayEditor(QGroupBox):
         self.color_btn.clicked.connect(self._pick_color)
         tr2.addWidget(self.color_btn)
         tr2.addStretch(1)
-        v.addLayout(tr2)
+        lt.addLayout(tr2)
+        v.addWidget(self.legacy_text)
         self.warn = QLabel("")
         self.warn.setObjectName("warn")
         self.warn.setWordWrap(True)
@@ -194,6 +270,17 @@ class OverlayEditor(QGroupBox):
         self.text_on.setChecked(ov.text_on)
         if not self.text.hasFocus():
             self.text.setText(ov.text)
+        if not self.f_artist.hasFocus():
+            self.f_artist.setText(ov.artist)
+        self.upper.setChecked(ov.upper)
+        self.cap_on.setChecked(ov.cap_on)
+        self.work_beauty.setChecked(ov.work_beauty)
+        self.work_cleanup.setChecked(ov.work_cleanup)
+        self.opacity.setValue(ov.opacity)
+        self.scrim.setValue(ov.scrim)
+        self.title_y.setValue(ov.title_y)
+        self.logo_y.setValue(ov.logo_y)
+        self._update_labels()
         self.font.setCurrentFont(QFont(ov.text_font))
         self.spacing.setValue(ov.text_spacing)
         for i in range(self.style.count()):
@@ -219,6 +306,15 @@ class OverlayEditor(QGroupBox):
         o.logo_size = self.logo_size.value()
         o.text_on = self.text_on.isChecked()
         o.text = self.text.text()
+        o.artist = self.f_artist.text()
+        o.upper = self.upper.isChecked()
+        o.cap_on = self.cap_on.isChecked()
+        o.work_beauty = self.work_beauty.isChecked()
+        o.work_cleanup = self.work_cleanup.isChecked()
+        o.opacity = self.opacity.value()
+        o.scrim = self.scrim.value()
+        o.title_y = self.title_y.value()
+        o.logo_y = self.logo_y.value()
         o.text_font = self.font.currentFont().family()
         o.text_size = self.size.value()
         o.text_bold = self.bold.isChecked()
@@ -255,9 +351,33 @@ class OverlayEditor(QGroupBox):
 
     def _edited_slider(self, *_a) -> None:  # 연속 입력은 잠시 기다렸다가 한 번에 확정
         if not self._block:
-            self.logo_size_lbl.setText(f"{self.logo_size.value()}%")
-            self.bg_dim_lbl.setText(f"{self.bg_dim.value()}%")
+            self._update_labels()
             self._timer.start()
+
+    def _update_labels(self) -> None:
+        self.logo_size_lbl.setText(f"{self.logo_size.value()}%")
+        self.bg_dim_lbl.setText(f"{self.bg_dim.value()}%")
+        self.opacity_lbl.setText(f"{self.opacity.value()}%")
+        self.scrim_lbl.setText(f"{self.scrim.value()}%")
+        self.title_y_lbl.setText(f"{self.title_y.value() / 10:.1f}%")
+        self.logo_y_lbl.setText(f"{self.logo_y.value() / 10:.1f}%")
+        self.cap_preview.setText(
+            ov_mod.caption_text(self._gather_caption()) or "문구 없음 (작업 종류를 하나 이상 선택)"
+        )
+
+    def _gather_caption(self) -> StoryOverlay:
+        o = StoryOverlay()
+        o.work_beauty, o.work_cleanup = self.work_beauty.isChecked(), self.work_cleanup.isChecked()
+        return o
+
+    def set_fill_mode(self, fill: bool) -> None:
+        """Fill 이면 영상 위 오버레이 설정을, Fit 이면 검정 여백 설정(배경, 글꼴, 위치)을 보인다."""
+        self.fill_box.setVisible(fill)
+        self.f_artist.setVisible(fill)
+        self.legacy_bg.setVisible(not fill)
+        self.legacy_text.setVisible(not fill)
+        self.logo_pos.setVisible(not fill)
+        self.logo_pos_lbl.setVisible(not fill)
 
     def _commit(self) -> None:
         self._timer.stop()

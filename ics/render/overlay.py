@@ -11,8 +11,8 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
-from PySide6.QtCore import QRectF, Qt
-from PySide6.QtGui import QColor, QFont, QFontDatabase, QFontMetricsF, QImage, QPainter
+from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QFontMetricsF, QImage, QLinearGradient, QPainter
 
 from .. import paths
 from ..core.layout import Geometry
@@ -25,6 +25,9 @@ FONT_FILES = (
     "BlackHanSans-Regular.ttf",
     "Montserrat-Bold.ttf",
     "PlayfairDisplay-Bold.ttf",
+    "Syncopate-Bold.ttf",
+    "Syncopate-Regular.ttf",
+    "Poppins-Light.ttf",
 )
 DEFAULT_FONT = "Black Han Sans"
 _lock = threading.Lock()
@@ -71,8 +74,103 @@ def margins(geo: Geometry) -> tuple[float, float]:
     return max(0.0, top), max(0.0, bottom)
 
 
-def active(ov: StoryOverlay, title: str) -> bool:
-    return (ov.logo_on and bool(ov.logo_path)) or (ov.text_on and bool((ov.text or title).strip()))
+def active(ov: StoryOverlay, title: str, artist: str = "") -> bool:
+    lines = (ov.artist or artist).strip() or (ov.text or title).strip()
+    return (ov.logo_on and bool(ov.logo_path)) or (ov.text_on and bool(lines))
+
+
+# ------------------------------------------------------------------ Fill(영상 위에 직접) 오버레이
+def caption_text(ov: StoryOverlay) -> str:
+    """작업 종류에 따른 로고 위 문구. 둘 다 끄면 빈 문자열."""
+    if ov.work_beauty and ov.work_cleanup:
+        return "BEAUTY & CLEANUP BY"
+    if ov.work_beauty:
+        return "BEAUTY BY"
+    if ov.work_cleanup:
+        return "CLEANUP BY"
+    return ""
+
+
+def fill_lines(ov: StoryOverlay, title: str, artist: str) -> tuple[str, str]:
+    a, t = (ov.artist or artist or "").strip(), (ov.text or title or "").strip()
+    if ov.upper:
+        a, t = a.upper(), t.upper()
+    return a, t
+
+
+def _scrim_gradient(h: float, top: bool, strength: float) -> QLinearGradient:
+    """위/아래 어두운 그라데이션 (시안과 같은 곡선: 위 0~26% 구간 최대 55%, 아래 62~92% 구간 최대 90%)."""
+    g = QLinearGradient(0, 0, 0, h)
+    for i in range(0, 21):
+        f = i / 20.0
+        if top:
+            a = 0.55 * max(0.0, 1 - f / 0.26) ** 1.6
+        else:
+            a = 0.90 * min(1.0, max(0.0, (f - 0.62) / 0.30)) ** 1.6
+        g.setColorAt(f, QColor(0, 0, 0, int(round(255 * min(1.0, a * strength)))))
+    return g
+
+
+def _fill_font(family: str, px: float, bold: bool, spacing: float) -> QFont:
+    f = QFont(family)
+    f.setPixelSize(max(6, int(round(px))))
+    f.setBold(bold)
+    f.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, spacing)
+    return f
+
+
+def render_fill(ov: StoryOverlay, geo: Geometry, title: str, artist: str) -> QImage | None:
+    """9:16 꽉 참 화면용: 어두운 그라데이션 + 좌상단 2줄(아티스트/제목) + 하단 문구와 로고."""
+    ensure_fonts()
+    W, H = geo.canvas_w, geo.canvas_h
+    s = W / 1080.0
+    l1, l2 = fill_lines(ov, title, artist)
+    show_text = ov.text_on and bool(l1 or l2)
+    logo = QImage(ov.logo_path) if (ov.logo_on and ov.logo_path) else QImage()
+    show_logo = not logo.isNull()
+    if not show_text and not show_logo:
+        return None
+    img = QImage(W, H, QImage.Format.Format_ARGB32)
+    img.fill(Qt.GlobalColor.transparent)
+    p = QPainter(img)
+    p.setRenderHints(
+        QPainter.RenderHint.Antialiasing
+        | QPainter.RenderHint.SmoothPixmapTransform
+        | QPainter.RenderHint.TextAntialiasing
+    )
+    k = ov.scrim / 100.0
+    if k > 0:
+        if show_text:
+            p.fillRect(QRectF(0, 0, W, H), _scrim_gradient(H, True, k))
+        if show_logo:
+            p.fillRect(QRectF(0, 0, W, H), _scrim_gradient(H, False, k))
+    p.setOpacity(ov.opacity / 100.0)
+    white = QColor(255, 255, 255)
+    p.setPen(white)
+    x = 72 * s
+    y1 = H * ov.title_y / 1000.0
+    if show_text:
+        if l1:
+            p.setFont(_fill_font("Syncopate", 40 * s, True, 2 * s))
+            p.drawText(QPointF(x, y1), l1)
+        if l2:
+            p.setFont(_fill_font("Syncopate", 40 * s, False, 2 * s))
+            p.drawText(QPointF(x, y1 + (52 * s if l1 else 0)), l2)
+    if show_logo:
+        w = min(W * 0.9, W * ov.logo_size / 100.0)
+        h = w * logo.height() / logo.width()
+        cy = H * ov.logo_y / 1000.0
+        p.drawImage(QRectF((W - w) / 2, cy - h / 2, w, h), logo)
+        cap = caption_text(ov) if ov.cap_on else ""
+        if cap:
+            spacing = 6.4 * s
+            font = _fill_font("Poppins Light", 20 * s, False, spacing)
+            font.setWeight(QFont.Weight.Light)
+            p.setFont(font)
+            tw = QFontMetricsF(font).horizontalAdvance(cap) - spacing  # 마지막 글자 뒤 간격은 중앙 정렬에서 뺀다
+            p.drawText(QPointF((W - tw) / 2, cy - 0.041 * H), cap)
+    p.end()
+    return img
 
 
 def _logo_size(path: str) -> tuple[int, int] | None:
@@ -98,8 +196,10 @@ def _fit_text(text: str, family: str, bold: bool, px: float, box_w: float, box_h
     return None
 
 
-def layout(ov: StoryOverlay, geo: Geometry, title: str) -> OverlayResult:
+def layout(ov: StoryOverlay, geo: Geometry, title: str, artist: str = "") -> OverlayResult:
     ensure_fonts()
+    if geo.mode == "fill":  # 영상 위에 직접 올리는 레이아웃은 여백 계산이 필요 없다
+        return OverlayResult([Placed("fill", QRectF(0, 0, geo.canvas_w, geo.canvas_h))], [])
     items: list[Placed] = []
     warns: list[str] = []
     scale = geo.canvas_w / 1080.0
@@ -148,8 +248,11 @@ def layout(ov: StoryOverlay, geo: Geometry, title: str) -> OverlayResult:
     return OverlayResult(items, warns)
 
 
-def render(ov: StoryOverlay, geo: Geometry, title: str) -> tuple[QImage | None, OverlayResult]:
+def render(ov: StoryOverlay, geo: Geometry, title: str, artist: str = "") -> tuple[QImage | None, OverlayResult]:
     """캔버스 크기의 투명 ARGB 이미지 (그릴 것이 없으면 None)."""
+    if geo.mode == "fill":
+        img = render_fill(ov, geo, title, artist)
+        return img, OverlayResult([] if img is None else [Placed("fill", QRectF(0, 0, geo.canvas_w, geo.canvas_h))], [])
     res = layout(ov, geo, title)
     if res.empty:
         return None, res
@@ -177,8 +280,10 @@ def render(ov: StoryOverlay, geo: Geometry, title: str) -> tuple[QImage | None, 
     return img, res
 
 
-def save_png(ov: StoryOverlay, geo: Geometry, title: str, out: Path) -> tuple[str | None, OverlayResult]:
-    img, res = render(ov, geo, title)
+def save_png(
+    ov: StoryOverlay, geo: Geometry, title: str, out: Path, artist: str = ""
+) -> tuple[str | None, OverlayResult]:
+    img, res = render(ov, geo, title, artist)
     if img is None:
         return None, res
     out.parent.mkdir(parents=True, exist_ok=True)

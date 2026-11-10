@@ -128,18 +128,28 @@ class StoryOverlay:
 
     bg_on: bool = True  # 검정 여백 대신 영상을 흐리게(렌즈 블러) 채운 배경
     bg_dim: int = 45  # 배경을 어둡게 하는 정도(%) - 로고/제목이 잘 보이도록
-    logo_on: bool = False
+    logo_on: bool = True
     logo_path: str = ""
-    logo_pos: str = "bottom"  # 'top' | 'bottom' (어느 여백에 둘지)
-    logo_size: int = 22  # 캔버스 폭 대비 %
-    text_on: bool = False
-    text: str = ""  # 비어 있으면 프로젝트명
+    logo_pos: str = "bottom"  # 'top' | 'bottom' (Fit 의 검정 여백 안에서 어느 쪽에 둘지)
+    logo_size: int = 13  # 캔버스 폭 대비 %
+    text_on: bool = True
+    text: str = ""  # 2번째 줄(제목). 비어 있으면 프로젝트의 곡 제목
     text_pos: str = "top"
-    text_font: str = "Black Han Sans"
+    text_font: str = "Black Han Sans"  # Fit(검정 여백) 전용. Fill 은 Syncopate 고정
     text_size: int = 56  # 1080 폭 기준 px
     text_bold: bool = False  # 기본 글꼴(Black Han Sans)은 이미 굵은 한 가지 굵기뿐이라 가짜 굵게를 쓰지 않는다
     text_spacing: int = 4  # 자간 (%, 글자 크기 대비 추가 간격이 아니라 QFont 퍼센트 간격의 100 초과분)
     text_color: str = "#ececec"
+    # ---- Fill(9:16 꽉 참) 오버레이: 영상 위에 직접 올린다 (제목 좌상단 2줄, 하단 로고 + 문구)
+    artist: str = ""  # 1번째 줄. 비어 있으면 프로젝트 아티스트
+    upper: bool = True  # 아티스트/제목을 항상 대문자로
+    cap_on: bool = True  # 로고 위 문구 (BEAUTY & CLEANUP BY)
+    work_beauty: bool = True
+    work_cleanup: bool = True
+    opacity: int = 85  # 아티스트, 제목, 로고, 문구 공통 불투명도(%)
+    scrim: int = 100  # 위/아래 어두운 그라데이션 세기(%) (0 이면 끔)
+    title_y: int = 131  # 아티스트 줄 기준선 위치 (화면 높이의 1000분율)
+    logo_y: int = 838  # 로고 중심 위치 (화면 높이의 1000분율)
 
     def to_dict(self):
         return dict(self.__dict__)
@@ -158,6 +168,10 @@ class StoryOverlay:
         o.text_spacing = min(60, max(-10, int(o.text_spacing)))
         o.logo_size = min(100, max(5, int(o.logo_size)))
         o.text_size = min(200, max(12, int(o.text_size)))
+        o.opacity = min(100, max(10, int(o.opacity)))
+        o.scrim = min(150, max(0, int(o.scrim)))
+        o.title_y = min(400, max(60, int(o.title_y)))
+        o.logo_y = min(950, max(600, int(o.logo_y)))
         return o
 
 
@@ -166,7 +180,7 @@ class EditState:
     cuts: list[Cut] = field(default_factory=list)
     orig_cuts: list[dict] = field(default_factory=list)  # XML 에서 읽은 원본 컷(복원용)
     xml_meta: dict = field(default_factory=dict)
-    story: Selection = field(default_factory=lambda: Selection(preset="60"))
+    story: Selection = field(default_factory=lambda: Selection(preset="60", layout=LayoutParams(mode="fill")))
     reels: Selection = field(default_factory=lambda: Selection(preset="60"))
     cover: Cover = field(default_factory=Cover)
     feed: list[FeedItem] = field(default_factory=list)
@@ -218,7 +232,11 @@ class EditState:
         s.cuts = deserialize(d.get("cuts", []))
         s.orig_cuts = copy.deepcopy(d.get("orig_cuts", []))
         s.xml_meta = copy.deepcopy(d.get("xml_meta", {}))
-        s.story = Selection.from_dict(d.get("story")) if d.get("story") else Selection(preset="60")
+        s.story = (
+            Selection.from_dict(d.get("story"))
+            if d.get("story")
+            else Selection(preset="60", layout=LayoutParams(mode="fill"))
+        )
         s.reels = Selection.from_dict(d.get("reels")) if d.get("reels") else Selection(preset="max")
         s.cover = Cover.from_dict(d.get("cover"))
         s.feed = [FeedItem.from_dict(x) for x in d.get("feed", [])]
@@ -231,6 +249,8 @@ class EditState:
         s.feed_seq = d.get("feed_seq", 0)
         s.feed_manual = bool(d.get("feed_manual", False))
         s.story_overlay = StoryOverlay.from_dict(d.get("story_overlay"))
+        if not d.get("story_overlay"):  # 오버레이가 없던 옛 저장본은 새 기본값(켜짐)이 아니라 예전처럼 꺼 둔다
+            s.story_overlay.logo_on = s.story_overlay.text_on = False
         s.defaults_applied = bool(d.get("defaults_applied", True))  # 이전 버전 프로젝트의 선택 상태는 바꾸지 않는다
         # 이 설정이 없던 옛 프로젝트: 이미 4:5 로 구성한 피드가 있으면 그대로 4:5 를 유지한다 (결과가 바뀌면 안 됨)
         s.feed_ratio = d.get("feed_ratio") or ("45" if d.get("feed") else "orig")
