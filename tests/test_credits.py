@@ -170,3 +170,16 @@ def test_title_lines_wrapped_names_and_copyright_are_not_errors():
 def test_unknown_line_between_roles_still_needs_review():
     rows = parse("Director | A B\nsome stray words here\nEditor | C D")
     assert [r.status for r in rows] == ["ok", "review", "ok"]
+
+
+def test_role_and_is_unified_to_ampersand_with_spaces():
+    for raw, role in (
+        ("Beauty and Cleanup Supervisor | A B", "Beauty & Cleanup Supervisor"),
+        ("Beauty & Cleanup Studio | DIAP", "Beauty & Cleanup Studio"),
+        ("Hair&Make up for Casting | JISOO CHOI", "Hair & Make up for Casting"),
+        ("R&D | A B", "R&D"),
+    ):
+        r = parse(raw)[0]
+        assert r.status == "ok" and r.role == role and r.text.startswith(role + " | "), raw
+    # 이름 쪽의 and/& 는 바꾸지 않는다
+    assert parse("Studio | Smith and Sons")[0].people[0].name in ("Smith and Sons", "Smith")
