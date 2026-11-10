@@ -109,6 +109,8 @@ ROLE_CANON = {
     "메이킹": "메이킹",
 }
 _HEADERS = {"credit", "credits", "크레딧", "staff", "스태프", "스탭", "cast", "출연", "credit list", "크레딧 정리"}
+# 크레딧 맨 끝의 저작권 문구 (역할 구분자가 없어도 오류가 아니다)
+_COPYRIGHT_RE = re.compile(r"^\s*(?:\(c\)|©|copyright\b)|all rights reserved", re.I)
 _PEOPLE_SPLIT = re.compile(r"\s*(?:,|;|、|&|·|ㆍ|\+|/|\band\b|\s+및\s+)\s*", re.I)
 
 
@@ -329,7 +331,12 @@ def parse_credits(
     lookup(name) -> [(name, handle), ...] : 로컬 ID 사전 조회 (없으면 None)."""
     rows: list[CreditRow] = []
     by_role: dict[tuple[int, str], CreditRow] = {}
-    lines = raw.splitlines()
+    lines = _join_wrapped_lines(raw.splitlines())
+    seen_role = False
+    # 첫 역할 줄 앞의 제목/설명 줄은 역할 줄이 하나라도 있는 크레딧에서만 일반 줄로 인정한다
+    has_role = any(
+        _split_role(_fix_lookalike_separator(_normalize_line(ln))[0]) is not None for ln in lines if ln.strip()
+    )
     # 같은 역할 줄은 같은 블록(빈 줄 / 그룹 제목으로 구분) 안에서만 합친다. 블록이 다르면 소속이 다른 사람일 수 있다
     # (예: 스튜디오별 VFX Supervisor, 촬영일별 LIGHTING CREW 의 1st/2nd/3rd).
     gid = 0
@@ -354,6 +361,18 @@ def parse_credits(
             )
             continue
         row = _parse_line(line, original)
+        if row.status == "review" and not row.role and _split_role(line) is None:
+            # 구분자가 없는 줄: 맨 끝 저작권 문구, 또는 첫 역할 줄 앞의 제목/연출 문구는 그대로 두는 일반 줄이다
+            note = "저작권 문구로 인식했습니다" if _COPYRIGHT_RE.search(line) else None
+            if note is None and has_role and not seen_role:
+                note = "크레딧 앞의 제목/설명 줄로 인식했습니다 (원문 그대로 유지)"
+            if note:
+                rows.append(
+                    CreditRow(role="", status="ok", raw_lines=[original], text=original.strip(), reasons=[note])
+                )
+                continue
+        if row.status == "ok" and row.role:
+            seen_role = True
         if sep_note:
             row.reasons.insert(0, sep_note)
         if row.status == "ok":
@@ -374,6 +393,26 @@ def parse_credits(
             _apply_dictionary(r, lookup, auto_apply_unique)
         finalize_row(r)
     return rows
+
+
+def _join_wrapped_lines(lines: list[str]) -> list[str]:
+    """쉼표/세미콜론으로 끝난 줄 바로 다음 줄이 구분자 없는 이름 목록이면 한 줄로 합친다
+    (예: 'Production Assistant | A, B,' 다음 줄 'C, D' 가 줄바꿈으로 넘어간 경우)."""
+    out: list[str] = []
+    for ln in lines:
+        prev = out[-1] if out else ""
+        cur = _normalize_line(ln)
+        if (
+            prev.strip()
+            and prev.rstrip().endswith((",", ";"))
+            and cur
+            and _split_role(cur) is None
+            and _split_role(_normalize_line(prev)) is not None
+        ):
+            out[-1] = prev.rstrip() + " " + ln.strip()
+        else:
+            out.append(ln)
+    return out
 
 
 def _next_line_is_ordinal(lines: list[str], idx: int) -> bool:

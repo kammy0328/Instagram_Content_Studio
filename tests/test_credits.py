@@ -119,8 +119,13 @@ def test_group_header_is_not_an_error_and_groups_do_not_merge():
 
 
 def test_line_without_delimiter_before_non_ordinal_line_is_still_review():
+    rows = parse("Director | A\nSOME TITLE\nEditor | B")  # 역할 줄 사이의 구분자 없는 줄은 추측하지 않는다
+    assert [r.status for r in rows] == ["ok", "review", "ok"]
+
+
+def test_leading_title_line_before_the_first_role_is_kept_as_plain_text():
     rows = parse("SOME TITLE\nDirector | A")
-    assert rows[0].status == "review" and rows[1].status == "ok"
+    assert rows[0].status == "ok" and rows[0].text == "SOME TITLE" and rows[1].status == "ok"
 
 
 def test_same_role_is_merged_only_inside_a_block():
@@ -146,3 +151,22 @@ def test_ampersand_with_only_one_handle_remains_review():
     raw = "Production | A & B (@studio)"
     row = parse(raw)[0]
     assert row.status == "review" and row.text == raw
+
+
+def test_title_lines_wrapped_names_and_copyright_are_not_errors():
+    raw = (
+        "LNGSHOT- “Bananas” MV\\nDirected by AISULTAN\\n\\n"
+        "Production Assistant | JIHYO KIM, TAEIN JUNG,\\nSANGCHUN PARK, DONGYURK YEOM\\n"
+        "Runner | SAN HUH\\n\\n(C) 2026 MOREVISION ENTERTAINMENT. All rights reserved.\\n"
+    ).replace("\\n", "\n")
+    rows = parse(raw)
+    assert C.count_review(rows) == 0
+    assert rows[0].text == "LNGSHOT- “Bananas” MV" and rows[1].text == "Directed by AISULTAN"
+    pa = next(r for r in rows if r.role == "Production Assistant")
+    assert [p.name for p in pa.people] == ["JIHYO KIM", "TAEIN JUNG", "SANGCHUN PARK", "DONGYURK YEOM"]
+    assert rows[-1].text.startswith("(C) 2026") and rows[-1].status == "ok"
+
+
+def test_unknown_line_between_roles_still_needs_review():
+    rows = parse("Director | A B\nsome stray words here\nEditor | C D")
+    assert [r.status for r in rows] == ["ok", "review", "ok"]

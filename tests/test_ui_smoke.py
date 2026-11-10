@@ -931,3 +931,15 @@ def test_slider_wheel_blocked_and_double_click_resets(qapp):
     assert s.value() == 30
     QTest.mouseDClick(s, Qt.MouseButton.LeftButton)
     assert s.value() == 50
+
+
+def test_cover_preview_follows_playhead_not_the_pinned_cover_frame(qapp, win):
+    win.set_tab("reels")
+    win.goto(10)
+    win.project.set_cover_frame(10)
+    win.reels_panel.cover_prev.setChecked(True)
+    pump(qapp, 50)
+    assert win.cover_mode and win._display_frame() == 10
+    win.goto(40)
+    pump(qapp, 50)
+    assert win._display_frame() == 40  # 지정된 커버(10)가 아니라 현재 위치를 미리 본다
