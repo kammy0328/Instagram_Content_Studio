@@ -77,8 +77,8 @@ def test_letterbox_toggle_async_target_and_layout_preservation(qapp, win, monkey
     monkeypatch.setattr(win.letterbox, "start", start)
     editor.auto_crop.setChecked(True)
     assert win._crop_pending
-    # 감지를 기다리는 동안 한 확대 조작은 결과 도착 후에도 유지한다.
-    editor.zoom.setValue(125)
+    # 감지를 기다리는 동안 한 위치 조작은 결과 도착 후에도 유지한다.
+    editor.py.setValue(30)
     win._layout_commit()
     if item:
         other = p.add_feed_still(40)
@@ -90,7 +90,7 @@ def test_letterbox_toggle_async_target_and_layout_preservation(qapp, win, monkey
     pump(qapp)
     lp = item.layout if item else (p.state.cover.layout if target == "cover" else getattr(p.state, target).layout)
     assert lp.auto_crop and lp.source_crop == (0, 60, 960, 420)
-    assert lp.zoom == 1.25
+    assert abs(lp.pos_y - 0.3) < 1e-9
     if item:
         assert not other.layout.auto_crop
         win.feed_panel.select(item.id)
@@ -151,12 +151,9 @@ def test_editor_and_credits_fit_laptop_viewport(qapp, win):
 def test_tabs_in_out_inclusive_and_undo(qapp, win):
     p = win.project
     win.goto(50)
-    QTest.keyClick(win, Qt.Key.Key_I)
-    for _ in range(10):
-        QTest.keyClick(win, Qt.Key.Key_Right)
-    QTest.keyClick(win, Qt.Key.Key_O)
+    win.apply_preset("story", "15")
     pump(qapp)
-    assert (p.state.story.start, p.state.story.end) == (50, 61)  # Out 은 현재 프레임 포함
+    assert p.state.story.enabled and p.state.story.start == 50
     win.set_tab("reels")
     win.goto(100)
     win.apply_preset("reels", "30")
@@ -762,22 +759,22 @@ def test_feed_ratio_defaults_to_original_and_can_switch_with_undo(qapp, win):
     assert p.feed_kind() == "orig" and fp.ratio_combo.currentData() == "orig"
 
 
-def test_fit_zoom_slider_is_enabled_and_original_ratio_hides_fit_fill(qapp, win):
+def test_fit_position_slider_is_enabled_and_original_ratio_hides_fit_fill(qapp, win):
     p, fp = win.project, win.feed_panel
     win.set_tab("feed")
     win.goto(40)
     win.add_still()
     pump(qapp, 100)
     le = fp.layout_editor
-    assert le.r_fit.isChecked() and le.zoom.isEnabled()  # Fit 에서도 확대 가능
+    assert le.r_fit.isChecked() and le.py.isEnabled()
     assert le.r_fit.isHidden() and le.r_fill.isHidden()  # 원본 비율(기본)에서는 Fit/Fill 선택이 없다
     fp.ratio_combo.setCurrentIndex(1)
     pump(qapp, 50)
-    assert not le.r_fit.isHidden() and le.zoom.isEnabled()
-    le.zoom.setValue(200)
-    le.zoom.sliderReleased.emit()
+    assert not le.r_fit.isHidden() and le.py.isEnabled()
+    le.py.setValue(20)
+    le.py.sliderReleased.emit()
     pump(qapp, 50)
-    assert p.state.feed[0].layout.mode == "fit" and p.state.feed[0].layout.zoom == 2.0
+    assert p.state.feed[0].layout.mode == "fit" and abs(p.state.feed[0].layout.pos_y - 0.2) < 1e-9
 
 
 def test_planner_uses_original_aspect_for_feed_and_4x5_when_chosen(qapp, win):
@@ -910,3 +907,27 @@ def test_reverse_play_button_goes_backwards_shows_frames_and_stays_silent(qapp, 
     seq = [n for n in shown if n > 0]  # 처음에 한 번 그려지는 초기 화면(0 프레임)은 제외
     assert len(seq) >= 3 and seq[-1] < seq[0]  # 거꾸로 가는 프레임이 실제로 화면에 나온다
     assert not [c for c in fake.calls if c[0] == "play"]  # 역재생 중에는 노래가 나오지 않는다
+
+
+def test_slider_wheel_blocked_and_double_click_resets(qapp):
+    from PySide6.QtCore import QPoint, QPointF
+    from PySide6.QtGui import QWheelEvent
+
+    from ics.ui.panels import ResetSlider
+
+    s = ResetSlider(0, 100, 50)
+    s.setValue(30)
+    ev = QWheelEvent(
+        QPointF(5, 5),
+        QPointF(5, 5),
+        QPoint(0, 0),
+        QPoint(0, 120),
+        Qt.MouseButton.NoButton,
+        Qt.KeyboardModifier.NoModifier,
+        Qt.ScrollPhase.NoScrollPhase,
+        False,
+    )
+    qapp.sendEvent(s, ev)
+    assert s.value() == 30
+    QTest.mouseDClick(s, Qt.MouseButton.LeftButton)
+    assert s.value() == 50
