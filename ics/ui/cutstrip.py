@@ -189,6 +189,11 @@ class CutStrip(QListWidget):
         if sig != self._sig:
             self._sig = sig
             self._block = True
+            # 컷 나누기/병합으로 목록을 다시 만들 때 화면이 튀지 않게: 그리기를 멈추고 스크롤 위치를 그대로 되돌린다
+            sb = self.horizontalScrollBar()
+            keep = sb.value()
+            self.setUpdatesEnabled(False)
+            sb.blockSignals(True)
             try:
                 self.clear()
                 fps = float(self.project.fps) or 24.0
@@ -213,7 +218,14 @@ class CutStrip(QListWidget):
                         f"#{i + 1}  {self.project.tc(c.start)} ~ {self.project.tc(c.end)}  ({c.end - c.start}프레임)"
                     )
                     self.addItem(it)
+                self.doItemsLayout()
+                sb.setValue(min(keep, sb.maximum()))
+                # 재생 헤드가 있는 컷을 '지금 컷' 으로 조용히 맞춘다 (구조가 바뀐 것이지 이동한 것이 아니므로 가운데로 옮기지 않음)
+                i = cuts_mod.cut_index_at(cuts, self.playhead)
+                self.current_id = cuts[i].id if i is not None else None
             finally:
+                sb.blockSignals(False)
+                self.setUpdatesEnabled(True)
                 self._block = False
         if selected_ids is not None:
             self.set_selected_ids(selected_ids, scroll=False)
@@ -333,6 +345,8 @@ class CutScrubber(QWidget):
     LEFT, RIGHT = 74, 118
     H = RULER_H + TRACK_H + 6
 
+    SAMPLES = 12  # 컷마다 미리 만들어 두는 필름스트립 프레임 수 (컷을 넘길 때 바로 보이도록)
+
     def __init__(self, thumbs, fps: float, parent=None):
         super().__init__(parent)
         self.thumbs, self.fps = thumbs, max(1e-6, float(fps))
@@ -340,10 +354,34 @@ class CutScrubber(QWidget):
         self.label = ""
         self.playhead = 0
         self._drag = False
+        self._cuts_sig: tuple = ()
         self.setFixedHeight(self.H)
-        self.setMouseTracking(True)
         self.setToolTip("선택한 컷만 확대한 타임라인: 좌우로 끌면 그 컷 처음부터 끝까지만 훑어봅니다")
-        thumbs.thumbReady.connect(lambda _n: self.update())
+        thumbs.thumbReady.connect(self._thumb_ready)
+
+    @classmethod
+    def sample_frames(cls, start: int, end: int) -> list[int]:
+        n = max(1, end - start)
+        return [start + min(n - 1, int((i + 0.5) * n / cls.SAMPLES)) for i in range(cls.SAMPLES)]
+
+    def _thumb_ready(self, n: int) -> None:
+        if self.active and self.start <= n < self.end:
+            self.update()
+
+    def prefetch(self, cuts, current: int | None) -> None:
+        """모든 컷의 필름스트립 프레임을 미리 만든다: 지금 컷과 앞뒤 컷은 먼저, 나머지는 가까운 순서로 백그라운드.
+        디스크에 남기므로 다음에 열 때는 바로 보인다."""
+        if not cuts:
+            return
+        cur = 0 if current is None else max(0, min(len(cuts) - 1, current))
+        order = sorted(range(len(cuts)), key=lambda i: (abs(i - cur), i))
+        frames = [f for i in order for f in self.sample_frames(cuts[i].start, cuts[i].end)]
+        self.thumbs.request_visible(frames[: 3 * self.SAMPLES])  # 지금 컷과 앞뒤 컷 먼저
+        sig = tuple((c.start, c.end) for c in cuts)
+        if sig != self._cuts_sig:
+            self._cuts_sig = sig
+            # 전부 백그라운드 큐에도 넣어 둔다 (우선 큐는 화면이 바뀔 때마다 새로 정해지므로 거기서 빠져도 결국 만들어진다)
+            self.thumbs.ensure(frames)
 
     def set_range(self, start: int, end: int, label: str) -> None:
         if (start, end, label) != (self.start, self.end, self.label):
@@ -374,7 +412,6 @@ class CutScrubber(QWidget):
     def mousePressEvent(self, e):  # noqa: N802
         if self.active and e.button() == Qt.MouseButton.LeftButton:
             self._drag = True
-            self.setCursor(Qt.CursorShape.SizeHorCursor)
             self.scrubbed.emit(self._frame_at(e.position().x()))
 
     def mouseMoveEvent(self, e):  # noqa: N802
@@ -383,7 +420,6 @@ class CutScrubber(QWidget):
 
     def mouseReleaseEvent(self, e):  # noqa: N802
         self._drag = False
-        self.unsetCursor()
 
     def paintEvent(self, _e):  # noqa: N802
         from ..core.timecode import frame_to_tc
@@ -427,25 +463,25 @@ class CutScrubber(QWidget):
             else:
                 p.setPen(QPen(theme.C["BORDER"], 1))
                 p.drawLine(QPointF(x, ruler.y() + 15), QPointF(x, ruler.bottom()))
-        # ---- 필름스트립 (그 컷의 프레임을 고르게)
+        # ---- 필름스트립: 미리 만든 표본 프레임을 한꺼번에 그린다 (하나씩 채워지며 깜빡이지 않도록)
         p.save()
         clip = QPainterPath()
         clip.addRoundedRect(track, 3, 3)
         p.setClipPath(clip)
         p.fillRect(track, QColor("#151515"))
-        tw = max(24.0, track.height() * 16 / 9)
-        k = max(1, int(track.width() // tw) + 1)
-        want = []
-        for i in range(k):
-            fr = self.start + int((i + 0.5) / k * max(1, n - 1))
-            want.append(fr)
-            img = self.thumbs.get(fr)
-            if img is not None and not img.isNull():
+        frames = self.sample_frames(self.start, self.end)
+        imgs = [self.thumbs.get(fr) for fr in frames]
+        if all(im is not None and not im.isNull() for im in imgs):
+            tw = max(24.0, track.height() * 16 / 9)
+            k = max(1, int(track.width() // tw) + 1)
+            for i in range(k):
+                img = imgs[min(len(imgs) - 1, int(i * len(imgs) / k))]
                 r = QRectF(track.x() + i * track.width() / k, track.y(), track.width() / k, track.height())
                 src = img.rect()
                 sw = min(src.width(), src.height() * r.width() / r.height())
                 p.drawImage(r, img, QRectF((src.width() - sw) / 2, 0, sw, src.height()))
-        self.thumbs.request_visible(want)
+        else:
+            self.thumbs.request_visible([fr for fr, im in zip(frames, imgs) if im is None])
         p.restore()
         p.setPen(QPen(QColor(255, 255, 255, 40), 1))
         p.setBrush(Qt.BrushStyle.NoBrush)
