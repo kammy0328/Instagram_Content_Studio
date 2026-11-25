@@ -498,6 +498,7 @@ class AudioPlayer:
     def __init__(self, wav_path: str | None):
         self.ok = False  # WAV 를 읽을 수 있는가 (출력 장치 문제는 재생 시점에 error 로만 알린다)
         self.error = ""
+        self.volume = 1.0  # 미리보기 음량 0~1 (렌더링 결과와 무관)
         self._sink = None
         self._file = None
         self._offset = 0
@@ -560,6 +561,7 @@ class AudioPlayer:
             frame_bytes = self.CHANNELS * self.SAMPLE_BYTES
             f.seek(self._offset + int(max(0.0, seconds) * self.RATE) * frame_bytes)
             sink = QAudioSink(dev, fmt)
+            sink.setVolume(self.volume)
             sink.start(f)
             self._sink, self._file = sink, f
             error = sink.error()
@@ -568,6 +570,11 @@ class AudioPlayer:
                 self.error = f"소리 출력 오류({error.name}) - 출력 장치: {dev.description()}"
         except Exception as e:  # noqa: BLE001
             self.error = f"소리를 재생하지 못했습니다: {e}"
+
+    def set_volume(self, volume: float) -> None:
+        self.volume = min(1.0, max(0.0, float(volume)))
+        if self._sink is not None:
+            self._sink.setVolume(self.volume)
 
     def stop(self) -> None:
         try:
@@ -618,9 +625,15 @@ class PlaybackEngine(QObject):
     def set_audio(self, wav: str | None) -> None:
         """소리 파일을 (다시) 연결한다. 이미 재생 중이면 현재 위치부터 소리를 바로 이어 붙인다."""
         self.audio.stop()
+        vol = self.audio.volume
         self.audio = AudioPlayer(wav)
+        self.audio.volume = vol
         if self._audio_should_play():
             self.audio.play(self.audio_time())
+
+    def set_volume(self, volume: float) -> None:
+        """미리보기 음량 (0~1). 재생 중에도 바로 반영한다."""
+        self.audio.set_volume(volume)
 
     def set_audio_enabled(self, enabled: bool) -> None:
         """미리보기 소리 켜기/끄기 (렌더링 결과에는 영향 없음). 재생 중이면 즉시 반영한다."""

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QTimer, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -15,10 +15,12 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QLabel,
     QLineEdit,
+    QMenu,
     QMessageBox,
     QPushButton,
     QSizePolicy,
     QSpinBox,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -63,111 +65,135 @@ class OverlayEditor(QGroupBox):
         self.legacy_bg = QWidget()
         lv = QVBoxLayout(self.legacy_bg)
         lv.setContentsMargins(0, 0, 0, 0)
-        self.bg_on = QCheckBox("검정 여백 대신 영상을 흐리게 채운 배경 (렌즈 블러)")
+        self.bg_on = QCheckBox("여백을 흐린 영상으로 채우기")
         self.bg_on.toggled.connect(self._edited)
         lv.addWidget(self.bg_on)
         br = QHBoxLayout()
-        br.addWidget(QLabel("배경 어둡기"))
+        _bl = QLabel("배경 어둡기")
+        _bl.setObjectName("fieldLabel")
+        br.addWidget(_bl)
         self.bg_dim = ResetSlider()
         self.bg_dim.setRange(0, 90)
         self.bg_dim.default = 45
         self.bg_dim.valueChanged.connect(self._edited_slider)
         br.addWidget(self.bg_dim, 1)
         self.bg_dim_lbl = QLabel("")
+        self.bg_dim_lbl.setObjectName("hint")
         br.addWidget(self.bg_dim_lbl)
         lv.addLayout(br)
 
         v.addWidget(self.legacy_bg)
 
+        def subhead(text):
+            lb = QLabel(text)
+            lb.setObjectName("subhead")
+            return lb
+
+        def vrow(label, widget, value_lbl=None, into=None):
+            r = QHBoxLayout()
+            r.setSpacing(8)
+            lb = QLabel(label)
+            lb.setObjectName("fieldLabel")
+            r.addWidget(lb)
+            r.addWidget(widget, 1)
+            if value_lbl is not None:
+                value_lbl.setObjectName("hint")
+                value_lbl.setMinimumWidth(34)
+                value_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                r.addWidget(value_lbl)
+            (into or v).addLayout(r)
+            return lb
+
+        # ---- 제목
+        v.addWidget(subhead("제목"))
+        self.text_on = QCheckBox("아티스트 · 제목 표시")
+        self.text_on.toggled.connect(self._edited)
+        v.addWidget(self.text_on)
+        self.f_artist = QLineEdit()
+        self.f_artist.setPlaceholderText("아티스트 (비우면 프로젝트 아티스트)")
+        self.f_artist.textEdited.connect(self._edited_slider)
+        v.addWidget(self.f_artist)
+        self.text = QLineEdit()
+        self.text.setPlaceholderText("제목 (비우면 프로젝트 곡 제목)")
+        self.text.textEdited.connect(self._edited_slider)
+        v.addWidget(self.text)
+        self.upper = QCheckBox("항상 대문자")
+        self.upper.toggled.connect(self._edited)
+        v.addWidget(self.upper)
+
         # ---- 로고
+        v.addWidget(subhead("로고"))
         self.logo_on = QCheckBox("로고 표시")
         self.logo_on.toggled.connect(self._logo_toggled)
         v.addWidget(self.logo_on)
         pr = QHBoxLayout()
+        pr.setSpacing(4)
         self.preset_combo = QComboBox()
-        self.preset_combo.setToolTip("저장해 둔 로고 프리셋 (모든 프로젝트에서 공통)")
+        self.preset_combo.setToolTip("로고 프리셋 (고르면 바로 적용, 모든 프로젝트 공통)")
         _shrinkable(self.preset_combo)
+        self.preset_combo.activated.connect(lambda _i: self._apply_preset())
         pr.addWidget(self.preset_combo, 1)
-        b_apply = QPushButton("프리셋 적용")
-        b_apply.setToolTip("선택한 프리셋의 로고를 이 프로젝트 STORY 에 넣고 켭니다")
-        b_apply.clicked.connect(self._apply_preset)
-        pr.addWidget(b_apply)
+        more = QToolButton()
+        more.setObjectName("ghostTool")
+        more.setText("···")
+        more.setToolTip("로고 파일 / 프리셋 관리")
+        more.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        m = QMenu(more)
+        m.addAction("로고 파일 선택…", self._pick_logo)
+        m.addAction("프리셋 다시 적용", self._apply_preset)
+        m.addSeparator()
+        m.addAction("지금 로고를 프리셋으로 저장…", self._save_preset)
+        m.addAction("선택한 프리셋 삭제", self._delete_preset)
+        more.setMenu(m)
+        pr.addWidget(more)
         v.addLayout(pr)
-        fr = QHBoxLayout()
-        b_file = QPushButton("로고 파일…")
-        b_file.clicked.connect(self._pick_logo)
-        b_save = QPushButton("프리셋 저장")
-        b_save.setToolTip("지금 로고(크기/위치 포함)를 프리셋으로 저장합니다. 이름이 같으면 덮어씁니다")
-        b_save.clicked.connect(self._save_preset)
-        b_del = QPushButton("프리셋 삭제")
-        b_del.clicked.connect(self._delete_preset)
-        for b in (b_file, b_save, b_del):
-            fr.addWidget(b)
-        v.addLayout(fr)
         self.logo_lbl = QLabel("")
-        self.logo_lbl.setObjectName("muted")
+        self.logo_lbl.setObjectName("hint")
         self.logo_lbl.setWordWrap(True)
         v.addWidget(self.logo_lbl)
-        lr = QHBoxLayout()
-        self.logo_pos_lbl = QLabel("위치")
-        lr.addWidget(self.logo_pos_lbl)
         self.logo_pos = QComboBox()
         self.logo_pos.addItem("아래 여백", "bottom")
         self.logo_pos.addItem("위 여백", "top")
         self.logo_pos.currentIndexChanged.connect(self._edited)
-        lr.addWidget(self.logo_pos)
-        lr.addWidget(QLabel("크기"))
+        self.logo_pos_lbl = vrow("위치", self.logo_pos)
         self.logo_size = ResetSlider()
         self.logo_size.setRange(5, 100)
         self.logo_size.default = 13
         self.logo_size.valueChanged.connect(self._edited_slider)
-        lr.addWidget(self.logo_size, 1)
         self.logo_size_lbl = QLabel("")
-        lr.addWidget(self.logo_size_lbl)
-        v.addLayout(lr)
+        vrow("크기", self.logo_size, self.logo_size_lbl)
 
-        # ---- 제목 텍스트
-        self.text_on = QCheckBox("제목 텍스트 표시")
-        self.text_on.toggled.connect(self._edited)
-        v.addWidget(self.text_on)
-        self.f_artist = QLineEdit()
-        self.f_artist.setPlaceholderText("1줄: 아티스트 (비우면 프로젝트 아티스트)")
-        self.f_artist.textEdited.connect(self._edited_slider)
-        v.addWidget(self.f_artist)
-        self.text = QLineEdit()
-        self.text.setPlaceholderText("2줄: 제목 (비우면 프로젝트 곡 제목)")
-        self.text.textEdited.connect(self._edited_slider)
-        v.addWidget(self.text)
-
-        # ---- Fill 전용: 대문자, 문구, 불투명도, 그라데이션, 위치
+        # ---- Fill 전용: 문구, 불투명도, 그라데이션, 위치
         self.fill_box = QWidget()
         fv = QVBoxLayout(self.fill_box)
         fv.setContentsMargins(0, 0, 0, 0)
-        self.upper = QCheckBox("아티스트/제목 항상 대문자")
-        self.upper.toggled.connect(self._edited)
-        fv.addWidget(self.upper)
-        self.cap_on = QCheckBox("로고 위 문구")
-        self.cap_on.toggled.connect(self._edited)
+        fv.setSpacing(6)
+        self.logo_y = ResetSlider()
+        self.logo_y.setRange(600, 950)
+        self.logo_y.default = 838
+        self.logo_y_lbl = QLabel("")
+        vrow("높이", self.logo_y, self.logo_y_lbl, fv)
+        fv.addWidget(subhead("로고 위 문구"))
         wr = QHBoxLayout()
+        wr.setSpacing(4)
+        self.cap_on = QCheckBox("표시")
+        self.cap_on.toggled.connect(self._edited)
         wr.addWidget(self.cap_on)
-        self.work_beauty = QCheckBox("BEAUTY")
-        self.work_cleanup = QCheckBox("CLEANUP")
+        wr.addSpacing(6)
+        self.work_beauty = QPushButton("BEAUTY")
+        self.work_cleanup = QPushButton("CLEANUP")
         for c in (self.work_beauty, self.work_cleanup):
+            c.setObjectName("chip")
+            c.setCheckable(True)
+            c.setMinimumWidth(78)
             c.toggled.connect(self._edited)
             wr.addWidget(c)
         wr.addStretch(1)
         fv.addLayout(wr)
         self.cap_preview = QLabel("")
-        self.cap_preview.setObjectName("muted")
+        self.cap_preview.setObjectName("hint")
         fv.addWidget(self.cap_preview)
-
-        def row(label, sl, lbl):
-            r = QHBoxLayout()
-            r.addWidget(QLabel(label))
-            r.addWidget(sl, 1)
-            r.addWidget(lbl)
-            fv.addLayout(r)
-
+        fv.addWidget(subhead("표시"))
         self.opacity = ResetSlider()
         self.opacity.setRange(10, 100)
         self.opacity.default = 85
@@ -180,22 +206,14 @@ class OverlayEditor(QGroupBox):
         self.title_y.setRange(60, 400)
         self.title_y.default = 131
         self.title_y_lbl = QLabel("")
-        self.logo_y = ResetSlider()
-        self.logo_y.setRange(600, 950)
-        self.logo_y.default = 838
-        self.logo_y_lbl = QLabel("")
-        row("불투명도", self.opacity, self.opacity_lbl)
-        row("어둡게(위/아래)", self.scrim, self.scrim_lbl)
-        row("제목 높이", self.title_y, self.title_y_lbl)
-        row("로고 높이", self.logo_y, self.logo_y_lbl)
+        vrow("불투명도", self.opacity, self.opacity_lbl, fv)
+        vrow("어둡게", self.scrim, self.scrim_lbl, fv)
+        vrow("제목 높이", self.title_y, self.title_y_lbl, fv)
+        tip = "기본 위치는 인스타 스토리 UI(위 프로필 줄, 아래 메시지 바)에 가려지지 않게 잡았습니다. 더블클릭: 기본값"
         for sl in (self.opacity, self.scrim, self.title_y, self.logo_y):
             sl.valueChanged.connect(self._edited_slider)
-        tip = QLabel(
-            "인스타 스토리 UI(위 프로필 줄, 아래 메시지 바)에 가려지지 않는 기본 위치입니다. 더블클릭하면 기본값."
-        )
-        tip.setObjectName("muted")
-        tip.setWordWrap(True)
-        fv.addWidget(tip)
+            sl.setToolTip(tip)
+        self.scrim.setToolTip("글자가 잘 보이도록 위/아래를 어둡게 하는 정도. " + tip)
         v.addWidget(self.fill_box)
 
         # ---- Fit(검정 여백) 전용 글꼴 설정

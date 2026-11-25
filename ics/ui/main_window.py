@@ -51,7 +51,7 @@ from .preview import PreviewWidget
 from .services import Decoder, FrameService, LetterboxService, PlaybackEngine, ProxyBuilder, ThumbService, np_to_qimage
 from .settings import DEFAULT_SHORTCUTS, Settings
 from .timeline import TimelineWidget
-from .widgets import ElidedLabel, studio_icon
+from .widgets import ElidedLabel, SegButton, studio_icon
 
 
 class StillLoader(QObject):
@@ -225,11 +225,8 @@ class EditorWindow(QMainWindow):
             ("credits", "CREDITS", "크레딧과 캡션"),
         )
         for key, label, tip in specs:
-            bt = QPushButton(label)
-            bt.setObjectName("seg")
-            bt.setCheckable(True)
+            bt = SegButton(label)
             bt.setToolTip(tip)
-            bt.setCursor(Qt.CursorShape.PointingHandCursor)
             bt.clicked.connect(lambda _=False, k=key: self.set_tab(k))
             self.nav_group.addButton(bt)
             sh.addWidget(bt)
@@ -313,6 +310,7 @@ class EditorWindow(QMainWindow):
         self.transport.viewToggled.connect(lambda _v: self._update_preview_layout())
         self.transport.safe.toggled.connect(self._safe_toggled)
         self.transport.muteToggled.connect(self.set_muted)
+        self.transport.volumeChanged.connect(self.set_volume)
         cv.addWidget(self.transport)
         top.addWidget(center)
         # --- 우측 인스펙터
@@ -354,6 +352,7 @@ class EditorWindow(QMainWindow):
         # --- 패널 연결
         for which, panel in (("story", self.story_panel), ("reels", self.reels_panel)):
             panel.presetClicked.connect(lambda p, w=which: self.apply_preset(w, p))
+            panel.fromCutsClicked.connect(self.cuts_to_inout)
             panel.layoutLive.connect(lambda lp, w=which: self._layout_live(w, lp))
             panel.layoutCommit.connect(lambda _lp: self._layout_commit())
             panel.layout_editor.cropRequested.connect(lambda again, w=which: self._request_letterbox(w, again))
@@ -412,14 +411,14 @@ class EditorWindow(QMainWindow):
             "Premiere/FCP7 XML · FCPXML · EDL: 고르면 바로 컷이 잘립니다. 창에 끌어다 놓아도 됩니다.",
         )
         btn(
-            "병합 (M)",
+            "병합",
             self.merge_selected,
-            "Shift+클릭으로 선택한 연속 컷을 하나의 논리 컷으로 병합 (오른쪽 클릭 메뉴에서도 가능)",
+            "선택한 연속 컷을 하나로 병합 (단축키 M · 오른쪽 클릭 메뉴에서도 가능)",
         )
         btn(
-            "컷 나누기 (C)",
+            "컷 나누기",
             self.split_at_playhead,
-            "현재 재생 헤드 위치에서 컷을 둘로 나눔 (재생 헤드 프레임이 뒤쪽 컷의 첫 프레임)",
+            "재생 헤드 위치에서 컷을 둘로 나눔 (단축키 C · 재생 헤드 프레임이 뒤쪽 컷의 첫 프레임)",
         )
         more = QToolButton()
         more.setText("추가 작업")
@@ -431,8 +430,8 @@ class EditorWindow(QMainWindow):
         menu.addAction("XML 세부 설정으로 불러오기…", self.import_xml_advanced)
         more.setMenu(menu)
         h.addWidget(more)
-        btn("선택 컷 → 구간", self.cuts_to_inout, "선택한 컷 범위를 현재 탭의 구간으로 지정")
-        self.snap_btn = btn("스냅 ✓", self.toggle_snap, "스냅 켜기/끄기 (N)")
+        self.snap_btn = btn("스냅", self.toggle_snap, "스냅 켜기/끄기 (N)", checkable=True)
+        self.snap_btn.setChecked(True)
         self.cut_info = ElidedLabel()
         self.cut_info.setObjectName("muted")
         self.cut_info.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
@@ -869,6 +868,8 @@ class EditorWindow(QMainWindow):
         self._on_cut_selection()
 
     def _on_cut_selection(self) -> None:
+        for panel in (self.story_panel, self.reels_panel):
+            panel.set_cuts_selected(len(self.sel_ids))
         if self.sel_ids:
             self._range_source = "cuts"
         self._update_cut_info()
@@ -959,7 +960,7 @@ class EditorWindow(QMainWindow):
             add(
                 m,
                 "to_inout",
-                f"{self.tab.upper()} 구간(In/Out)으로 지정",
+                f"선택한 컷으로 {self.tab.upper()} 구간 지정",
                 self.cuts_to_inout,
                 bool(sel),
                 "컷을 선택하세요.",
@@ -1017,7 +1018,9 @@ class EditorWindow(QMainWindow):
 
     def toggle_snap(self) -> None:
         self.timeline.snap_on = not self.timeline.snap_on
-        self.snap_btn.setText("스냅 ✓" if self.timeline.snap_on else "스냅 ✗")
+        self.snap_btn.blockSignals(True)
+        self.snap_btn.setChecked(self.timeline.snap_on)
+        self.snap_btn.blockSignals(False)
 
     def _update_cut_info(self) -> None:
         cs = self.project.state.cuts
@@ -1341,9 +1344,14 @@ class EditorWindow(QMainWindow):
         self.b_redo.setToolTip(f"다시 실행: {self.project.redo_label()}" if self.project.can_redo() else "")
         st = self.project.state
         n = len(self.project.feed_included())
-        self.nav_btns["story"].setText("STORY" + ("  ✓" if st.story.enabled else ""))
-        self.nav_btns["reels"].setText("REELS" + ("  ✓" if st.reels.enabled else ""))
-        self.nav_btns["feed"].setText(f"FEED  {n}/{FEED_MAX_FINAL}")
+        self.nav_btns["story"].set_state(st.story.enabled)
+        self.nav_btns["reels"].set_state(st.reels.enabled)
+        self.nav_btns["feed"].set_state(n > 0, str(n))
+        self.nav_btns["story"].setToolTip(
+            "9:16 · 최대 60초 · " + ("구간 지정됨" if st.story.enabled else "구간 미지정")
+        )
+        self.nav_btns["reels"].setToolTip("영상 + 커버 · " + ("구간 지정됨" if st.reels.enabled else "구간 미지정"))
+        self.nav_btns["feed"].setToolTip(f"캐러셀 · {n}/{FEED_MAX_FINAL}개")
         self._media_info = (
             f"{self.project.media.display_w}×{self.project.media.display_h} · "
             f"{float(self.project.fps):.3f} fps · {self.project.count}f"
@@ -1382,8 +1390,16 @@ class EditorWindow(QMainWindow):
         self.playback.audio_enabled = not muted
         self.transport.set_audio_available(has)
         self.transport.set_muted(muted)
+        vol = int(self.settings.get("audio_volume", 100))
+        self.transport.set_volume(vol)
+        self.playback.set_volume(vol / 100.0)
         if has:
             self.transport.set_audio_status("소리 준비 중…", "재생용 소리 파일을 만들고 있습니다.")
+
+    def set_volume(self, value: int) -> None:
+        """미리보기 음량 (0~100). 설정에 저장하고 재생 중에도 바로 반영한다 (렌더링 결과와 무관)."""
+        self.settings.set("audio_volume", int(value))
+        self.playback.set_volume(int(value) / 100.0)
 
     def set_muted(self, muted: bool) -> None:
         """미리보기 소리 끄기/켜기. 설정에 저장하고, 재생 중이면 바로 반영한다 (렌더링 결과에는 영향 없음)."""
@@ -1424,10 +1440,10 @@ class EditorWindow(QMainWindow):
         if ok and self.proxy.index is not None:
             self.decoder.set_proxy(str(self.proxy.video_path), self.proxy.index)
             self.frames.clear_cache()
-            self.proxy_lbl.setText("· 미리보기 준비됨")
+            self.proxy_lbl.setText("")
             self._request_display_frame()
         elif ok:
-            self.proxy_lbl.setText("· 미리보기 준비됨")
+            self.proxy_lbl.setText("")
         else:
             self.proxy_lbl.setText("· 프록시 생성 실패, 원본으로 재생")
             self.proxy_lbl.setToolTip(err)

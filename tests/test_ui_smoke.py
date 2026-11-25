@@ -593,10 +593,10 @@ def _wait(qapp, cond, timeout=30):
 
 
 def test_mute_button_shortcut_and_setting(qapp, win):
-    assert win.transport.mute_btn.isEnabled() and "🔊" in win.transport.mute_btn.text()
+    assert win.transport.mute_btn.isEnabled() and win.transport.mute_btn.accessibleName() == "소리 켜짐"
     win.actions["toggle_mute"].trigger()  # Shift+M
     assert not win.playback.audio_enabled and win.settings.get("audio_muted") is True
-    assert win.transport.mute_btn.isChecked() and "🔇" in win.transport.mute_btn.text()
+    assert win.transport.mute_btn.isChecked() and win.transport.mute_btn.accessibleName() == "소리 꺼짐"
     win.transport.mute_btn.click()  # 버튼으로 다시 켠다
     assert win.playback.audio_enabled and win.settings.get("audio_muted") is False
     # 저장된 설정은 다음에 창을 열 때 적용된다
@@ -1000,3 +1000,46 @@ def test_workspace_tabs_live_in_the_top_bar(qapp, win):
     pump(qapp, 50)
     assert win.pages.currentIndex() == 0
     assert win.findChild(type(win.nav_btns["story"].parent()), "sidebar") is None
+
+
+def test_volume_slider_sets_preview_volume_and_is_saved(qapp, win):
+    win.transport.volume.setValue(40)
+    assert win.settings.get("audio_volume") == 40 and abs(win.playback.audio.volume - 0.4) < 1e-9
+    win.playback.set_audio(None)  # 소리 파일을 다시 붙여도 음량은 유지된다
+    assert abs(win.playback.audio.volume - 0.4) < 1e-9
+    QTest.mouseDClick(win.transport.volume, Qt.MouseButton.LeftButton)  # 더블클릭: 100%
+    assert win.transport.volume.value() == 100 and win.settings.get("audio_volume") == 100
+    win.transport.mute_btn.click()
+    assert not win.transport.volume.isEnabled()  # 소리를 끄면 음량 슬라이더도 비활성
+    win.transport.mute_btn.click()
+
+
+def test_tabs_use_indicators_not_check_marks_and_toolbar_labels_are_plain(qapp, win):
+    for b in win.nav_btns.values():
+        assert "✓" not in b.text()
+    win.apply_preset("story", "15")
+    win._refresh()
+    pump(qapp, 50)
+    assert win.nav_btns["story"].done
+    texts = [b.text() for b in win.findChildren(type(win.snap_btn))]
+    assert "병합" in texts and "컷 나누기" in texts and "스냅" in texts
+    assert not any(t.endswith(("(M)", "(C)")) or "✓" in t or "→ 구간" in t for t in texts)
+    assert win.snap_btn.isChecked()
+    win.snap_btn.click()
+    assert not win.timeline.snap_on and not win.snap_btn.isChecked()
+    win.snap_btn.click()
+    assert "미리보기 준비됨" not in win.proxy_lbl.text()
+
+
+def test_select_cuts_chip_sets_the_range(qapp, win):
+    from pathlib import Path
+
+    assert not win.story_panel.cuts_btn.isEnabled()
+    win.import_xml_file(str(Path(__file__).parent / "data" / "sample_premiere.xml"))
+    cs = win.project.state.cuts
+    win._set_cut_selection([cs[1].id, cs[2].id])
+    assert win.story_panel.cuts_btn.isEnabled()
+    win.set_tab("story")
+    win.story_panel.cuts_btn.click()
+    st = win.project.state.story
+    assert (st.start, st.end) == (cs[1].start, cs[2].end)
