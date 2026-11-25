@@ -88,9 +88,20 @@ QPushButton#nav:checked {{ background: {ACCENT}; color: #0a0a0a; }}
 """
 
 STYLE += f"""
-QFrame#topbar {{ background: #0f0f0f; border-bottom: 1px solid {BORDER}; }}
+QFrame#topbar {{ background: {BG}; border-bottom: 1px solid #1f1f1f; }}
+QLabel#title {{ font-size: 14px; font-weight: 700; }}
+QLabel#status {{ color: {MUTED}; font-size: 11px; }}
+QFrame#segbar {{ background: #161616; border: 1px solid #242424; border-radius: 8px; }}
+QPushButton#seg {{ background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 5px 16px; min-height: 18px;
+    color: {MUTED}; font-weight: 700; font-size: 11px; letter-spacing: 1px; }}
+QPushButton#seg:hover {{ color: {TEXT}; background: #1d1d1d; }}
+QPushButton#seg:checked {{ background: #2a2a2a; color: #ffffff; border-color: #3a3a3a; }}
+QPushButton#seg:focus {{ border-color: #3a3a3a; }}
+QToolButton#ghostTool {{ background: transparent; border: 1px solid transparent; color: {MUTED}; font-weight: 700; }}
+QToolButton#ghostTool:hover {{ background: {PANEL2}; border-color: {BORDER}; color: {TEXT}; }}
+QToolButton#ghostTool::menu-indicator {{ image: none; width: 0; }}
 QFrame#sidebar {{ background: #0c0c0c; border-right: 1px solid {BORDER}; }}
-QFrame#workspaceCard {{ background: {PANEL}; border: 1px solid {BORDER}; border-radius: 12px; }}
+QFrame#workspaceCard {{ background: {PANEL}; border: 1px solid #222222; border-radius: 10px; }}
 QFrame#timelineToolbar {{ background: {PANEL}; border: none; border-bottom: 1px solid {BORDER}; }}
 QWidget#transport {{ background: {PANEL}; border-top: 1px solid {BORDER}; }}
 QWidget#inspector {{ background: {PANEL}; }}
@@ -103,7 +114,7 @@ QPushButton {{ padding: 6px 10px; min-height: 20px; border-radius: 7px; backgrou
 QPushButton:hover {{ background: #262626; border-color: #777777; }}
 QPushButton:focus {{ border: 1px solid {ACCENT}; }}
 QPushButton:checked {{ background: #333333; color: #f5f5f5; border-color: #aaaaaa; }}
-QPushButton#primary {{ background: qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #ffffff,stop:1 #d8d8d8); color: #0a0a0a; padding: 8px 18px; border: 1px solid #ffffff; }}
+QPushButton#primary {{ background: #ececec; color: #0a0a0a; padding: 6px 16px; border: 1px solid #ececec; }}
 QPushButton#primary:hover {{ background: #ffffff; }}
 QPushButton#play {{ background: #f0f0f0; border-color: #ffffff; padding: 4px; }}
 QPushButton#primary:disabled {{ background: #333333; border-color: #444444; color: #8a8a8a; }}

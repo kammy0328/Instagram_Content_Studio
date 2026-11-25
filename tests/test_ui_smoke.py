@@ -593,10 +593,10 @@ def _wait(qapp, cond, timeout=30):
 
 
 def test_mute_button_shortcut_and_setting(qapp, win):
-    assert win.transport.mute_btn.isEnabled() and "소리 켜짐" in win.transport.mute_btn.text()
+    assert win.transport.mute_btn.isEnabled() and "🔊" in win.transport.mute_btn.text()
     win.actions["toggle_mute"].trigger()  # Shift+M
     assert not win.playback.audio_enabled and win.settings.get("audio_muted") is True
-    assert win.transport.mute_btn.isChecked() and "소리 꺼짐" in win.transport.mute_btn.text()
+    assert win.transport.mute_btn.isChecked() and "🔇" in win.transport.mute_btn.text()
     win.transport.mute_btn.click()  # 버튼으로 다시 켠다
     assert win.playback.audio_enabled and win.settings.get("audio_muted") is False
     # 저장된 설정은 다음에 창을 열 때 적용된다
@@ -737,7 +737,7 @@ def test_video_without_audio_disables_the_mute_button(qapp, vfr_h264, tmp_path, 
     rec = lib.create("NO_AUDIO", "A", "T", str(vfr_h264), str(tmp_path / "out"))
     w = _open_editor(qapp, lib, rec, vfr_h264)
     try:
-        assert not w.transport.mute_btn.isEnabled() and "소리 없음" in w.transport.mute_btn.text()
+        assert not w.transport.mute_btn.isEnabled() and "오디오 트랙이 없습니다" in w.transport.mute_btn.toolTip()
         assert w.transport.audio_lbl.text() == ""  # 오디오가 원래 없는 영상은 '소리 준비 중' 같은 문구도 없다
         w.actions["toggle_mute"].trigger()  # 눌러도 아무 일도 없다
         assert w.playback.audio_enabled
@@ -943,3 +943,60 @@ def test_cover_preview_follows_playhead_not_the_pinned_cover_frame(qapp, win):
     win.goto(40)
     pump(qapp, 50)
     assert win._display_frame() == 40  # 지정된 커버(10)가 아니라 현재 위치를 미리 본다
+
+
+def test_xml_import_cuts_immediately_without_dialog(qapp, win):
+    from pathlib import Path
+
+    from ics.ui import dialogs
+
+    def boom(*a, **k):
+        raise AssertionError("XML 불러오기에서 창이 뜨면 안 됩니다")
+
+    orig = dialogs.XmlImportDialog.exec
+    dialogs.XmlImportDialog.exec = boom
+    try:
+        xml = Path(__file__).parent / "data" / "sample_premiere.xml"
+        assert win.import_xml_file(str(xml))
+        pump(qapp, 50)
+        assert [(c.start, c.end) for c in win.project.state.cuts] == [(0, 50), (50, 120), (120, 200), (200, 240)]
+        cs = win.project.state.cuts
+        win.project.merge_cuts([cs[0].id, cs[1].id])  # 수동 편집이 있어도 확인 창 없이 덮어쓴다
+        assert len(win.project.state.cuts) == 3
+        assert win.import_xml_file(str(xml))
+        assert len(win.project.state.cuts) == 4
+        win.do_undo()  # 덮어쓴 것은 실행 취소로 되돌린다
+        assert len(win.project.state.cuts) == 3
+    finally:
+        dialogs.XmlImportDialog.exec = orig
+
+
+def test_dropping_an_xml_on_the_window_cuts(qapp, win):
+    from pathlib import Path
+
+    from PySide6.QtCore import QMimeData, QPointF, QUrl
+    from PySide6.QtGui import QDropEvent
+
+    xml = Path(__file__).parent / "data" / "sample_premiere.xml"
+    md = QMimeData()
+    md.setUrls([QUrl.fromLocalFile(str(xml))])
+    ev = QDropEvent(
+        QPointF(10, 10), Qt.DropAction.CopyAction, md, Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier
+    )
+    win.dropEvent(ev)
+    pump(qapp, 100)
+    assert len(win.project.state.cuts) == 4
+    other = QMimeData()
+    other.setUrls([QUrl.fromLocalFile(str(xml.with_suffix(".txt")))])
+    assert win._xml_from_mime(other) is None
+
+
+def test_workspace_tabs_live_in_the_top_bar(qapp, win):
+    assert set(win.nav_btns) == {"story", "reels", "feed", "credits"}
+    win.nav_btns["credits"].click()
+    pump(qapp, 50)
+    assert win.pages.currentIndex() == 1 and win.nav_btns["credits"].isChecked()
+    win.nav_btns["story"].click()
+    pump(qapp, 50)
+    assert win.pages.currentIndex() == 0
+    assert win.findChild(type(win.nav_btns["story"].parent()), "sidebar") is None

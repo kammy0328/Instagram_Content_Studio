@@ -51,7 +51,7 @@ from .preview import PreviewWidget
 from .services import Decoder, FrameService, LetterboxService, PlaybackEngine, ProxyBuilder, ThumbService, np_to_qimage
 from .settings import DEFAULT_SHORTCUTS, Settings
 from .timeline import TimelineWidget
-from .widgets import ElidedLabel, WorkspaceButton, studio_icon
+from .widgets import ElidedLabel, studio_icon
 
 
 class StillLoader(QObject):
@@ -122,6 +122,7 @@ class EditorWindow(QMainWindow):
         self._closing = False
         self._over_notified = False
         self._build_ui()
+        self.setAcceptDrops(True)  # 편집 XML 을 창에 끌어다 놓으면 바로 컷을 자른다
         self._build_actions()
         # ---- 연결
         project.add_listener(self._on_project_change)
@@ -133,7 +134,7 @@ class EditorWindow(QMainWindow):
         self.playback.positionChanged.connect(self._on_play_pos)
         self.jobSignal.connect(self._on_job)
         self.queueFinished.connect(self._on_queue_finished)
-        self.proxy.progress.connect(lambda p: self.proxy_lbl.setText(f"프록시 생성 {int(p * 100)}%"))
+        self.proxy.progress.connect(lambda p: self.proxy_lbl.setText(f"· 미리보기 준비 중 {int(p * 100)}%"))
         self.proxy.finished.connect(self._on_proxy_done)
         self.proxy.audioReady.connect(self._on_audio_ready)
         self.proxy.audioFailed.connect(self._on_audio_failed)
@@ -159,7 +160,6 @@ class EditorWindow(QMainWindow):
         body = QHBoxLayout()
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(0)
-        body.addWidget(self._nav())
         self.pages = QStackedWidget()
         self.pages.addWidget(self._editor_page())
         self.credits = CreditsPage(self.project, self.iddict)
@@ -176,84 +176,46 @@ class EditorWindow(QMainWindow):
         self._toast_timer.timeout.connect(self.toast_lbl.hide)
 
     def _topbar(self) -> QWidget:
+        """한 줄짜리 상단바: 뒤로 · 제목/상태 | 작업 탭(가운데) | 실행 취소 · 도구 · 게시 · 내보내기."""
         f = QFrame()
         f.setObjectName("topbar")
-        v = QVBoxLayout(f)
-        v.setContentsMargins(18, 12, 18, 10)
-        v.setSpacing(7)
-        h = QHBoxLayout()
-        h.setSpacing(12)
+        h = QHBoxLayout(f)
+        h.setContentsMargins(14, 8, 14, 8)
+        h.setSpacing(10)
         b = QPushButton("←")
         b.setObjectName("ghost")
-        b.setFixedWidth(34)
+        b.setFixedWidth(30)
         b.setToolTip("프로젝트 목록으로 돌아가기")
         b.setAccessibleName("프로젝트 목록으로 돌아가기")
         b.clicked.connect(self._to_projects)
         h.addWidget(b)
-        mark = QLabel()
-        mark.setPixmap(studio_icon().pixmap(34, 34))
-        h.addWidget(mark)
         titles = QVBoxLayout()
-        titles.setSpacing(1)
-        product = QLabel("INSTAGRAM CONTENT STUDIO")
-        product.setObjectName("eyebrow")
-        titles.addWidget(product)
+        titles.setSpacing(0)
         self.title_lbl = ElidedLabel()
-        self.title_lbl.setObjectName("h1")
+        self.title_lbl.setObjectName("title")
         titles.addWidget(self.title_lbl)
-        h.addLayout(titles, 1)
-        self.b_undo = QPushButton("↶")
-        self.b_redo = QPushButton("↷")
-        self.b_undo.clicked.connect(self.do_undo)
-        self.b_redo.clicked.connect(self.do_redo)
-        for x in (self.b_undo, self.b_redo):
-            x.setObjectName("ghost")
-            x.setFixedWidth(34)
-            h.addWidget(x)
-        more = QToolButton()
-        more.setText("도구  ···")
-        more.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        menu = QMenu(more)
-        menu.addAction("영상 정보", lambda: MediaReportDialog(self.project.media, self).exec())
-        menu.addAction("단축키 설정", self.open_shortcuts)
-        menu.addSeparator()
-        menu.addAction("업로드 준비", self.open_ready)
-        menu.addAction("업데이트…", self.open_update)
-        more.setMenu(menu)
-        h.addWidget(more)
-        br = QPushButton("내보내기  ↗")
-        br.setObjectName("primary")
-        br.setToolTip("STORY · REELS · FEED 파일과 캡션을 확인하고 렌더링합니다.")
-        br.clicked.connect(lambda _=False: self.open_render())
-        bp = QPushButton("게시…")
-        bp.setToolTip("Instagram 에 게시/예약합니다 (Cloudflare 중계 필요).")
-        bp.clicked.connect(self.open_publisher)
-        h.addWidget(bp)
-        h.addWidget(br)
-        v.addLayout(h)
         status = QHBoxLayout()
-        status.setSpacing(16)
+        status.setSpacing(10)
         self.save_lbl = QLabel("● 저장됨")
+        self.save_lbl.setObjectName("status")
         status.addWidget(self.save_lbl)
+        self.nav_info = QLabel("")
+        self.nav_info.setObjectName("status")
+        status.addWidget(self.nav_info)
         self.proxy_lbl = ElidedLabel()
-        self.proxy_lbl.setObjectName("muted")
+        self.proxy_lbl.setObjectName("status")
         status.addWidget(self.proxy_lbl, 1)
-        self.render_lbl = ElidedLabel()
-        self.render_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        status.addWidget(self.render_lbl, 1)
-        v.addLayout(status)
-        return f
-
-    def _nav(self) -> QWidget:
-        f = QFrame()
-        f.setObjectName("sidebar")
-        f.setFixedWidth(172)
-        v = QVBoxLayout(f)
-        v.setContentsMargins(12, 20, 12, 18)
-        v.setSpacing(8)
-        label = QLabel("작업 공간")
-        label.setObjectName("eyebrow")
-        v.addWidget(label)
+        titles.addLayout(status)
+        left = QWidget()
+        left.setLayout(titles)
+        left.setMinimumWidth(180)
+        h.addWidget(left, 1)
+        # ---- 작업 탭 (가운데 세그먼트)
+        seg = QFrame()
+        seg.setObjectName("segbar")
+        sh = QHBoxLayout(seg)
+        sh.setContentsMargins(3, 3, 3, 3)
+        sh.setSpacing(2)
         self.nav_group = QButtonGroup(self)
         self.nav_btns: dict[str, QPushButton] = {}
         specs = (
@@ -262,24 +224,60 @@ class EditorWindow(QMainWindow):
             ("feed", "FEED", "캐러셀 · 최대 20개"),
             ("credits", "CREDITS", "크레딧과 캡션"),
         )
-        for n, (key, label, subtitle) in enumerate(specs, 1):
-            b = WorkspaceButton(f"0{n}", label, subtitle)
-            b.clicked.connect(lambda _=False, k=key: self.set_tab(k))
-            self.nav_group.addButton(b)
-            v.addWidget(b)
-            self.nav_btns[key] = b
+        for key, label, tip in specs:
+            bt = QPushButton(label)
+            bt.setObjectName("seg")
+            bt.setCheckable(True)
+            bt.setToolTip(tip)
+            bt.setCursor(Qt.CursorShape.PointingHandCursor)
+            bt.clicked.connect(lambda _=False, k=key: self.set_tab(k))
+            self.nav_group.addButton(bt)
+            sh.addWidget(bt)
+            self.nav_btns[key] = bt
         self.nav_btns["story"].setChecked(True)
-        v.addStretch(1)
-        note = QLabel("원본에서 완성까지")
-        note.setObjectName("eyebrow")
-        v.addWidget(note)
-        self.output_summary = QLabel("")
-        self.output_summary.setWordWrap(True)
-        v.addWidget(self.output_summary)
-        self.nav_info = QLabel("")
-        self.nav_info.setObjectName("muted")
-        self.nav_info.setWordWrap(True)
-        v.addWidget(self.nav_info)
+        h.addWidget(seg, 0, Qt.AlignmentFlag.AlignCenter)
+        # ---- 오른쪽 동작
+        right = QHBoxLayout()
+        right.setSpacing(6)
+        right.addStretch(1)
+        self.render_lbl = ElidedLabel()
+        self.render_lbl.setObjectName("status")
+        self.render_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        right.addWidget(self.render_lbl, 1)
+        self.b_undo = QPushButton("↶")
+        self.b_redo = QPushButton("↷")
+        self.b_undo.clicked.connect(self.do_undo)
+        self.b_redo.clicked.connect(self.do_redo)
+        for x in (self.b_undo, self.b_redo):
+            x.setObjectName("ghost")
+            x.setFixedWidth(30)
+            right.addWidget(x)
+        more = QToolButton()
+        more.setObjectName("ghostTool")
+        more.setText("···")
+        more.setToolTip("도구")
+        more.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        menu = QMenu(more)
+        menu.addAction("영상 정보", lambda: MediaReportDialog(self.project.media, self).exec())
+        menu.addAction("단축키 설정", self.open_shortcuts)
+        menu.addSeparator()
+        menu.addAction("업로드 준비", self.open_ready)
+        menu.addAction("업데이트…", self.open_update)
+        more.setMenu(menu)
+        right.addWidget(more)
+        bp = QPushButton("게시")
+        bp.setToolTip("Instagram 에 게시/예약합니다 (Cloudflare 중계 필요).")
+        bp.clicked.connect(self.open_publisher)
+        right.addWidget(bp)
+        br = QPushButton("내보내기")
+        br.setObjectName("primary")
+        br.setToolTip("STORY · REELS · FEED 파일과 캡션을 확인하고 렌더링합니다.")
+        br.clicked.connect(lambda _=False: self.open_render())
+        right.addWidget(br)
+        rw = QWidget()
+        rw.setLayout(right)
+        rw.setMinimumWidth(180)
+        h.addWidget(rw, 1)
         return f
 
     def _editor_page(self) -> QWidget:
@@ -295,7 +293,7 @@ class EditorWindow(QMainWindow):
         cv.setContentsMargins(0, 0, 0, 0)
         cv.setSpacing(0)
         preview_header = QHBoxLayout()
-        preview_header.setContentsMargins(16, 12, 16, 8)
+        preview_header.setContentsMargins(14, 8, 10, 4)
         self.preview_title = QLabel("STORY 미리보기")
         self.preview_title.setObjectName("eyebrow")
         preview_header.addWidget(self.preview_title)
@@ -408,7 +406,11 @@ class EditorWindow(QMainWindow):
             h.addWidget(b)
             return b
 
-        btn("XML 불러오기", self.import_xml, "Premiere/FCP7 XML · FCPXML · EDL 컷 정보 (선택 사항)")
+        btn(
+            "XML 불러오기",
+            self.import_xml,
+            "Premiere/FCP7 XML · FCPXML · EDL: 고르면 바로 컷이 잘립니다. 창에 끌어다 놓아도 됩니다.",
+        )
         btn(
             "병합 (M)",
             self.merge_selected,
@@ -425,9 +427,11 @@ class EditorWindow(QMainWindow):
         menu = QMenu(more)
         menu.addAction("병합 해제", self.unmerge_selected)
         menu.addAction("원래 컷 복원", self.restore_cuts)
+        menu.addSeparator()
+        menu.addAction("XML 세부 설정으로 불러오기…", self.import_xml_advanced)
         more.setMenu(menu)
         h.addWidget(more)
-        btn("선택 컷 → In/Out", self.cuts_to_inout, "선택한 컷 범위를 현재 탭의 In/Out으로 지정")
+        btn("선택 컷 → 구간", self.cuts_to_inout, "선택한 컷 범위를 현재 탭의 구간으로 지정")
         self.snap_btn = btn("스냅 ✓", self.toggle_snap, "스냅 켜기/끄기 (N)")
         self.cut_info = ElidedLabel()
         self.cut_info.setObjectName("muted")
@@ -770,6 +774,46 @@ class EditorWindow(QMainWindow):
 
     # ================================================================ 컷
     def import_xml(self) -> None:
+        p, _ = QFileDialog.getOpenFileName(self, "편집 XML", "", "편집 정보 (*.xml *.fcpxml *.edl);;모든 파일 (*)")
+        if p:
+            self.import_xml_file(p)
+
+    def import_xml_file(self, path: str) -> bool:
+        """창 없이 바로 컷을 적용한다: 시퀀스/트랙/오프셋은 자동으로 고르고, 이전 컷 편집은 덮어쓴다 (Ctrl+Z 로 복원)."""
+        from ..core import xml_import as xmlmod
+        from ..core.timecode import tc_to_frame
+
+        p = self.project
+        try:
+            doc = xmlmod.parse_file(path, p.fps)
+        except xmlmod.XmlError as e:
+            self.toast(f"XML 을 읽지 못했습니다: {e}")
+            return False
+        tc0 = tc_to_frame(p.media.tc_start, p.fps) if p.media and p.media.tc_start else None
+        m = xmlmod.auto_map(doc, p.fps, p.count, tc0)
+        if m is None:
+            self.toast("XML 에서 이 영상에 맞는 컷을 찾지 못했습니다.")
+            return False
+        meta = {
+            "file": path,
+            "format": doc.format,
+            "sequence": m.sequence.name,
+            "track": m.track.label,
+            "offset": m.report.offset,
+            "xml_fps": str(m.sequence.fps),
+            "warnings": doc.warnings + m.report.warnings,
+        }
+        p.import_cuts(m.report.cuts, meta)
+        self._set_cut_selection([])
+        self.timeline.update()
+        msg = f"컷 {len(p.state.cuts)}개를 잘랐습니다 · {Path(path).name}"
+        if meta["warnings"]:
+            msg += "  ·  확인 필요: " + meta["warnings"][0]
+        self.toast(msg)
+        return True
+
+    def import_xml_advanced(self) -> None:
+        """시퀀스/트랙/오프셋을 직접 고르는 기존 창 (자동 선택이 틀렸을 때만)."""
         dlg = XmlImportDialog(self.project, self)
         p, _ = QFileDialog.getOpenFileName(self, "편집 XML", "", "편집 정보 (*.xml *.fcpxml *.edl);;모든 파일 (*)")
         if not p:
@@ -780,6 +824,36 @@ class EditorWindow(QMainWindow):
         if dlg.exec():
             self.toast(f"컷 {len(self.project.state.cuts)}개를 불러왔습니다.")
             self.timeline.update()
+
+    # ---- 편집 XML 끌어다 놓기
+    _XML_EXT = (".xml", ".fcpxml", ".edl")
+
+    def _xml_from_mime(self, md) -> str | None:
+        for u in md.urls() if md.hasUrls() else []:
+            f = u.toLocalFile()
+            if f and f.lower().endswith(self._XML_EXT):
+                return f
+        return None
+
+    def dragEnterEvent(self, e):  # noqa: N802
+        if self._xml_from_mime(e.mimeData()):
+            e.acceptProposedAction()
+        else:
+            super().dragEnterEvent(e)
+
+    def dragMoveEvent(self, e):  # noqa: N802
+        if self._xml_from_mime(e.mimeData()):
+            e.acceptProposedAction()
+        else:
+            super().dragMoveEvent(e)
+
+    def dropEvent(self, e):  # noqa: N802
+        f = self._xml_from_mime(e.mimeData())
+        if f:
+            e.acceptProposedAction()
+            QTimer.singleShot(0, lambda: self.import_xml_file(f))
+        else:
+            super().dropEvent(e)
 
     def _set_cut_selection(self, ids: list[int]) -> None:
         """컷 선택을 타임라인과 컷 스트립에 함께 반영한다."""
@@ -948,7 +1022,7 @@ class EditorWindow(QMainWindow):
     def _update_cut_info(self) -> None:
         cs = self.project.state.cuts
         if not cs:
-            self.cut_info.setText("컷 정보 없음 (XML 없이도 프레임 단위 편집 가능)")
+            self.cut_info.setText("")
             return
         sel = [c for c in cs if c.id in self.sel_ids]
         iss = self.project.cut_issues()
@@ -1270,12 +1344,11 @@ class EditorWindow(QMainWindow):
         self.nav_btns["story"].setText("STORY" + ("  ✓" if st.story.enabled else ""))
         self.nav_btns["reels"].setText("REELS" + ("  ✓" if st.reels.enabled else ""))
         self.nav_btns["feed"].setText(f"FEED  {n}/{FEED_MAX_FINAL}")
-        selected = int(st.story.enabled) + int(st.reels.enabled)
-        self.output_summary.setText(f"영상 구간 {selected}개\n피드 콘텐츠 {n}개")
-        self.nav_info.setText(
-            f"{self.project.media.display_w}×{self.project.media.display_h}\n"
-            f"{float(self.project.fps):.3f} fps · {self.project.count} 프레임"
+        self._media_info = (
+            f"{self.project.media.display_w}×{self.project.media.display_h} · "
+            f"{float(self.project.fps):.3f} fps · {self.project.count}f"
         )
+        self.nav_info.setText(self._media_info)
         if self.pages.currentIndex() == 1:
             self.credits.refresh()
         self._request_display_frame()
@@ -1351,12 +1424,12 @@ class EditorWindow(QMainWindow):
         if ok and self.proxy.index is not None:
             self.decoder.set_proxy(str(self.proxy.video_path), self.proxy.index)
             self.frames.clear_cache()
-            self.proxy_lbl.setText("미리보기 준비됨 · 최종 출력은 원본 사용")
+            self.proxy_lbl.setText("· 미리보기 준비됨")
             self._request_display_frame()
         elif ok:
-            self.proxy_lbl.setText("프록시 준비됨")
+            self.proxy_lbl.setText("· 미리보기 준비됨")
         else:
-            self.proxy_lbl.setText("프록시 생성 실패 - 원본으로 재생합니다")
+            self.proxy_lbl.setText("· 프록시 생성 실패, 원본으로 재생")
             self.proxy_lbl.setToolTip(err)
 
     # ================================================================ 기타
