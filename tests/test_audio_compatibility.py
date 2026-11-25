@@ -38,6 +38,9 @@ def test_audio_error_uses_value_across_qt_enum_namespaces(qapp, tmp_path, monkey
         def start(self, file):
             pass
 
+        def setVolume(self, v):  # noqa: N802 (QAudioSink 와 같은 이름)
+            self.volume = v
+
         def stop(self):
             pass
 
