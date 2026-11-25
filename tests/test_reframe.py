@@ -158,3 +158,52 @@ def test_moving_group_follows_the_group_average():
     frames = [[R.Det(x, 0, x + 60, 100, 0.5), R.Det(x + 90, 0, x + 150, 100, 0.5)] for x in (200, 300, 400)]
     px = R.best_window_x(frames, 0, 1000, 300)
     assert abs((px * 700 + 150) - (300 + 75)) < 15  # 무리 가운데(경로 평균)
+
+
+def test_window_avoids_cutting_a_face_in_half():
+    # 창 300. 두 사람 무리의 평균 가운데로 두면 오른쪽 사람 얼굴(560~620)이 창 끝(약 575)에 반쯤 걸린다
+    # -> 가까운 범위 안에서 얼굴이 다 들어가거나 다 빠지는 위치로 옮긴다
+    a = [R.Det(300, 0, 400, 300, 0.4), R.Det(320, 20, 380, 80, 0.6, True)]
+    b = [R.Det(580, 0, 680, 300, 0.4), R.Det(600, 20, 660, 80, 0.6, True)]
+    frames = [a, a, b, b]
+    px = R.best_window_x(frames, 0, 1000, 300)
+    x = px * 700
+    face = (600, 660)
+    vis = max(0.0, min(face[1], x + 300) - max(face[0], x)) / 60
+    assert vis < 0.15 or vis > 0.85, vis
+    left = (320, 380)
+    assert x <= left[0] and x + 300 >= left[1]  # 오래 나온 사람 얼굴은 온전히
+
+
+def test_detection_cache_is_reused_and_saved(prores_2398, opener, tmp_path):
+    info, idx = opener(prores_2398)
+    calls = []
+
+    class FakeDet:
+        def detect(self, rgb):
+            calls.append(1)
+            h, w = rgb.shape[:2]
+            return [R.Det(w * 0.1, 0, w * 0.2, h, 1.0), R.Det(w * 0.12, 0, w * 0.18, h * 0.2, 1.0, True)]
+
+    segs = R.segments(0, 120, [Cut(0, 60), Cut(60, 240)])
+    cache = {}
+    dec = lambda n, w, h: np.zeros((h, w, 3), np.uint8)  # noqa: E731
+    r1 = R.analyze(info, idx, LayoutParams("fill"), segs, dec, detector_factory=FakeDet, cache=cache)
+    n1 = len(calls)
+    assert n1 > 0 and len(cache) == n1
+    r2 = R.analyze(info, idx, LayoutParams("fill"), segs, dec, detector_factory=FakeDet, cache=cache)
+    assert len(calls) == n1 and r1 == r2  # 두 번째(REELS 등)는 다시 검출하지 않는다
+    path = tmp_path / "dets.json"
+    R.save_cache(path, cache)
+    back = R.load_cache(path)
+    assert set(back) == set(cache) and any(d.face for v in back.values() for d in v)
+    assert R.load_cache(tmp_path / "missing.json") == {}
+
+
+def test_face_nudge_is_what_prevents_the_cut(monkeypatch):
+    a = [R.Det(300, 0, 400, 300, 0.4), R.Det(320, 20, 380, 80, 0.6, True)]
+    b = [R.Det(580, 0, 680, 300, 0.4), R.Det(600, 20, 660, 80, 0.6, True)]
+    monkeypatch.setattr(R, "NUDGE", 0.0)
+    x = R.best_window_x([a, a, b, b], 0, 1000, 300) * 700
+    vis = max(0.0, min(660, x + 300) - max(600, x)) / 60
+    assert 0.15 < vis < 0.85  # 옮기지 않으면 얼굴이 잘린다 (위 테스트가 실제로 옮김을 확인하는지 보증)

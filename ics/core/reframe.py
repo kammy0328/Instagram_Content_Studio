@@ -82,19 +82,41 @@ class Det:
     x2: float
     y2: float
     weight: float  # 검출 신뢰도 × 크기 (얼굴은 가중)
+    face: bool = False
 
 
 FACE_WEIGHT = 1.6  # 얼굴이 몸보다 중요하다 (몸이 잘려도 얼굴이 보이는 편이 낫다)
 SCORE_TOLERANCE = 0.97  # 최고 점수의 이 비율 안이면 같은 노출로 보고, 그중 인물 무리 가운데에 가장 가까운 위치
+FACE_CUT_PENALTY = 0.6  # 창 가장자리에 얼굴이 반쯤 걸리면 감점 (얼굴은 다 넣거나 아예 빼는 편이 낫다)
+NUDGE = 0.15  # 평균 위치에서 얼굴이 잘리지 않게 옮겨 볼 수 있는 범위 (창 폭 대비)
+
+
+def _cover(dets: Sequence[Det], xs: np.ndarray, win_w: float):
+    x1 = np.array([d.x1 for d in dets])
+    x2 = np.array([d.x2 for d in dets])
+    ov = np.clip(np.minimum(x2[None, :], xs[:, None] + win_w) - np.maximum(x1[None, :], xs[:, None]), 0, None)
+    return ov / (x2 - x1)[None, :], x1, x2
 
 
 def _window_scores(dets: Sequence[Det], xs: np.ndarray, win_w: float):
-    x1 = np.array([d.x1 for d in dets])
-    x2 = np.array([d.x2 for d in dets])
+    """창 위치마다의 점수. 몸은 보이는 폭 비율만큼, 얼굴은 거의 다 보여야 점수가 되고 반쯤 잘리면 감점."""
+    cover, x1, x2 = _cover(dets, xs, win_w)
     w = np.array([d.weight for d in dets])
-    ov = np.clip(np.minimum(x2[None, :], xs[:, None] + win_w) - np.maximum(x1[None, :], xs[:, None]), 0, None)
-    cover = ov / (x2 - x1)[None, :]
-    return (cover * w[None, :]).sum(axis=1), cover * w[None, :], (x1 + x2) / 2
+    face = np.array([d.face for d in dets])
+    eff = np.where(face[None, :], cover**4 - FACE_CUT_PENALTY * 4 * cover * (1 - cover), cover)
+    contrib = eff * w[None, :]
+    seen = np.clip(cover, 0, 1) * w[None, :]  # 가운데 계산용 (감점 없이 보이는 만큼)
+    return contrib.sum(axis=1), seen, (x1 + x2) / 2
+
+
+def _face_cut_cost(frames: Sequence[Sequence[Det]], xs: np.ndarray, win_w: float) -> np.ndarray:
+    """창 위치마다 '반쯤 잘린 얼굴' 의 합 (모든 표본 프레임)."""
+    faces = [d for fr in frames for d in fr if d.face and d.x2 > d.x1]
+    if not faces:
+        return np.zeros(len(xs))
+    cover, _x1, _x2 = _cover(faces, xs, win_w)
+    w = np.array([d.weight for d in faces])
+    return (4 * cover * (1 - cover) * w[None, :]).sum(axis=1)
 
 
 def _subject_centers(dets: Sequence[Det], xs: np.ndarray, win_w: float) -> list[tuple[float, float]]:
@@ -140,6 +162,15 @@ def best_window_x(frames: Sequence[Sequence[Det]], lo: float, hi: float, win_w: 
     center = float(np.mean(centers)) if centers else g
     # 3) 평균 위치를 창 가운데로
     x = min(max(center - win_w / 2, lo), lo + span)
+    # 4) 그 위치에서 얼굴이 창 가장자리에 걸리면, 가까운 범위 안에서 얼굴이 덜 잘리는 위치로 살짝 옮긴다
+    near = np.linspace(max(lo, x - NUDGE * win_w), min(lo + span, x + NUDGE * win_w), 61)
+    cost = _face_cut_cost(frames, near, win_w)
+    if len(cost) and cost.max() > 1e-9:
+        here = float(_face_cut_cost(frames, np.array([x]), win_w)[0])
+        best = cost.min()
+        if here - best > 1e-6:
+            ok = np.where(cost <= best + 0.02 * max(best, 1e-3))[0]
+            x = float(near[min(ok, key=lambda i: abs(near[i] - x))])
     return float((x - lo) / span)
 
 
@@ -250,7 +281,7 @@ class PersonDetector:
             for x1, y1, x2, y2, c in self.persons(rgb)
         ]
         out += [
-            Det(x1, y1, x2, y2, FACE_WEIGHT * c * math.sqrt(max(0.0, (x2 - x1) * (y2 - y1)) / area) * 3.0)
+            Det(x1, y1, x2, y2, FACE_WEIGHT * c * math.sqrt(max(0.0, (x2 - x1) * (y2 - y1)) / area) * 3.0, True)
             for x1, y1, x2, y2, c in self.faces(rgb)
         ]
         return out
@@ -287,9 +318,12 @@ def analyze(
     progress: Callable[[float], None] | None = None,
     detector_factory: Callable[[], PersonDetector] | None = None,
     workers: int = 3,
+    cache: dict[int, list[Det]] | None = None,
 ) -> dict[int, float]:
     """컷마다 인물이 가장 많이 보이는 가로 위치. 반환 {컷 키: pos_x} (인물을 못 찾은 컷은 빠진다).
-    decode(frame, w, h) -> RGB ndarray (표시 좌표 전체 프레임을 w×h 로 축소)."""
+    decode(frame, w, h) -> RGB ndarray (표시 좌표 전체 프레임을 w×h 로 축소).
+    cache: {원본 프레임 번호: 검출 목록(표시 좌표)}. 있는 프레임은 다시 디코딩/검출하지 않고, 새로 검출한 것은 채워 넣는다
+    (STORY 와 REELS, 다시 누르기, 컷 하나만 맞추기가 같은 검출 결과를 함께 쓴다)."""
     lp = replace(layout, mode="fill")
     dw, dh = info.display_w, info.display_h
     geo = compute_geometry(dw, dh, "916", lp)
@@ -300,7 +334,15 @@ def analyze(
     total = sum(len(sample_frames(s, fps)) for s in segs)
     scale = min(1.0, MAX_TOTAL_SAMPLES / max(1, total))
     plan = [(s, sample_frames(s, fps, scale)) for s in segs]
-    jobs = [(i, f) for i, (_s, fs) in enumerate(plan) for f in fs]
+    cache = {} if cache is None else cache
+    per_seg: dict[int, list[list[Det]]] = {i: [] for i in range(len(plan))}
+    jobs = []
+    for i, (_s, fs) in enumerate(plan):
+        for f in fs:
+            if f in cache:
+                per_seg[i].append(cache[f])
+            else:
+                jobs.append((i, f))
     aw = ANALYSIS_WIDTH
     ah = max(2, int(round(aw * dh / dw)) // 2 * 2)
     k = aw / dw  # 표시 좌표 -> 분석 좌표
@@ -318,17 +360,55 @@ def analyze(
         img = decode(job[1], aw, ah)
         return job[0], det.detect(img)
 
-    per_seg: dict[int, list[list[Det]]] = {i: [] for i in range(len(plan))}
     done = 0
     with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
-        for i, dets in ex.map(work, jobs):
-            per_seg[i].append([Det(d.x1 / k, d.y1 / k, d.x2 / k, d.y2 / k, d.weight) for d in dets])
+        for (i, dets), (_i, f) in zip(ex.map(work, jobs), jobs):
+            fr = [Det(d.x1 / k, d.y1 / k, d.x2 / k, d.y2 / k, d.weight, d.face) for d in dets]
+            cache[f] = fr
+            per_seg[i].append(fr)
             done += 1
             if progress:
                 progress(done / max(1, len(jobs)))
+    if progress and not jobs:
+        progress(1.0)
     out: dict[int, float] = {}
     for i, (s, _fs) in enumerate(plan):
         px = best_window_x(per_seg[i], bx, bx + bw, geo.crop_w)
         if px is not None:
             out[s.key] = round(px, 4)
     return out
+
+
+# ====================================================================== 검출 결과 저장 (프로젝트 캐시 폴더)
+CACHE_VERSION = 1
+
+
+def load_cache(path: Path) -> dict[int, list[Det]]:
+    import json
+
+    try:
+        d = json.loads(Path(path).read_text(encoding="utf-8"))
+        if d.get("v") != CACHE_VERSION or d.get("w") != ANALYSIS_WIDTH:
+            return {}
+        return {int(k): [Det(*r[:5], bool(r[5])) for r in v] for k, v in d.get("frames", {}).items()}
+    except (OSError, ValueError, TypeError, KeyError):
+        return {}
+
+
+def save_cache(path: Path, cache: dict[int, list[Det]]) -> None:
+    import json
+
+    data = {
+        "v": CACHE_VERSION,
+        "w": ANALYSIS_WIDTH,
+        "frames": {
+            str(k): [[round(d.x1, 1), round(d.y1, 1), round(d.x2, 1), round(d.y2, 1), round(d.weight, 5), int(d.face)]
+                     for d in v]
+            for k, v in cache.items()
+        },
+    }  # fmt: skip
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_name(p.name + ".part")
+    tmp.write_text(json.dumps(data, separators=(",", ":")), encoding="utf-8")
+    tmp.replace(p)

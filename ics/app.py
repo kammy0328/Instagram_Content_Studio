@@ -157,7 +157,7 @@ class App:
             snap, _ = project.store.load_latest()
             summ = (snap or {}).get("media_summary")
         prog.set_step("편집 화면 준비 중")
-        win = EditorWindow(project, self.settings, self.iddict, cache)
+        win = EditorWindow(project, self.settings, self.iddict, cache, progress=prog.pulse)
         self.window = win
         win.requestProjects.connect(self._back_to_projects)
         win.closed.connect(self._on_window_closed)

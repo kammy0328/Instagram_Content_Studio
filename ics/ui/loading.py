@@ -43,6 +43,13 @@ class LoadingDialog(QDialog):
         self.repaint()
         QApplication.processEvents()
 
+    def pulse(self) -> None:
+        """무거운 UI 작업 사이에 불러 애니메이션을 한 번 더 그린다 (사용자 입력은 처리하지 않음)."""
+        from PySide6.QtCore import QEventLoop
+
+        self.repaint()
+        QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+
     def paintEvent(self, _e):  # noqa: N802
         t = time.monotonic() - self._t0
         p = QPainter(self)

@@ -46,6 +46,44 @@ FONT_STYLES = (
 )
 
 
+class Section(QWidget):
+    """접고 펼 수 있는 작은 묶음 (머리 글자를 누르면 접힘). 접힘 상태는 설정에 남긴다."""
+
+    def __init__(self, title: str, key: str, settings=None, open_default: bool = True, parent=None):
+        super().__init__(parent)
+        self._settings, self._key = settings, f"overlay_section_{key}"
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+        self.head = QToolButton()
+        self.head.setObjectName("sectionHead")
+        self.head.setText(title)
+        self.head.setCheckable(True)
+        self.head.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.head.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        lay.addWidget(self.head)
+        self.body = QWidget()
+        self.lay = QVBoxLayout(self.body)
+        self.lay.setContentsMargins(0, 0, 0, 4)
+        self.lay.setSpacing(6)
+        lay.addWidget(self.body)
+        is_open = open_default
+        if settings is not None:
+            is_open = bool(settings.get(self._key, open_default))
+        self.head.setChecked(is_open)
+        self._apply(is_open)
+        self.head.toggled.connect(self._toggled)
+
+    def _apply(self, on: bool) -> None:
+        self.body.setVisible(on)
+        self.head.setArrowType(Qt.ArrowType.DownArrow if on else Qt.ArrowType.RightArrow)
+
+    def _toggled(self, on: bool) -> None:
+        self._apply(on)
+        if self._settings is not None:
+            self._settings.set(self._key, bool(on))
+
+
 class OverlayEditor(QGroupBox):
     changed = Signal(object)  # StoryOverlay (확정된 변경)
 
@@ -84,11 +122,6 @@ class OverlayEditor(QGroupBox):
 
         v.addWidget(self.legacy_bg)
 
-        def subhead(text):
-            lb = QLabel(text)
-            lb.setObjectName("subhead")
-            return lb
-
         def vrow(label, widget, value_lbl=None, into=None):
             r = QHBoxLayout()
             r.setSpacing(8)
@@ -104,8 +137,11 @@ class OverlayEditor(QGroupBox):
             (into or v).addLayout(r)
             return lb
 
+        outer = v
         # ---- 제목
-        v.addWidget(subhead("제목"))
+        self.sec_title = Section("제목", "title", settings)
+        outer.addWidget(self.sec_title)
+        v = self.sec_title.lay
         self.text_on = QCheckBox("아티스트 · 제목 표시")
         self.text_on.toggled.connect(self._edited)
         v.addWidget(self.text_on)
@@ -122,7 +158,9 @@ class OverlayEditor(QGroupBox):
         v.addWidget(self.upper)
 
         # ---- 로고
-        v.addWidget(subhead("로고"))
+        self.sec_logo = Section("로고", "logo", settings)
+        outer.addWidget(self.sec_logo)
+        v = self.sec_logo.lay
         self.logo_on = QCheckBox("로고 표시")
         self.logo_on.toggled.connect(self._logo_toggled)
         v.addWidget(self.logo_on)
@@ -173,7 +211,9 @@ class OverlayEditor(QGroupBox):
         self.logo_y.default = 838
         self.logo_y_lbl = QLabel("")
         vrow("높이", self.logo_y, self.logo_y_lbl, fv)
-        fv.addWidget(subhead("로고 위 문구"))
+        self.sec_cap = Section("로고 위 문구", "caption", settings)
+        fv.addWidget(self.sec_cap)
+        cap_l = self.sec_cap.lay
         wr = QHBoxLayout()
         wr.setSpacing(4)
         self.cap_on = QCheckBox("표시")
@@ -189,11 +229,13 @@ class OverlayEditor(QGroupBox):
             c.toggled.connect(self._edited)
             wr.addWidget(c)
         wr.addStretch(1)
-        fv.addLayout(wr)
+        cap_l.addLayout(wr)
         self.cap_preview = QLabel("")
         self.cap_preview.setObjectName("hint")
-        fv.addWidget(self.cap_preview)
-        fv.addWidget(subhead("표시"))
+        cap_l.addWidget(self.cap_preview)
+        self.sec_look = Section("표시 (불투명도 · 어둡게 · 위치)", "look", settings, open_default=False)
+        fv.addWidget(self.sec_look)
+        look_l = self.sec_look.lay
         self.opacity = ResetSlider()
         self.opacity.setRange(10, 100)
         self.opacity.default = 85
@@ -206,14 +248,15 @@ class OverlayEditor(QGroupBox):
         self.title_y.setRange(60, 400)
         self.title_y.default = 131
         self.title_y_lbl = QLabel("")
-        vrow("불투명도", self.opacity, self.opacity_lbl, fv)
-        vrow("어둡게", self.scrim, self.scrim_lbl, fv)
-        vrow("제목 높이", self.title_y, self.title_y_lbl, fv)
+        vrow("불투명도", self.opacity, self.opacity_lbl, look_l)
+        vrow("어둡게", self.scrim, self.scrim_lbl, look_l)
+        vrow("제목 높이", self.title_y, self.title_y_lbl, look_l)
         tip = "기본 위치는 인스타 스토리 UI(위 프로필 줄, 아래 메시지 바)에 가려지지 않게 잡았습니다. 더블클릭: 기본값"
         for sl in (self.opacity, self.scrim, self.title_y, self.logo_y):
             sl.valueChanged.connect(self._edited_slider)
             sl.setToolTip(tip)
         self.scrim.setToolTip("글자가 잘 보이도록 위/아래를 어둡게 하는 정도. " + tip)
+        v = outer
         v.addWidget(self.fill_box)
 
         # ---- Fit(검정 여백) 전용 글꼴 설정
