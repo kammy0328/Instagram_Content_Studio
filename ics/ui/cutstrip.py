@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QPoint, QPointF, QRectF, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QPainter, QPen
+from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QStyledItemDelegate,
+    QWidget,
 )
 
 from ..core import cuts as cuts_mod
@@ -320,3 +321,115 @@ class CutStrip(QListWidget):
                 Qt.AlignmentFlag.AlignCenter,
                 "편집 XML · FCPXML · EDL 을 여기로 끌어다 놓으면 바로 컷이 잘립니다",
             )
+
+
+class CutScrubber(QWidget):
+    """선택한 컷 안에서만 처음부터 끝까지 긁어 볼 수 있는 막대 (컷 하나를 막대 전체 폭으로 늘려 보여 준다).
+    컷을 여러 개 고르면 고른 컷들의 처음~끝. 막대 위 세로선이 그 컷 안의 재생 헤드다."""
+
+    scrubbed = Signal(int)  # 원본 프레임 번호
+    H = 34
+
+    def __init__(self, thumbs, fps: float, parent=None):
+        super().__init__(parent)
+        self.thumbs, self.fps = thumbs, max(1e-6, float(fps))
+        self.start = self.end = 0
+        self.label = ""
+        self.playhead = 0
+        self._drag = False
+        self.setFixedHeight(self.H)
+        self.setMouseTracking(True)
+        self.setCursor(Qt.CursorShape.SizeHorCursor)
+        self.setToolTip("선택한 컷 안에서만 좌우로 끌어 처음부터 끝까지 훑어봅니다")
+        thumbs.thumbReady.connect(lambda _n: self.update())
+
+    def set_range(self, start: int, end: int, label: str) -> None:
+        if (start, end, label) != (self.start, self.end, self.label):
+            self.start, self.end, self.label = start, end, label
+            self.update()
+
+    def set_playhead(self, n: int) -> None:
+        if n != self.playhead:
+            self.playhead = n
+            self.update()
+
+    @property
+    def active(self) -> bool:
+        return self.end > self.start
+
+    def _bar(self) -> QRectF:
+        return QRectF(70, 4, max(10, self.width() - 70 - 120), self.height() - 8)
+
+    def _frame_at(self, x: float) -> int:
+        b = self._bar()
+        f = min(1.0, max(0.0, (x - b.x()) / b.width()))
+        return self.start + int(round(f * max(0, self.end - 1 - self.start)))
+
+    def mousePressEvent(self, e):  # noqa: N802
+        if self.active and e.button() == Qt.MouseButton.LeftButton:
+            self._drag = True
+            self.scrubbed.emit(self._frame_at(e.position().x()))
+
+    def mouseMoveEvent(self, e):  # noqa: N802
+        if self._drag:
+            self.scrubbed.emit(self._frame_at(e.position().x()))
+
+    def mouseReleaseEvent(self, e):  # noqa: N802
+        self._drag = False
+
+    def paintEvent(self, _e):  # noqa: N802
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.fillRect(self.rect(), QColor(theme.BG))
+        b = self._bar()
+        f = p.font()
+        f.setPixelSize(11)
+        p.setFont(f)
+        if not self.active:
+            p.setPen(QColor(theme.MUTED))
+            p.drawText(
+                self.rect().adjusted(12, 0, -12, 0), Qt.AlignmentFlag.AlignVCenter, "컷 안 훑어보기: 컷을 고르세요"
+            )
+            return
+        # 필름스트립 (그 컷의 프레임을 고르게)
+        p.save()
+        path = QPainterPath()
+        path.addRoundedRect(b, 4, 4)
+        p.setClipPath(path)
+        p.fillRect(b, QColor("#151515"))
+        n = self.end - self.start
+        tw = max(24.0, b.height() * 16 / 9)
+        k = max(1, int(b.width() // tw) + 1)
+        want = []
+        for i in range(k):
+            fr = self.start + int((i + 0.5) / k * max(1, n - 1))
+            want.append(fr)
+            img = self.thumbs.get(fr)
+            if img is not None and not img.isNull():
+                r = QRectF(b.x() + i * b.width() / k, b.y(), b.width() / k, b.height())
+                src = img.rect()
+                ar = r.width() / r.height()
+                sw = min(src.width(), src.height() * ar)
+                sx = (src.width() - sw) / 2
+                p.drawImage(r, img, QRectF(sx, 0, sw, src.height()))
+        self.thumbs.request_visible(want)
+        frac = min(1.0, max(0.0, (self.playhead - self.start) / max(1, n - 1)))
+        hx = b.x() + b.width() * frac
+        p.fillRect(QRectF(hx, b.y(), b.right() - hx, b.height()), QColor(0, 0, 0, 120))  # 지나온 부분은 밝게
+        p.restore()
+        p.setPen(QPen(QColor(255, 255, 255, 40), 1))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawRoundedRect(b, 4, 4)
+        # 재생 헤드
+        p.setPen(QPen(theme.C["ACCENT2"], 2))
+        p.drawLine(QPointF(hx, b.y() - 3), QPointF(hx, b.bottom() + 3))
+        # 글자: 왼쪽 컷 번호, 오른쪽 컷 안 시간
+        p.setPen(QColor(theme.TEXT))
+        p.drawText(QRectF(12, 0, 54, self.height()), Qt.AlignmentFlag.AlignVCenter, self.label)
+        cur = (min(max(self.playhead, self.start), self.end - 1) - self.start) / self.fps
+        p.setPen(QColor(theme.MUTED))
+        p.drawText(
+            QRectF(b.right() + 8, 0, 112, self.height()),
+            Qt.AlignmentFlag.AlignVCenter,
+            f"{cur:5.2f}s / {n / self.fps:.2f}s",
+        )

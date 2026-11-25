@@ -36,7 +36,7 @@ from ..render.planner import plan_render
 from ..render.queue import RenderQueue
 from . import theme
 from .credits_page import CreditsPage
-from .cutstrip import CutStrip
+from .cutstrip import CutScrubber, CutStrip
 from .dialogs import (
     ExportChooser,
     IdDictionaryDialog,
@@ -371,6 +371,9 @@ class EditorWindow(QMainWindow):
         self.cut_strip.contextRequested.connect(self._show_cut_menu)
         self.cut_strip.reframe_info = self._cut_reframe_info
         bv.addWidget(self.cut_strip)
+        self.cut_scrub = CutScrubber(self.thumbs, float(self.project.fps))
+        self.cut_scrub.scrubbed.connect(self._cut_scrubbed)
+        bv.addWidget(self.cut_scrub)
         self.timeline = TimelineWidget(self.project, self.thumbs)
         self.timeline.playheadRequested.connect(self.goto)
         self.timeline.feedItemClicked.connect(self._feed_clicked)
@@ -583,6 +586,7 @@ class EditorWindow(QMainWindow):
         self.timeline.set_playhead(n, follow=True)
         self.cut_strip.set_playhead(n)
         self._follow_cut(n)
+        self._update_cut_scrub(n)
         self.transport.set_frame(n)
         if request:
             self._request_display_frame()
@@ -726,6 +730,28 @@ class EditorWindow(QMainWindow):
         self._sync_reframe(self.playhead)
         self.preview.update()
 
+    def _scrub_range(self, n: int) -> tuple[int, int, str]:
+        """컷 안 훑어보기 범위: 여러 컷을 고르면 고른 컷들의 처음~끝, 아니면 재생 헤드가 있는 컷."""
+        cuts = self.project.state.cuts
+        if len(self.sel_ids) > 1:
+            idx = [i for i, c in enumerate(cuts) if c.id in self.sel_ids]
+            if idx:
+                return cuts[idx[0]].start, cuts[idx[-1]].end, f"#{idx[0] + 1}–{idx[-1] + 1}"
+        i = cuts_mod.cut_index_at(cuts, n)
+        if i is None:
+            return 0, 0, ""
+        return cuts[i].start, cuts[i].end, f"#{i + 1}"
+
+    def _update_cut_scrub(self, n: int) -> None:
+        if not hasattr(self, "cut_scrub"):
+            return
+        if not self.cut_scrub._drag:  # 끄는 동안에는 범위를 고정 (끝까지 가도 다음 컷으로 넘어가지 않게)
+            self.cut_scrub.set_range(*self._scrub_range(n))
+        self.cut_scrub.set_playhead(n)
+
+    def _cut_scrubbed(self, n: int) -> None:
+        self.goto(n)
+
     def _follow_cut(self, n: int) -> None:
         """재생 헤드가 다른 컷으로 넘어가면 컷 선택도 따라간다 (방향키, 재생 후 멈춤, 타임라인 이동).
         Shift/Ctrl 로 여러 컷을 고른 중이면 선택을 유지하고, FEED 에서 In/Out 을 직접 지정한 중이면 건드리지 않는다."""
@@ -744,6 +770,7 @@ class EditorWindow(QMainWindow):
         self.timeline.set_playhead(n, follow=True)
         self.cut_strip.set_playhead(n)
         self._follow_cut(n)
+        self._update_cut_scrub(n)
         self.transport.set_frame(n)
 
     def _active_range(self) -> tuple[int, int] | None:
@@ -1062,6 +1089,7 @@ class EditorWindow(QMainWindow):
         self._on_cut_selection()
 
     def _on_cut_selection(self) -> None:
+        self._update_cut_scrub(self.playhead)
         for panel in (self.story_panel, self.reels_panel):
             panel.set_cuts_selected(len(self.sel_ids))
         if self.sel_ids:

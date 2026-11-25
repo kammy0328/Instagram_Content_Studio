@@ -1286,3 +1286,31 @@ def test_editor_window_ticks_progress_while_building(qapp, prores_2398, tmp_path
     finally:
         w.close()
         pump(qapp, 100)
+
+
+def test_cut_scrubber_scrubs_only_inside_the_selected_cut(qapp, win):
+    from pathlib import Path
+
+    from PySide6.QtCore import QPoint
+
+    win.import_xml_file(str(Path(__file__).parent / "data" / "sample_premiere.xml"))
+    win.goto(60)  # 두 번째 컷 50~120
+    pump(qapp, 50)
+    sc = win.cut_scrub
+    assert (sc.start, sc.end, sc.label) == (50, 120, "#2")
+    b = sc._bar()
+    y = int(b.center().y())
+    # 맨 왼쪽 밖에서 시작해 맨 오른쪽 밖까지 끌어도 그 컷의 처음~끝에서만 움직인다
+    QTest.mousePress(sc, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(2, y))
+    assert win.playhead == 50
+    QTest.mouseMove(sc, QPoint(int(b.center().x()), y))
+    assert 80 <= win.playhead <= 90
+    QTest.mouseMove(sc, QPoint(sc.width() - 2, y))
+    assert win.playhead == 119 and (sc.start, sc.end) == (50, 120)  # 다음 컷으로 넘어가지 않는다
+    QTest.mouseRelease(sc, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(sc.width() - 2, y))
+    assert win.sel_ids == [win.project.state.cuts[1].id]
+    # 여러 컷을 고르면 고른 컷들의 처음~끝
+    cs = win.project.state.cuts
+    win._set_cut_selection([cs[1].id, cs[2].id])
+    assert (sc.start, sc.end, sc.label) == (50, 200, "#2–3")
+    sc.grab()
