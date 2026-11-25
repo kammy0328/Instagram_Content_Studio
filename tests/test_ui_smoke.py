@@ -1298,7 +1298,7 @@ def test_cut_scrubber_scrubs_only_inside_the_selected_cut(qapp, win):
     pump(qapp, 50)
     sc = win.cut_scrub
     assert (sc.start, sc.end, sc.label) == (50, 120, "#2")
-    b = sc._bar()
+    b = sc._area()
     y = int(b.center().y())
     # 맨 왼쪽 밖에서 시작해 맨 오른쪽 밖까지 끌어도 그 컷의 처음~끝에서만 움직인다
     QTest.mousePress(sc, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(2, y))

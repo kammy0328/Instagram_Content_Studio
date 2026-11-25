@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QPoint, QPointF, QRectF, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen, QPolygonF
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -324,11 +324,14 @@ class CutStrip(QListWidget):
 
 
 class CutScrubber(QWidget):
-    """선택한 컷 안에서만 처음부터 끝까지 긁어 볼 수 있는 막대 (컷 하나를 막대 전체 폭으로 늘려 보여 준다).
-    컷을 여러 개 고르면 고른 컷들의 처음~끝. 막대 위 세로선이 그 컷 안의 재생 헤드다."""
+    """선택한 컷만 확대해 보여 주는 작은 타임라인. 눈금(타임코드)과 빨간 재생 헤드가 있고, 좌우로 끌면
+    그 컷의 처음부터 끝까지만 긁어 볼 수 있다 (끝까지 끌어도 다음 컷으로 넘어가지 않는다).
+    컷을 여러 개 고르면 고른 컷들의 처음~끝."""
 
     scrubbed = Signal(int)  # 원본 프레임 번호
-    H = 34
+    RULER_H, TRACK_H = 20, 26
+    LEFT, RIGHT = 74, 118
+    H = RULER_H + TRACK_H + 6
 
     def __init__(self, thumbs, fps: float, parent=None):
         super().__init__(parent)
@@ -339,8 +342,7 @@ class CutScrubber(QWidget):
         self._drag = False
         self.setFixedHeight(self.H)
         self.setMouseTracking(True)
-        self.setCursor(Qt.CursorShape.SizeHorCursor)
-        self.setToolTip("선택한 컷 안에서만 좌우로 끌어 처음부터 끝까지 훑어봅니다")
+        self.setToolTip("선택한 컷만 확대한 타임라인: 좌우로 끌면 그 컷 처음부터 끝까지만 훑어봅니다")
         thumbs.thumbReady.connect(lambda _n: self.update())
 
     def set_range(self, start: int, end: int, label: str) -> None:
@@ -357,17 +359,22 @@ class CutScrubber(QWidget):
     def active(self) -> bool:
         return self.end > self.start
 
-    def _bar(self) -> QRectF:
-        return QRectF(70, 4, max(10, self.width() - 70 - 120), self.height() - 8)
+    def _area(self) -> QRectF:
+        return QRectF(self.LEFT, 2, max(10, self.width() - self.LEFT - self.RIGHT), self.height() - 4)
+
+    def x_of(self, f: float) -> float:
+        a = self._area()
+        return a.x() + a.width() * (f - self.start) / max(1, self.end - self.start)
 
     def _frame_at(self, x: float) -> int:
-        b = self._bar()
-        f = min(1.0, max(0.0, (x - b.x()) / b.width()))
-        return self.start + int(round(f * max(0, self.end - 1 - self.start)))
+        a = self._area()
+        f = min(1.0, max(0.0, (x - a.x()) / a.width()))
+        return self.start + min(self.end - 1 - self.start, int(f * (self.end - self.start)))
 
     def mousePressEvent(self, e):  # noqa: N802
         if self.active and e.button() == Qt.MouseButton.LeftButton:
             self._drag = True
+            self.setCursor(Qt.CursorShape.SizeHorCursor)
             self.scrubbed.emit(self._frame_at(e.position().x()))
 
     def mouseMoveEvent(self, e):  # noqa: N802
@@ -376,60 +383,92 @@ class CutScrubber(QWidget):
 
     def mouseReleaseEvent(self, e):  # noqa: N802
         self._drag = False
+        self.unsetCursor()
 
     def paintEvent(self, _e):  # noqa: N802
+        from ..core.timecode import frame_to_tc
+
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.fillRect(self.rect(), QColor(theme.BG))
-        b = self._bar()
-        f = p.font()
+        a = self._area()
+        f = QFont(self.font().family())
         f.setPixelSize(11)
         p.setFont(f)
         if not self.active:
             p.setPen(QColor(theme.MUTED))
             p.drawText(
-                self.rect().adjusted(12, 0, -12, 0), Qt.AlignmentFlag.AlignVCenter, "컷 안 훑어보기: 컷을 고르세요"
+                self.rect().adjusted(12, 0, -12, 0),
+                Qt.AlignmentFlag.AlignVCenter,
+                "컷을 고르면 그 컷만 확대한 타임라인이 여기 나옵니다",
             )
             return
-        # 필름스트립 (그 컷의 프레임을 고르게)
-        p.save()
-        path = QPainterPath()
-        path.addRoundedRect(b, 4, 4)
-        p.setClipPath(path)
-        p.fillRect(b, QColor("#151515"))
         n = self.end - self.start
-        tw = max(24.0, b.height() * 16 / 9)
-        k = max(1, int(b.width() // tw) + 1)
+        ruler = QRectF(a.x(), a.y(), a.width(), self.RULER_H)
+        track = QRectF(a.x(), ruler.bottom() + 2, a.width(), self.TRACK_H)
+        # ---- 눈금 (메인 타임라인과 같은 모양)
+        p.fillRect(ruler, theme.C["PANEL2"])
+        ppf = a.width() / max(1, n)
+        fi = max(1, int(round(self.fps)))
+        # 눈금 간격은 초 단위에 맞춘다 (24fps 면 1, 2, 3, 6, 12, 24f, 2초 …) -> 타임코드 글자가 깔끔하게 떨어진다
+        steps = sorted({d for d in range(1, fi + 1) if fi % d == 0} | {fi * m for m in (2, 5, 10, 30, 60)})
+        step = next((st for st in steps if st * ppf >= 74), steps[-1])
+        sub = next((st for st in reversed(steps) if st < step and step % st == 0 and st * ppf >= 6), 0)
+        p.setFont(QFont(self.font().family(), 8))
+        tick = sub or step
+        f0 = -(-self.start // tick) * tick
+        for fr in range(f0, self.end + 1, tick):
+            x = self.x_of(fr)
+            if fr % step == 0:
+                p.setPen(theme.C["MUTED"])
+                p.drawLine(QPointF(x, ruler.y() + 9), QPointF(x, ruler.bottom()))
+                if x + 70 < a.right() + 4:
+                    p.drawText(QPointF(x + 3, ruler.y() + 9), frame_to_tc(fr, self.fps))
+            else:
+                p.setPen(QPen(theme.C["BORDER"], 1))
+                p.drawLine(QPointF(x, ruler.y() + 15), QPointF(x, ruler.bottom()))
+        # ---- 필름스트립 (그 컷의 프레임을 고르게)
+        p.save()
+        clip = QPainterPath()
+        clip.addRoundedRect(track, 3, 3)
+        p.setClipPath(clip)
+        p.fillRect(track, QColor("#151515"))
+        tw = max(24.0, track.height() * 16 / 9)
+        k = max(1, int(track.width() // tw) + 1)
         want = []
         for i in range(k):
             fr = self.start + int((i + 0.5) / k * max(1, n - 1))
             want.append(fr)
             img = self.thumbs.get(fr)
             if img is not None and not img.isNull():
-                r = QRectF(b.x() + i * b.width() / k, b.y(), b.width() / k, b.height())
+                r = QRectF(track.x() + i * track.width() / k, track.y(), track.width() / k, track.height())
                 src = img.rect()
-                ar = r.width() / r.height()
-                sw = min(src.width(), src.height() * ar)
-                sx = (src.width() - sw) / 2
-                p.drawImage(r, img, QRectF(sx, 0, sw, src.height()))
+                sw = min(src.width(), src.height() * r.width() / r.height())
+                p.drawImage(r, img, QRectF((src.width() - sw) / 2, 0, sw, src.height()))
         self.thumbs.request_visible(want)
-        frac = min(1.0, max(0.0, (self.playhead - self.start) / max(1, n - 1)))
-        hx = b.x() + b.width() * frac
-        p.fillRect(QRectF(hx, b.y(), b.right() - hx, b.height()), QColor(0, 0, 0, 120))  # 지나온 부분은 밝게
         p.restore()
         p.setPen(QPen(QColor(255, 255, 255, 40), 1))
         p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawRoundedRect(b, 4, 4)
-        # 재생 헤드
-        p.setPen(QPen(theme.C["ACCENT2"], 2))
-        p.drawLine(QPointF(hx, b.y() - 3), QPointF(hx, b.bottom() + 3))
-        # 글자: 왼쪽 컷 번호, 오른쪽 컷 안 시간
+        p.drawRoundedRect(track, 3, 3)
+        # ---- 재생 헤드 (메인 타임라인과 같은 빨간 선 + 삼각형)
+        ph = min(max(self.playhead, self.start), self.end - 1)
+        x = self.x_of(ph + 0.5) if n < a.width() / 2 else self.x_of(ph)
+        col = QColor("#ff4d5e")
+        p.setPen(QPen(col, 1.5))
+        p.drawLine(QPointF(x, ruler.y()), QPointF(x, track.bottom()))
+        p.setBrush(col)
+        p.drawPolygon(QPolygonF([QPointF(x - 6, ruler.y()), QPointF(x + 6, ruler.y()), QPointF(x, ruler.y() + 9)]))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        # ---- 글자: 왼쪽 컷 번호와 길이, 오른쪽 컷 안 위치
+        p.setFont(f)
         p.setPen(QColor(theme.TEXT))
-        p.drawText(QRectF(12, 0, 54, self.height()), Qt.AlignmentFlag.AlignVCenter, self.label)
-        cur = (min(max(self.playhead, self.start), self.end - 1) - self.start) / self.fps
+        p.drawText(QRectF(12, 0, self.LEFT - 14, self.height() / 2 + 4), Qt.AlignmentFlag.AlignBottom, self.label)
         p.setPen(QColor(theme.MUTED))
+        p.drawText(QRectF(12, self.height() / 2 + 4, self.LEFT - 14, self.height() / 2 - 4), Qt.AlignmentFlag.AlignTop,
+                   f"{n}f")  # fmt: skip
+        cur = (ph - self.start) / self.fps
         p.drawText(
-            QRectF(b.right() + 8, 0, 112, self.height()),
+            QRectF(a.right() + 10, 0, self.RIGHT - 12, self.height()),
             Qt.AlignmentFlag.AlignVCenter,
             f"{cur:5.2f}s / {n / self.fps:.2f}s",
         )
