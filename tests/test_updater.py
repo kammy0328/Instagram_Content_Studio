@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
+from pathlib import Path
 
 import pytest
 
@@ -136,3 +138,42 @@ def test_shutdown_for_update_closes_editor_windows_then_exits(monkeypatch):
     update_ui.shutdown_for_update()
     assert closed == [True] and exited == [0]
     assert app is not None
+
+
+def test_download_uses_a_fresh_name_even_if_an_old_setup_is_locked(tmp_path, monkeypatch):
+    """예전 업데이트의 설치 파일이 아직 실행 중이라 같은 이름 파일이 잠겨 있어도 (WinError 32) 새로 받을 수 있다."""
+    data = b"y" * 3000
+    info = updater.check(current_build="old", opener=make_opener(meta_for(data), data))
+    old = tmp_path / info.asset_name
+    old.write_bytes(b"old")
+    real_replace = os.replace
+
+    def guarded(src, dst):
+        if Path(dst) == old:
+            raise PermissionError(32, "다른 프로세스가 파일을 사용 중")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", guarded)
+    out = updater.download(info, "", tmp_path, opener=make_opener(meta_for(data), data))
+    assert out != old and out.read_bytes() == data and out.suffix == old.suffix
+
+
+def test_download_retries_while_antivirus_holds_the_new_file(tmp_path, monkeypatch):
+    data = b"z" * 1000
+    info = updater.check(current_build="old", opener=make_opener(meta_for(data), data))
+    real_replace = os.replace
+    calls = []
+
+    def flaky(src, dst):
+        calls.append(1)
+        if len(calls) < 3:
+            raise PermissionError(32, "검사 중")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", flaky)
+    monkeypatch.setattr(updater.time, "sleep", lambda s: None)
+    out = updater.download(info, "", tmp_path, opener=make_opener(meta_for(data), data))
+    assert out.read_bytes() == data and len(calls) == 3
+    monkeypatch.setattr(os, "replace", lambda s, d: (_ for _ in ()).throw(PermissionError(32, "x")))
+    with pytest.raises(updater.UpdateError, match="사용 중"):
+        updater.download(info, "", tmp_path / "b", opener=make_opener(meta_for(data), data))
