@@ -331,6 +331,32 @@ class Project:
         with self.edit(f"{which.upper()} 화면 배치", (which, "state")):
             sel.layout = layout
 
+    def set_cut_x(self, which: str, values: dict[int, float], replace_all: bool = False, label: str = "") -> None:
+        """컷별 가로 위치 (Fill 9:16). replace_all 이면 기존 값을 모두 지우고 values 로 바꾼다."""
+        sel = self._sel(which)
+        with self.edit(label or f"{which.upper()} 가로 위치", (which, "state")):
+            new = {} if replace_all else dict(sel.cut_x)
+            new.update({int(k): min(1.0, max(0.0, float(v))) for k, v in values.items()})
+            sel.cut_x = new
+
+    def clear_cut_x(self, which: str) -> None:
+        sel = self._sel(which)
+        with self.edit(f"{which.upper()} 가로 위치 초기화", (which, "state")):
+            sel.cut_x = {}
+
+    def reframe_segments(self, which: str):
+        from .reframe import segments
+
+        sel = self._sel(which)
+        return segments(sel.start, sel.end, self.state.cuts)
+
+    def pos_x_at(self, which: str, frame: int) -> float:
+        """frame 에서 쓰는 가로 위치 (컷별 값이 없으면 구간의 기본값)."""
+        from .reframe import pos_for_frame
+
+        sel = self._sel(which)
+        return pos_for_frame(frame, self.state.cuts, sel.cut_x, sel.layout.pos_x)
+
     def clear_selection(self, which: str) -> None:
         sel = self._sel(which)
         with self.edit(f"{which.upper()} 해제", (which, "state")):

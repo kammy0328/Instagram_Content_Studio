@@ -70,6 +70,24 @@ def estimate_still_bytes(width: int, height: int) -> int:
 SECTIONS = ("story", "reels", "feed", "credits")
 
 
+def _reframe(info, project, which: str, sel):
+    """Fill 9:16 의 컷별 가로 위치. (지오메트리, x_steps). 위치가 하나뿐이면 x_steps 없이 그 위치의 고정 크롭."""
+    from dataclasses import replace as _replace
+
+    from ..core import reframe
+
+    geo = compute_geometry(info.display_w, info.display_h, "916", sel.layout)
+    if sel.layout.mode != "fill" or not sel.cut_x:
+        return geo, None
+    segs = reframe.segments(sel.start, sel.end, project.state.cuts)
+    steps = reframe.crop_steps(info.display_w, info.display_h, sel.layout, segs, sel.cut_x)
+    if not steps:
+        return geo, None
+    if len(steps) == 1:
+        return _replace(geo, crop_x=steps[0][1]), None
+    return geo, [list(s) for s in steps]
+
+
 def plan_render(
     project: Project, include_original_stills: bool = True, sections: set[str] | frozenset[str] | None = None
 ) -> RenderPlan:
@@ -129,8 +147,10 @@ def plan_render(
         elif index.time_of(s.end) - index.time_of(s.start) > STORY_MAX_SEC:
             plan.issues.append(PlanIssue("error", f"STORY 길이가 {dur:.2f}초로 60초를 넘습니다."))
         else:
-            geo = compute_geometry(info.display_w, info.display_h, "916", s.layout)
+            geo, steps = _reframe(info, project, "story", s)
             sp = {"start": s.start, "end": s.end, "layout": s.layout.to_dict(), "geo": geo.to_dict()}
+            if steps:
+                sp["x_steps"] = steps
             ov = st.story_overlay
             if ov.bg_on and any(m > 0 for m in overlay.margins(geo)):
                 sp["bg_dim"] = ov.bg_dim
@@ -165,12 +185,15 @@ def plan_render(
         elif index.time_of(s.end) - index.time_of(s.start) > REELS_MAX_SEC:
             plan.issues.append(PlanIssue("error", f"REELS 길이가 {dur:.2f}초로 180초를 넘습니다."))
         else:
-            geo = compute_geometry(info.display_w, info.display_h, "916", s.layout)
+            geo, steps = _reframe(info, project, "reels", s)
+            rp = {"start": s.start, "end": s.end, "layout": s.layout.to_dict(), "geo": geo.to_dict()}
+            if steps:
+                rp["x_steps"] = steps
             add(
                 "reels",
                 f"REELS ({dur:.1f}s)",
                 root / "REELS" / f"{name}_REELS_01.mp4",
-                {"start": s.start, "end": s.end, "layout": s.layout.to_dict(), "geo": geo.to_dict()},
+                rp,
                 estimate_video_bytes(geo.canvas_w, geo.canvas_h, fps, dur),
             )
             if geo.tier_note:

@@ -48,7 +48,16 @@ from .dialogs import (
 )
 from .panels import FeedPanel, SelectionPanel, TransportBar
 from .preview import PreviewWidget
-from .services import Decoder, FrameService, LetterboxService, PlaybackEngine, ProxyBuilder, ThumbService, np_to_qimage
+from .services import (
+    Decoder,
+    FrameService,
+    LetterboxService,
+    PlaybackEngine,
+    ProxyBuilder,
+    ReframeService,
+    ThumbService,
+    np_to_qimage,
+)
 from .settings import DEFAULT_SHORTCUTS, Settings
 from .timeline import TimelineWidget
 from .widgets import ElidedLabel, SegButton, studio_icon
@@ -106,6 +115,9 @@ class EditorWindow(QMainWindow):
         self.proxy = ProxyBuilder(info, cache_dir)
         self.letterbox = LetterboxService(info, index, self)
         self.letterbox.finished.connect(self._letterbox_finished)
+        self.reframer = ReframeService(info, index, self)
+        self.reframer.progress.connect(self._reframe_progress)
+        self.reframer.finished.connect(self._reframe_finished)
         self._crop_pending: set[tuple[str, str | None]] = set()
         self._crop_result = None
         self.render_queue: RenderQueue | None = None
@@ -353,6 +365,8 @@ class EditorWindow(QMainWindow):
         for which, panel in (("story", self.story_panel), ("reels", self.reels_panel)):
             panel.presetClicked.connect(lambda p, w=which: self.apply_preset(w, p))
             panel.fromCutsClicked.connect(self.cuts_to_inout)
+            panel.layout_editor.reframeRequested.connect(lambda w=which: self.request_reframe(w))
+            panel.layout_editor.reframeReset.connect(lambda w=which: self.project.clear_cut_x(w))
             panel.layoutLive.connect(lambda lp, w=which: self._layout_live(w, lp))
             panel.layoutCommit.connect(lambda _lp: self._layout_commit())
             panel.layout_editor.cropRequested.connect(lambda again, w=which: self._request_letterbox(w, again))
@@ -384,6 +398,8 @@ class EditorWindow(QMainWindow):
         self.preview.dragStarted.connect(lambda: self.project.begin_group("화면 위치 조정"))
         self.preview.dragFinished.connect(self.project.end_group)
         self.preview.layoutChanged.connect(self._preview_layout_dragged)
+        self.preview.hDragged.connect(self._preview_h_dragged)
+        self.preview.hDragFinished.connect(self._preview_h_drag_finished)
         self._layout_timer = QTimer(self)
         self._layout_timer.setSingleShot(True)
         self._layout_timer.timeout.connect(self._layout_commit)
@@ -554,13 +570,86 @@ class EditorWindow(QMainWindow):
         if self.playback.playing and self.playback.rate > 0:
             return
         if self.playback.playing and self.playback.rate < 0:  # 역재생: 디코딩이 끝나는 대로 최신 프레임을 바로 표시
+            self._sync_reframe(n)
             self.preview.set_image(n, img)
             return
         if n == self._display_frame():
+            self._sync_reframe(n)
             self.preview.set_image(n, img)
 
     def _on_play_image(self, n: int, img: QImage) -> None:
+        self._sync_reframe(n)
         self.preview.set_image(n, img)
+
+    # ---- 컷별 가로 위치 (STORY / REELS Fill 9:16)
+    def _sync_reframe(self, n: int) -> None:
+        """보여 줄 프레임이 속한 컷의 가로 위치로 미리보기 크롭을 맞춘다 (컷이 바뀔 때만 실제로 바뀐다)."""
+        if self.cover_mode or self.tab not in ("story", "reels") or self.preview._drag is not None:
+            return
+        sel = self.project.state.story if self.tab == "story" else self.project.state.reels
+        if sel.layout.mode != "fill":
+            return
+        px = self.project.pos_x_at(self.tab, n)
+        if abs(self.preview.layout.pos_x - px) > 1e-9:
+            self.preview.layout = replace(self.preview.layout, pos_x=px)
+
+    def _segment_key_at(self, which: str, frame: int) -> int:
+        for s in self.project.reframe_segments(which):
+            if s.start <= frame < s.end:
+                return s.key
+        for c in self.project.state.cuts:
+            if c.start <= frame < c.end:
+                return int(c.start)
+        return -1
+
+    def _preview_h_dragged(self, pos: float) -> None:
+        self.preview.layout = replace(self.preview.layout, pos_x=pos)
+        self.preview.update()
+
+    def _preview_h_drag_finished(self, pos: float) -> None:
+        if self.tab not in ("story", "reels") or self.cover_mode:
+            return
+        key = self._segment_key_at(self.tab, self.playhead)
+        self.project.set_cut_x(self.tab, {key: pos}, label="컷 가로 위치")
+        self.toast("이 컷의 가로 위치를 옮겼습니다" if key != -1 else "가로 위치를 옮겼습니다")
+
+    def request_reframe(self, which: str) -> None:
+        p = self.project
+        sel = p.state.story if which == "story" else p.state.reels
+        if not sel.enabled:
+            self.toast(f"{which.upper()} 구간을 먼저 지정하세요.")
+            return
+        if self.reframer.busy:
+            return
+        if sel.layout.mode != "fill":
+            p.set_selection_layout(which, replace(sel.layout, mode="fill"))
+        segs = p.reframe_segments(which)
+        panel = self.story_panel if which == "story" else self.reels_panel
+        if self.reframer.start(which, sel.layout, segs):
+            panel.layout_editor.set_reframe_status("인물을 찾는 중… 0%", busy=True)
+
+    def _reframe_progress(self, which: str, f: float) -> None:
+        panel = self.story_panel if which == "story" else self.reels_panel
+        panel.layout_editor.set_reframe_status(f"인물을 찾는 중… {int(f * 100)}%", busy=True)
+
+    def _reframe_finished(self, which: str, res: dict, error: str) -> None:
+        panel = self.story_panel if which == "story" else self.reels_panel
+        if error:
+            panel.layout_editor.set_reframe_status(error)
+            self.toast(error)
+            return
+        n = len(self.project.reframe_segments(which))
+        self.project.set_cut_x(which, res, replace_all=True, label="인물 기준 자동 맞춤")
+        msg = (
+            f"컷 {n}개 중 {len(res)}개를 인물 기준으로 맞췄습니다"
+            if res
+            else "인물을 찾지 못해 위치를 바꾸지 않았습니다"
+        )
+        panel.layout_editor.set_reframe_status(msg)
+        self.toast(msg + (" (실행 취소로 되돌릴 수 있음)" if res else ""))
+        self._update_preview_layout()
+        self._sync_reframe(self.playhead)
+        self.preview.update()
 
     def _on_play_pos(self, n: int) -> None:
         self.playhead = n
@@ -1204,6 +1293,9 @@ class EditorWindow(QMainWindow):
             else:
                 kind = "916"
                 lp = (st.story if self.tab == "story" else st.reels).layout
+                if lp.mode == "fill":
+                    lp = replace(lp, pos_x=self.project.pos_x_at(self.tab, self.playhead))
+        self.preview.h_drag_enabled = self.tab in ("story", "reels") and not self.cover_mode
         ov_state = self.project.state.story_overlay
         self.preview.bg_dim = (
             ov_state.bg_dim if (self.tab == "story" and ov_state.bg_on and not self.cover_mode) else None
@@ -1474,6 +1566,7 @@ class EditorWindow(QMainWindow):
             self.render_queue.cancel_all()
             self.render_queue.wait(10)
         self._layout_commit()
+        self.reframer.cancel()
         self.credits.flush_pending()
         try:
             self.project.close()

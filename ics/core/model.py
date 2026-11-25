@@ -30,6 +30,8 @@ class Selection:
     end: int = 0  # exclusive
     preset: str = "max"  # '15' | '30' | '60' | '180' | 'max' | 'custom'
     layout: LayoutParams = field(default_factory=LayoutParams)
+    # Fill 9:16 의 컷별 가로 위치 {컷 시작 프레임(컷 없으면 -1): pos_x}. 없는 컷은 layout.pos_x
+    cut_x: dict[int, float] = field(default_factory=dict)
 
     @property
     def length(self) -> int:
@@ -42,17 +44,25 @@ class Selection:
             "end": self.end,
             "preset": self.preset,
             "layout": self.layout.to_dict(),
+            "cut_x": {str(k): v for k, v in self.cut_x.items()},
         }
 
     @classmethod
     def from_dict(cls, d):
         d = d or {}
+        cut_x = {}
+        for k, v in (d.get("cut_x") or {}).items():
+            try:
+                cut_x[int(k)] = min(1.0, max(0.0, float(v)))
+            except (TypeError, ValueError):
+                continue
         return cls(
             d.get("enabled", False),
             d.get("start", 0),
             d.get("end", 0),
             d.get("preset", "max"),
             LayoutParams.from_dict(d.get("layout")),
+            cut_x,
         )
 
 

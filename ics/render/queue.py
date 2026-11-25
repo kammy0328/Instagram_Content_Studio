@@ -182,7 +182,12 @@ class RenderQueue:
         p = j.params
         if j.kind in ("story", "reels", "feed_video"):
             spec = engine.VideoSpec(
-                p["start"], p["end"], _geo(p["geo"]), overlay_png=p.get("overlay_png"), bg_dim=p.get("bg_dim")
+                p["start"],
+                p["end"],
+                _geo(p["geo"]),
+                overlay_png=p.get("overlay_png"),
+                bg_dim=p.get("bg_dim"),
+                x_steps=[tuple(x) for x in p["x_steps"]] if p.get("x_steps") else None,
             )
             return engine.render_video(self.info, self.index, spec, j.out_path, prog, self._cancel_job)
         if j.kind in ("feed_still", "reels_cover"):
