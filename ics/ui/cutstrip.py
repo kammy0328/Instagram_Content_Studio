@@ -19,12 +19,18 @@ from PySide6.QtWidgets import (
 )
 
 from ..core import cuts as cuts_mod
-from . import theme
+from . import motion, theme
 
 TILE_W, TILE_H = 140, 104  # 모든 컷 타일의 고정 크기 (컷 길이와 무관)
 PAD = 4
 STRIP_H = TILE_H + 22  # 가로 스크롤바 포함 높이
 DATA = Qt.ItemDataRole.UserRole
+
+
+def _ruler_font() -> QFont:
+    f = QFont(theme.FONT)
+    f.setPixelSize(10)
+    return f
 
 
 def representative_frame(start: int, end: int) -> int:
@@ -36,11 +42,11 @@ class _TileDelegate(QStyledItemDelegate):
     def __init__(self, strip: "CutStrip"):
         super().__init__(strip)
         self.strip = strip
-        self._f_badge = QFont()
-        self._f_badge.setBold(True)
-        self._f_badge.setPointSize(11)
-        self._f_small = QFont()
-        self._f_small.setPointSize(9)
+        self._f_badge = QFont(theme.FONT)
+        self._f_badge.setWeight(QFont.Weight.Bold)
+        self._f_badge.setPixelSize(11)
+        self._f_small = QFont(theme.FONT)
+        self._f_small.setPixelSize(10)
 
     def sizeHint(self, option, index):  # noqa: N802
         return QSize(TILE_W, TILE_H)
@@ -53,15 +59,16 @@ class _TileDelegate(QStyledItemDelegate):
         r = QRectF(option.rect).adjusted(PAD, PAD, -PAD, -PAD)
         p.save()
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        fill = QColor(theme.ACCENT if selected else theme.PANEL2)
-        if selected:
-            fill.setAlpha(50)
+        fill = QColor(255, 255, 255, 22) if selected else QColor(theme.PANEL2)
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(fill)
-        p.drawRoundedRect(r, 5, 5)
-        # 썸네일 (가로세로 비율 유지)
-        th = QRectF(r.x() + 2, r.y() + 2, r.width() - 4, r.height() - 4 - 22)
-        p.fillRect(th, QColor("#0c0c0c"))
+        p.drawRoundedRect(r, 7, 7)
+        # 썸네일 (가로세로 비율 유지): 위쪽 모서리만 둥글게 잘라 그린다
+        th = QRectF(r.x() + 2, r.y() + 2, r.width() - 4, r.height() - 4 - 20)
+        clip = QPainterPath()
+        clip.addRoundedRect(th, 5, 5)
+        p.setClipPath(clip)
+        p.fillRect(th, QColor("#0c0c0e"))
         img = self.strip.thumb(d["rep"])
         rf = self.strip.reframe_info(d["start"], d["end"]) if self.strip.reframe_info else None
         if img is not None and img.height() > 0:
@@ -80,58 +87,55 @@ class _TileDelegate(QStyledItemDelegate):
                 p.drawRect(win.adjusted(0.5, 0.5, -0.5, -0.5))
         # 번호 배지 (왼쪽 위)
         p.setFont(self._f_badge)
-        label = f"#{d['num']}"
+        label = f"{d['num']}"
         fm = p.fontMetrics()
-        bw = fm.horizontalAdvance(label) + 10
-        badge = QRectF(th.x(), th.y(), bw, fm.height() + 2)
-        p.fillRect(badge, QColor(8, 10, 14, 215))
-        p.setPen(theme.C["TEXT"])
+        bw = max(20, fm.horizontalAdvance(label) + 10)
+        badge = QRectF(th.x() + 4, th.y() + 4, bw, fm.height() + 2)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(0, 0, 0, 170))
+        p.drawRoundedRect(badge, 4, 4)
+        p.setPen(QColor("#ffffff") if selected else theme.C["TEXT"])
         p.drawText(badge, Qt.AlignmentFlag.AlignCenter, label)
-        # 가로 위치를 어떻게 정했는지 (오른쪽 위): 자동 / 수동 / 인물 없음
+        # 가로 위치: 예외만 작은 점으로 (자동은 표시 없음 = 기본). 수동 = 살구색 점, 인물 없음 = 빈 동그라미
         src = rf[0] if rf is not None else None
-        if src:
-            p.setFont(self._f_small)
-            txt = {"auto": "자동", "manual": "수동", "none": "인물 없음"}[src]
-            fm2 = p.fontMetrics()
-            tw = fm2.horizontalAdvance(txt) + 10
-            pill = QRectF(th.right() - tw - 3, th.y() + 3, tw, fm2.height() + 2)
-            p.setPen(Qt.PenStyle.NoPen)
-            if src == "auto":
-                p.setBrush(QColor("#ececec"))
-                fg = QColor("#0a0a0a")
-            elif src == "manual":
-                p.setBrush(QColor(theme.ACCENT2))
-                fg = QColor("#0a0a0a")
-            else:
-                p.setBrush(QColor(20, 20, 20, 220))
-                fg = QColor(theme.MUTED)
-            p.drawRoundedRect(pill, 4, 4)
-            p.setPen(fg)
-            p.drawText(pill, Qt.AlignmentFlag.AlignCenter, txt)
+        if src in ("manual", "none"):
+            c = QPointF(th.right() - 8, th.y() + 8)
+            p.setPen(QPen(QColor(0, 0, 0, 160), 2))
+            p.setBrush(QColor(theme.ACCENT2) if src == "manual" else QColor(0, 0, 0, 120))
+            p.drawEllipse(c, 4, 4)
+            if src == "none":
+                p.setPen(QPen(QColor(255, 255, 255, 170), 1.2))
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.drawEllipse(c, 3.5, 3.5)
         # 하단: 길이 + 병합/수동 표시
         p.setFont(self._f_small)
         n = d["end"] - d["start"]
         sec = d["sec"]
         extra = (f" ⛓{d['parts']}" if d["merged"] else "") + (" ●" if d["manual"] else "")
-        text = f"{n}f · {sec:.2f}s{extra}"
+        text = f"{sec:.2f}s · {n}f{extra}"
+        p.setClipping(False)
         p.setPen(theme.C["TEXT"] if selected else theme.C["MUTED"])
         p.drawText(
-            QRectF(r.x() + 4, r.bottom() - 22, r.width() - 8, 20),
+            QRectF(r.x() + 6, r.bottom() - 20, r.width() - 10, 18),
             Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
             text,
         )
         # 테두리 / 현재 위치 표시
-        p.setPen(QPen(theme.C["ACCENT"] if selected else theme.C["BORDER"], 2 if selected else 1))
+        p.setPen(QPen(QColor(theme.ACCENT) if selected else QColor(theme.BORDER), 1.5 if selected else 1))
         p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawRoundedRect(r.adjusted(0, 0, -1, -1), 5, 5)
+        p.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), 7, 7)
         if d["id"] == self.strip.current_id:
             # 이 컷 안에서의 재생 헤드: 썸네일 위 세로선 + 아래 진행 막대
             n = max(1, d["end"] - d["start"])
             f = min(1.0, max(0.0, (self.strip.playhead - d["start"]) / n))
-            p.fillRect(QRectF(r.x(), r.bottom() - 3, r.width(), 3), QColor(255, 255, 255, 40))
-            p.fillRect(QRectF(r.x(), r.bottom() - 3, r.width() * f, 3), theme.C["ACCENT2"])
+            bar = QRectF(r.x() + 6, r.bottom() - 3, r.width() - 12, 2)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(255, 255, 255, 36))
+            p.drawRoundedRect(bar, 1, 1)
+            p.setBrush(theme.C["PLAYHEAD"])
+            p.drawRoundedRect(QRectF(bar.x(), bar.y(), bar.width() * f, 2), 1, 1)
             hx = th.x() + th.width() * f
-            p.setPen(QPen(theme.C["ACCENT2"], 2))
+            p.setPen(QPen(theme.C["PLAYHEAD"], 1.5))
             p.drawLine(QPointF(hx, th.y()), QPointF(hx, th.bottom()))
         p.restore()
 
@@ -162,13 +166,15 @@ class CutStrip(QListWidget):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.setFrameShape(QListWidget.Shape.NoFrame)
+        self.setObjectName("cutStrip")
         self.setFixedHeight(STRIP_H)
         self.setItemDelegate(_TileDelegate(self))
         # 방향키는 항상 프레임 이동(편집 창 단축키)에 쓰도록 컷 목록은 키보드 포커스를 받지 않는다
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setSpacing(0)
         self.setToolTip(
-            "컷 목록 (길이와 무관하게 같은 크기). 클릭: 선택 / Shift+클릭: 범위 / Ctrl+클릭: 추가·해제 / 오른쪽 클릭: 메뉴 (병합 등)"
+            "컷 목록 (길이와 무관하게 같은 크기). 클릭: 선택 / Shift+클릭: 범위 / Ctrl+클릭: 추가·해제 / 오른쪽 클릭: 메뉴 (병합 등)\n"
+            "Fill 9:16 의 잘릴 창은 밝게, 오른쪽 위 점: 살구색 = 손으로 옮김, 빈 동그라미 = 인물을 못 찾음"
         )
         self.itemSelectionChanged.connect(self._on_selection)
         self.clicked.connect(self._on_clicked)
@@ -256,8 +262,10 @@ class CutStrip(QListWidget):
         self._request_visible()
         self.viewport().update()
 
-    def set_playhead(self, frame: int) -> None:
-        """재생 헤드가 있는 컷을 표시하고 스트립 가운데로 스크롤한다 (재생 헤드 근방 썸네일이 보이도록)."""
+    def set_playhead(self, frame: int, smooth: bool = True) -> None:
+        """재생 헤드가 있는 컷을 표시하고 스트립 가운데로 스크롤한다 (재생 헤드 근방 썸네일이 보이도록).
+
+        smooth: 방향키/클릭으로 옮길 때는 부드럽게 미끄러지고, 재생 중에는 바로 따라간다."""
         i = cuts_mod.cut_index_at(self.project.state.cuts, frame)
         cid = self.project.state.cuts[i].id if i is not None else None
         self.playhead = frame
@@ -267,17 +275,27 @@ class CutStrip(QListWidget):
             return
         self.current_id = cid
         if i is not None and i < self.count():
-            self._center_on(i)
+            self._center_on(i, smooth)
         self.viewport().update()
 
-    def _center_on(self, i: int) -> None:
+    def _center_on(self, i: int, smooth: bool = False) -> None:
         """i 번째 타일을 스트립 가운데로 (scrollToItem 의 가운데 맞춤은 아이콘 보기에서 어긋날 때가 있어 직접 계산)."""
         sb = self.horizontalScrollBar()
         r = self.visualItemRect(self.item(i))
         if r.width() <= 0:
+            motion.stop_scroll(sb)
             self.scrollToItem(self.item(i), QAbstractItemView.ScrollHint.PositionAtCenter)
             return
-        sb.setValue(sb.value() + r.center().x() - self.viewport().width() // 2)
+        target = sb.value() + r.center().x() - self.viewport().width() // 2
+        if smooth:
+            motion.smooth_scroll(sb, target, motion.NORMAL)
+        else:
+            motion.stop_scroll(sb)
+            sb.setValue(target)
+
+    def wheelEvent(self, e):  # noqa: N802
+        motion.stop_scroll(self.horizontalScrollBar())  # 사용자가 직접 굴리면 자동 이동을 멈춘다
+        super().wheelEvent(e)
 
     # ------------------------------------------------------------ 입력
     def _on_selection(self) -> None:
@@ -426,7 +444,7 @@ class CutScrubber(QWidget):
 
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.fillRect(self.rect(), QColor(theme.BG))
+        p.fillRect(self.rect(), QColor(theme.PANEL))
         a = self._area()
         f = QFont(self.font().family())
         f.setPixelSize(11)
@@ -450,7 +468,7 @@ class CutScrubber(QWidget):
         steps = sorted({d for d in range(1, fi + 1) if fi % d == 0} | {fi * m for m in (2, 5, 10, 30, 60)})
         step = next((st for st in steps if st * ppf >= 74), steps[-1])
         sub = next((st for st in reversed(steps) if st < step and step % st == 0 and st * ppf >= 6), 0)
-        p.setFont(QFont(self.font().family(), 8))
+        p.setFont(_ruler_font())
         tick = sub or step
         f0 = -(-self.start // tick) * tick
         for fr in range(f0, self.end + 1, tick):

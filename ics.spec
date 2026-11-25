@@ -24,6 +24,7 @@ datas = [
     (os.path.join(root, "assets", "fonts"), os.path.join("assets", "fonts")),
     (os.path.join(root, "assets", "logos"), os.path.join("assets", "logos")),
     (os.path.join(root, "assets", "models"), os.path.join("assets", "models")),
+    (os.path.join(root, "assets", "icons"), os.path.join("assets", "icons")),
 ] + ff_files
 
 # collect_submodules("ics") 만으로는 다른 모듈이 import 하지 않는 모듈(예: publisher.scheduler)이 번들에서 빠진 적이 있다
@@ -40,7 +41,7 @@ a = Analysis(
     pathex=[root],
     binaries=[],
     datas=datas,
-    hiddenimports=sorted(set(hidden)) + ["regex", "cv2"],
+    hiddenimports=sorted(set(hidden)) + ["regex", "cv2", "PySide6.QtSvg"],
     excludes=["tkinter", "PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets", "PySide6.Qt3DCore",
               "PySide6.QtQuick", "PySide6.QtQml", "PySide6.QtCharts", "PySide6.QtDataVisualization"],
     noarchive=False,

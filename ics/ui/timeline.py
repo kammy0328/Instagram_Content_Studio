@@ -11,6 +11,13 @@ from PySide6.QtWidgets import QScrollBar, QWidget
 from ..core.timecode import frame_to_tc
 from . import theme
 
+
+def _small_font() -> QFont:
+    f = QFont(theme.FONT)
+    f.setPixelSize(10)
+    return f
+
+
 RULER_H, SEL_H, FEED_H = 24, 18, 26
 Y_RULER = 0
 Y_STORY = Y_RULER + RULER_H + 4
@@ -173,7 +180,7 @@ class TimelineWidget(QWidget):
         sub = max(1, step // 5) if step >= 5 else 1
         f0 = int(max(0, self.f_of(0)) // step * step)
         f1 = int(self.f_of(self.width())) + step
-        p.setFont(QFont(self.font().family(), 8))
+        p.setFont(_small_font())
         for f in range(f0, min(f1, self.count + step), step):
             x = self.x_of(f)
             p.setPen(theme.C["MUTED"])
@@ -188,10 +195,10 @@ class TimelineWidget(QWidget):
     def _paint_ranges(self, p: QPainter) -> None:
         st = self.project.state
         for sel, y, name, col in ((st.story, Y_STORY, "STORY", theme.ACCENT2), (st.reels, Y_REELS, "REELS", theme.OK)):
-            p.fillRect(0, y, self.width(), SEL_H, QColor("#101010"))
+            p.fillRect(0, y, self.width(), SEL_H, QColor("#151518"))
             if not sel.enabled:
                 p.setPen(theme.C["MUTED"])
-                p.setFont(QFont(self.font().family(), 8))
+                p.setFont(_small_font())
                 p.drawText(QPointF(6, y + 13), f"{name} 미지정")
                 continue
             x0, x1 = self.x_of(sel.start), self.x_of(sel.end)
@@ -210,7 +217,7 @@ class TimelineWidget(QWidget):
             )
 
     def _paint_feed(self, p: QPainter) -> None:
-        p.fillRect(0, Y_FEED, self.width(), FEED_H, QColor("#101010"))
+        p.fillRect(0, Y_FEED, self.width(), FEED_H, QColor("#151518"))
         items = self.project.feed_ordered()
         order = {it.id: n + 1 for n, it in enumerate([i for i in items if i.included])}
         p.setFont(QFont(self.font().family(), 8, QFont.Weight.Bold))

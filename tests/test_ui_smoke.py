@@ -469,12 +469,12 @@ def test_cut_strip_scrolls_to_center_the_cut_under_the_playhead(qapp, win):
     win.resize(900, 700)
     pump(qapp, 100)
     win.goto(30 * 4 + 1)  # 31번째 컷
-    pump(qapp, 100)
+    pump(qapp, 450)  # 부드럽게 미끄러져 가운데로 (애니메이션)
     item = strip.item(30)
     r = strip.visualItemRect(item)
     assert abs(r.center().x() - strip.viewport().width() / 2) <= r.width()  # 가운데 근처
     win.goto(5 * 4)
-    pump(qapp, 100)
+    pump(qapp, 450)
     assert strip.horizontalScrollBar().value() < r.width() * 10  # 앞쪽 컷으로 돌아오면 앞으로 스크롤
 
 
@@ -1258,9 +1258,13 @@ def test_overlay_sections_collapse_and_remember(qapp, win):
     oe = win.story_panel.overlay_editor
     assert oe.sec_title.body.isVisibleTo(oe) and not oe.sec_look.body.isVisibleTo(oe)  # '표시' 는 접힌 채 시작
     oe.sec_title.head.click()
-    assert not oe.sec_title.body.isVisibleTo(oe) and win.settings.get("overlay_section_title") is False
+    assert not oe.sec_title.is_open() and win.settings.get("overlay_section_title") is False  # 상태는 즉시
+    pump(qapp, 400)  # 접히는 애니메이션이 끝나면 내용이 숨는다
+    assert not oe.sec_title.body.isVisibleTo(oe)
     oe.sec_title.head.click()
     assert oe.sec_title.body.isVisibleTo(oe)
+    pump(qapp, 400)
+    assert oe.sec_title.body.maximumHeight() > 10000  # 펼친 뒤에는 높이 제한이 풀린다
 
 
 def test_editor_window_ticks_progress_while_building(qapp, prores_2398, tmp_path):
@@ -1345,7 +1349,7 @@ def test_cut_strip_does_not_jump_on_split_or_merge(qapp, win):
     p.import_cuts([(i * 4, i * 4 + 4, str(i), {}) for i in range(60)], {"file": "x"})
     win._refresh()
     win.goto(30 * 4 + 1)
-    pump(qapp, 200)
+    pump(qapp, 450)  # 가운데로 미끄러지는 애니메이션이 끝날 때까지
     sb = win.cut_strip.horizontalScrollBar()
     assert sb.value() > 0
     trace = []
@@ -1394,6 +1398,81 @@ def test_window_has_no_native_title_bar_and_own_window_buttons(qapp, win):
     frameless.toggle_max(win)
     pump(qapp, 100)
     if win.isMaximized():  # 최대화하면 가장자리 여백 없음, 버튼 모양 바뀜
-        assert root.layout().contentsMargins().left() == 0 and win._win_max_btn.text() == "❐"
+        assert root.layout().contentsMargins().left() == 0 and win._win_max_btn.toolTip() == "이전 크기로"
         frameless.toggle_max(win)
         pump(qapp, 100)
+
+
+def test_tab_switch_changes_state_at_once_and_animates_over_it(qapp, win):
+    """탭 전환: 상태(보이는 패널)는 즉시 바뀌고, 위에 덮인 전환 그림은 잠시 뒤 사라진다. 탭 표시는 미끄러져 옮겨 간다."""
+    from ics.ui import motion
+
+    win.nav_btns["feed"].click()
+    assert win.tab == "feed" and win.inspector.currentIndex() == 2  # 기다리지 않아도 이미 FEED
+    covers = [c for c in win.inspector.findChildren(motion._Cover) if c.isVisible()]
+    assert covers and covers[0].testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)  # 클릭은 통과
+    tabs = win.nav_tabs
+    pump(qapp, 600)
+    assert not [c for c in win.inspector.findChildren(motion._Cover) if c.isVisible()]
+    assert tabs.current() == "feed" and tabs._ind == tabs._target("feed")
+    # 빠르게 연달아 바꿔도 마지막 상태가 맞다
+    for k in ("story", "credits", "reels"):
+        win.nav_btns[k].click()
+    assert win.tab == "reels" and win.pages.currentIndex() == 0 and win.inspector.currentIndex() == 1
+    pump(qapp, 600)
+    assert not win.pages.findChildren(motion._Cover) or not any(
+        c.isVisible() for c in win.pages.findChildren(motion._Cover)
+    )
+
+
+def test_reduced_motion_switches_without_overlays(qapp, win):
+    from ics.ui import motion
+
+    motion.set_enabled(False)
+    try:
+        win.nav_btns["feed"].click()
+        assert not [c for c in win.inspector.findChildren(motion._Cover) if c.isVisible()]
+        oe = win.story_panel.overlay_editor
+        oe.sec_title.head.click()
+        assert not oe.sec_title.body.isVisibleTo(oe)  # 애니메이션이 꺼져 있으면 바로 접힌다
+        oe.sec_title.head.click()
+    finally:
+        motion.set_enabled(True)
+
+
+def test_toast_slides_in_and_fades_out(qapp, win):
+    win.toast("테스트 알림", 200)
+    assert win.toast_lbl.isVisible() and win.toast_lbl.text() == "테스트 알림"
+    pump(qapp, 700)
+    assert not win.toast_lbl.isVisible()
+
+
+def test_every_icon_used_in_the_ui_exists():
+    """코드에서 쓰는 아이콘 이름이 모두 assets/icons 에 있어야 한다 (빠지면 빈 단추가 된다)."""
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    names = set()
+    for f in (root / "ics" / "ui").glob("*.py"):
+        src = f.read_text(encoding="utf-8")
+        names |= set(re.findall(r'(?:icons\.icon|icons\.pixmap|icon_button|menu_button)\(\s*"([a-z0-9-]+)"', src))
+        names |= set(re.findall(r'self\._(?:btn|toggle)\(\s*"([a-z0-9-]+)"', src))
+        names |= set(re.findall(r'\("(?:story|reels|feed|credits)", "[A-Z]+", "([a-z0-9-]+)"', src))
+    assert len(names) > 20
+    missing = sorted(n for n in names if not (root / "assets" / "icons" / f"{n}.svg").is_file())
+    assert missing == []
+
+
+def test_dialogs_use_the_app_title_bar(qapp, win):
+    from ics.ui.dialogs import ShortcutsDialog
+
+    d = ShortcutsDialog(win.settings, win)
+    d.show()
+    pump(qapp, 100)
+    assert d.windowFlags() & Qt.WindowType.FramelessWindowHint
+    assert d._chrome.title.text() == d.windowTitle()
+    assert d.layout().contentsMargins().top() >= 42  # 제목 줄 높이만큼 내용이 내려간다
+    d._chrome.close_btn.click()
+    pump(qapp, 50)
+    assert not d.isVisible()
