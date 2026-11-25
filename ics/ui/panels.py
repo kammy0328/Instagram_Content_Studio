@@ -237,7 +237,8 @@ class LayoutEditor(QGroupBox):
     changed = Signal(object)  # LayoutParams
     committed = Signal(object)
     cropRequested = Signal(bool)  # True: 다시 감지, False: 기존 원본 감지 결과 재사용 가능
-    reframeRequested = Signal()  # 인물 기준 자동 맞춤 (컷별 가로 위치)
+    reframeRequested = Signal()  # 인물 기준 자동 맞춤: 구간 안 모든 컷 (컷마다 따로 위치)
+    reframeSomeRequested = Signal()  # 선택한 컷(없으면 지금 컷)만 자동 맞춤
     reframeReset = Signal()
 
     def __init__(self, title="화면 배치", reframe: bool = False):
@@ -301,13 +302,18 @@ class LayoutEditor(QGroupBox):
         rv.setSpacing(4)
         rr = QHBoxLayout()
         rr.setSpacing(6)
-        self.reframe_btn = QPushButton("인물 기준 자동 맞춤")
+        self.reframe_btn = QPushButton("전체 컷 자동 맞춤")
         self.reframe_btn.setToolTip(
-            "컷마다 인물이 평균적으로 가장 많이 보이는 가로 위치로 맞춥니다.\n"
-            "컷 안에서 움직이지 않고(키프레임 없음), 세로 위치와 확대는 그대로입니다. 인물이 없는 컷은 바꾸지 않습니다."
+            "영상 전체의 모든 컷을 한 번에 분석해(구간 밖 포함), 컷마다 인물이 가장 잘 보이는 가로 위치로 맞춥니다.\n"
+            "인물이 컷 안에서 움직이면 움직인 경로의 평균 위치를 가운데로 둡니다. 여러 명이면 여러 명이 모인 쪽.\n"
+            "컷 안에서 크롭이 움직이지는 않고(키프레임 없음), 세로 위치와 확대는 그대로입니다. 인물이 없는 컷은 바꾸지 않습니다."
         )
         self.reframe_btn.clicked.connect(self.reframeRequested.emit)
         rr.addWidget(self.reframe_btn, 1)
+        self.reframe_some_btn = QPushButton("지금 컷만")
+        self.reframe_some_btn.setToolTip("재생 헤드가 있는 컷만 (컷을 선택했으면 선택한 컷만) 자동으로 맞춥니다")
+        self.reframe_some_btn.clicked.connect(self.reframeSomeRequested.emit)
+        rr.addWidget(self.reframe_some_btn)
         self.reframe_reset = QPushButton("초기화")
         self.reframe_reset.setObjectName("link")
         self.reframe_reset.setToolTip("모든 컷의 가로 위치를 가운데로 되돌립니다")
@@ -395,7 +401,14 @@ class LayoutEditor(QGroupBox):
     def set_reframe_status(self, text: str, busy: bool = False) -> None:
         self.reframe_info.setText(text or "미리보기를 좌우로 끌면 지금 컷만 옮겨집니다")
         self.reframe_btn.setEnabled(not busy)
-        self.reframe_btn.setText("분석 중…" if busy else "인물 기준 자동 맞춤")
+        self.reframe_some_btn.setEnabled(not busy)
+        self.reframe_btn.setText("분석 중…" if busy else "전체 컷 자동 맞춤")
+        self._busy = busy
+
+    def set_reframe_target(self, n_selected: int) -> None:
+        self.reframe_some_btn.setText(
+            f"선택 컷 {n_selected}" if n_selected > 1 else ("선택 컷" if n_selected else "지금 컷만")
+        )
 
     def set_info(self, text: str, tip: str = "") -> None:
         self.info.setText(text)
@@ -474,6 +487,7 @@ class SelectionPanel(QWidget):
         self._in = self._out = 0
 
     def set_cuts_selected(self, n: int) -> None:
+        self.layout_editor.set_reframe_target(n)
         self.cuts_btn.setEnabled(n > 0)
         self.cuts_btn.setText(f"선택 컷 {n}" if n > 1 else "선택 컷")
 
@@ -545,9 +559,14 @@ class SelectionPanel(QWidget):
             b.blockSignals(False)
         self.layout_editor.set_value(sel.layout)
         if self.layout_editor.reframe_btn.isEnabled():  # 분석 중이 아니면 현재 상태를 보여 준다
-            n = len(sel.cut_x)
+            src = list(sel.cut_x_src.values())
+            parts = [
+                f"{name} {src.count(k)}"
+                for k, name in (("auto", "자동"), ("manual", "수동"), ("none", "인물 없음"))
+                if src.count(k)
+            ]
             self.layout_editor.set_reframe_status(
-                f"컷 {n}개에 가로 위치 지정됨 · 미리보기를 좌우로 끌면 지금 컷만 옮겨집니다" if n else ""
+                ("컷 " + " · ".join(parts) + " (컷 목록에 표시) · 미리보기를 좌우로 끌면 지금 컷만") if parts else ""
             )
         if p.media:
             g = compute_geometry(p.media.display_w, p.media.display_h, "916", sel.layout)

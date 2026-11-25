@@ -145,3 +145,16 @@ def test_planner_passes_cut_steps_to_the_job(prores_2398, tmp_path):
     p.set_cut_x("reels", {0: 1.0, 40: 1.0}, replace_all=True)  # 위치가 하나뿐이면 고정 크롭
     job = next(j for j in plan_render(p, sections={"reels"}).jobs if j.kind == "reels")
     assert "x_steps" not in job.params and job.params["geo"]["crop_x"] == g1.crop_x
+
+
+def test_person_moving_within_a_cut_is_centered_on_the_average_position():
+    # 폭 1000, 창 300. 한 사람이 컷 동안 왼쪽(100)에서 오른쪽(700)으로 걸어간다 -> 경로 평균(450) 가운데
+    frames = [[R.Det(x, 0, x + 100, 100, 0.5)] for x in (100, 250, 400, 550, 700)]
+    px = R.best_window_x(frames, 0, 1000, 300)
+    assert abs((px * 700 + 150) - 450) < 15
+
+
+def test_moving_group_follows_the_group_average():
+    frames = [[R.Det(x, 0, x + 60, 100, 0.5), R.Det(x + 90, 0, x + 150, 100, 0.5)] for x in (200, 300, 400)]
+    px = R.best_window_x(frames, 0, 1000, 300)
+    assert abs((px * 700 + 150) - (300 + 75)) < 15  # 무리 가운데(경로 평균)

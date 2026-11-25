@@ -88,37 +88,59 @@ FACE_WEIGHT = 1.6  # 얼굴이 몸보다 중요하다 (몸이 잘려도 얼굴�
 SCORE_TOLERANCE = 0.97  # 최고 점수의 이 비율 안이면 같은 노출로 보고, 그중 인물 무리 가운데에 가장 가까운 위치
 
 
-def best_window_x(frames: Sequence[Sequence[Det]], lo: float, hi: float, win_w: float, steps: int = 96) -> float | None:
-    """창 [x, x+win_w] 의 x 를 [lo, hi-win_w] 에서 고른다: 모든 표본 프레임에 대해 '창 안에 보이는 인물 폭 비율 × 가중치'
-    의 합이 가장 큰 위치. 인물이 하나도 없으면 None (위치를 바꾸지 않음). 반환: 0..1 위치 (pos_x)."""
-    span = hi - lo - win_w
-    dets = [d for fr in frames for d in fr if d.x2 > d.x1]
-    if not dets:
-        return None
-    if span <= 0.5:
-        return 0.5
+def _window_scores(dets: Sequence[Det], xs: np.ndarray, win_w: float):
     x1 = np.array([d.x1 for d in dets])
     x2 = np.array([d.x2 for d in dets])
     w = np.array([d.weight for d in dets])
-    xs = lo + np.linspace(0.0, span, steps + 1)
     ov = np.clip(np.minimum(x2[None, :], xs[:, None] + win_w) - np.maximum(x1[None, :], xs[:, None]), 0, None)
     cover = ov / (x2 - x1)[None, :]
-    score = (cover * w[None, :]).sum(axis=1)
+    return (cover * w[None, :]).sum(axis=1), cover * w[None, :], (x1 + x2) / 2
+
+
+def _subject_centers(dets: Sequence[Det], xs: np.ndarray, win_w: float) -> list[tuple[float, float]]:
+    """노출이 최고(허용 오차 안)인 창들이 담는 인물 무리의 가중 중심 목록 [(중심, 점수)]."""
+    score, cw, cx = _window_scores(dets, xs, win_w)
     if score.max() <= 1e-9:
+        return []
+    out = []
+    for i in np.where(score >= score.max() * SCORE_TOLERANCE)[0]:
+        if cw[i].sum() > 0:
+            out.append((float((cx * cw[i]).sum() / cw[i].sum()), float(score[i])))
+    return out
+
+
+def best_window_x(frames: Sequence[Sequence[Det]], lo: float, hi: float, win_w: float, steps: int = 96) -> float | None:
+    """창 [x, x+win_w] 의 x 를 [lo, hi-win_w] 에서 고른다.
+
+    1) 컷 전체로 보아 인물이 가장 많이 보이는 쪽(여러 명이면 여러 명이 모인 쪽)을 정한다.
+    2) 표본 프레임마다 그쪽 인물(무리)의 가운데를 구한다. 같은 노출의 후보가 여럿이면 1) 에 가까운 쪽.
+    3) 프레임별 가운데의 평균에 창 가운데를 맞춘다: 인물이 컷 안에서 움직이면 움직인 경로의 평균 위치가 가운데가 된다.
+    인물이 하나도 없으면 None (위치를 바꾸지 않음). 반환: 0..1 위치 (pos_x)."""
+    span = hi - lo - win_w
+    allp = [d for fr in frames for d in fr if d.x2 > d.x1]
+    if not allp:
         return None
-    good = np.where(score >= score.max() * SCORE_TOLERANCE)[0]
-    # 같은 노출이면 창 가운데가 '보이는 인물들의 가중 중심' 에 가장 가까운 위치 (인물을 화면 가운데로)
-    best, best_d = int(good[0]), math.inf
-    cx = (x1 + x2) / 2
-    for i in good:
-        cw = cover[i] * w
-        if cw.sum() <= 0:
+    if span <= 0.5:
+        return 0.5
+    xs = lo + np.linspace(0.0, span, steps + 1)
+    # 1) 컷 전체 기준 (프레임마다 따로 보지 않고 합친 노출)
+    cands = _subject_centers(allp, xs, win_w)
+    if not cands:
+        return None
+    g = cands[int(np.argmax([c[1] for c in cands]))][0]
+    # 2) 프레임별 인물 가운데
+    centers = []
+    for fr in frames:
+        fr = [d for d in fr if d.x2 > d.x1]
+        if not fr:
             continue
-        center = float((cx * cw).sum() / cw.sum())
-        d = abs(xs[i] + win_w / 2 - center)
-        if d < best_d:
-            best, best_d = int(i), d
-    return float((xs[best] - lo) / span)
+        cs = _subject_centers(fr, xs, win_w)
+        if cs:
+            centers.append(min((c[0] for c in cs), key=lambda c: abs(c - g)))
+    center = float(np.mean(centers)) if centers else g
+    # 3) 평균 위치를 창 가운데로
+    x = min(max(center - win_w / 2, lo), lo + span)
+    return float((x - lo) / span)
 
 
 # ====================================================================== 인물 / 얼굴 검출
@@ -236,9 +258,9 @@ class PersonDetector:
 
 # ====================================================================== 분석 (원본 디코딩 + 검출)
 ANALYSIS_WIDTH = 640  # 검출용 축소 폭 (얼굴이 작아도 잡히고, 디코딩이 빠른 크기)
-SAMPLES_PER_SEC = 2.0
-MIN_SAMPLES, MAX_SAMPLES = 2, 6  # 컷 하나당 표본 수
-MAX_TOTAL_SAMPLES = 240
+SAMPLES_PER_SEC = 3.0
+MIN_SAMPLES, MAX_SAMPLES = 3, 8  # 컷 하나당 표본 수 (인물 이동을 평균하려면 고르게 여러 장)
+MAX_TOTAL_SAMPLES = 320
 
 
 def sample_frames(seg: Segment, fps: float, budget_scale: float = 1.0) -> list[int]:
