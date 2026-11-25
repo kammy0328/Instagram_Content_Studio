@@ -1206,7 +1206,7 @@ def test_auto_reframe_covers_cuts_outside_the_range(qapp, win, monkeypatch):
     assert win._cut_reframe_info(200, 240) is not None  # 구간 밖 컷도 컷 목록에 표시
 
 
-def test_reframe_after_xml_option_runs_story_then_reels(qapp, win, monkeypatch):
+def test_reframe_after_xml_option_runs_once_for_both(qapp, win, monkeypatch):
     from pathlib import Path
 
     from ics.core import reframe
@@ -1222,7 +1222,7 @@ def test_reframe_after_xml_option_runs_story_then_reels(qapp, win, monkeypatch):
     win.reframe_after_xml_action.setChecked(True)
     assert win.settings.get("reframe_after_xml") is True
     win.import_xml_file(xml)
-    assert _wait(qapp, lambda: len(runs) == 2 and win.project.state.reels.cut_x, 10)
+    assert _wait(qapp, lambda: len(runs) == 1 and win.project.state.reels.cut_x, 10)
     assert win.project.state.story.cut_x == {0: 0.2} and win.project.state.reels.cut_x == {0: 0.2}
     win.reframe_after_xml_action.setChecked(False)
 
@@ -1314,3 +1314,27 @@ def test_cut_scrubber_scrubs_only_inside_the_selected_cut(qapp, win):
     win._set_cut_selection([cs[1].id, cs[2].id])
     assert (sc.start, sc.end, sc.label) == (50, 200, "#2–3")
     sc.grab()
+
+
+def test_story_and_reels_share_the_cut_positions(qapp, win, monkeypatch):
+    from pathlib import Path
+
+    from ics.core import reframe
+
+    win.import_xml_file(str(Path(__file__).parent / "data" / "sample_premiere.xml"))
+    win.project.set_selection_layout("story", LayoutParams("fill"))
+    win.project.set_selection_layout("reels", LayoutParams("fill"))
+    monkeypatch.setattr(reframe, "analyze", lambda *a, **k: {0: 0.1, 50: 0.9})
+    win.set_tab("story")
+    win.story_panel.layout_editor.reframe_btn.click()
+    assert _wait(qapp, lambda: win.project.state.story.cut_x, 10)
+    st, rl = win.project.state.story, win.project.state.reels
+    assert rl.cut_x == st.cut_x == {0: 0.1, 50: 0.9} and rl.cut_x_src == st.cut_x_src
+    win.set_tab("reels")
+    assert win._cut_reframe_info(0, 50)[0] == "auto"  # REELS 컷 목록에도 '자동' 표시
+    win.project.set_cut_x("reels", {50: 0.4})  # REELS 에서 드래그해도 STORY 에 반영
+    assert win.project.state.story.cut_x[50] == 0.4 and win.project.state.story.cut_x_src[50] == "manual"
+    win.project.clear_cut_x("story")
+    assert win.project.state.reels.cut_x == {}
+    win.do_undo()  # 한 번에 되돌림
+    assert win.project.state.story.cut_x[50] == 0.4 and win.project.state.reels.cut_x[50] == 0.4
