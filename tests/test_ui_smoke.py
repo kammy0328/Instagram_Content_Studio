@@ -14,6 +14,8 @@ from PySide6.QtCore import QPoint, Qt  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
+from ics.core.layout import LayoutParams  # noqa: E402
+
 
 @pytest.fixture(scope="session")
 def qapp():
@@ -1043,3 +1045,66 @@ def test_select_cuts_chip_sets_the_range(qapp, win):
     win.story_panel.cuts_btn.click()
     st = win.project.state.story
     assert (st.start, st.end) == (cs[1].start, cs[2].end)
+
+
+def test_auto_reframe_sets_per_cut_positions_and_preview_follows(qapp, win, monkeypatch):
+    from pathlib import Path
+
+    from ics.core import reframe
+
+    win.import_xml_file(str(Path(__file__).parent / "data" / "sample_premiere.xml"))
+    win.set_tab("story")
+    win.goto(0)
+    win.project.set_range("story", 0, 240)
+    win.project.set_selection_layout("story", LayoutParams("fit"))
+    monkeypatch.setattr(reframe, "analyze", lambda *a, **k: {0: 0.0, 50: 1.0})
+    win.story_panel.layout_editor.reframe_btn.click()
+    assert _wait(qapp, lambda: win.project.state.story.cut_x == {0: 0.0, 50: 1.0}, 10)
+    assert win.project.state.story.layout.mode == "fill"  # 자동 맞춤은 Fill 9:16 에서 동작
+    win.goto(10)
+    pump(qapp, 300)
+    assert win.preview.layout.pos_x == 0.0
+    win.goto(60)
+    pump(qapp, 300)
+    assert win.preview.layout.pos_x == 1.0
+    win.do_undo()  # 실행 취소로 되돌린다
+    assert win.project.state.story.cut_x == {}
+
+
+def test_preview_drag_moves_only_the_current_cut_horizontally(qapp, win):
+    from pathlib import Path
+
+    from PySide6.QtCore import QPoint
+
+    win.import_xml_file(str(Path(__file__).parent / "data" / "sample_premiere.xml"))
+    win.set_tab("reels")
+    win.project.set_range("reels", 0, 240)
+    win.project.set_selection_layout("reels", LayoutParams("fill", pos_y=0.5))
+    win.goto(60)  # 두 번째 컷 (50~120)
+    pump(qapp, 300)
+    pv = win.preview
+    c = pv.rect().center()
+    QTest.mousePress(pv, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, c)
+    QTest.mouseMove(pv, c + QPoint(-60, 40))
+    QTest.mouseRelease(pv, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, c + QPoint(-60, 40))
+    pump(qapp, 50)
+    sel = win.project.state.reels
+    assert set(sel.cut_x) == {50} and sel.cut_x[50] > 0.5  # 왼쪽으로 끌면 화면이 오른쪽 부분을 보인다
+    assert sel.layout.pos_y == 0.5 and sel.layout.zoom == 1.0  # 세로/확대는 그대로
+    win.reels_panel.layout_editor.reframe_reset.click()
+    assert win.project.state.reels.cut_x == {}
+
+
+def test_preview_drag_does_nothing_in_fit(qapp, win):
+    from PySide6.QtCore import QPoint
+
+    win.set_tab("story")
+    win.project.set_range("story", 0, 100)
+    win.project.set_selection_layout("story", LayoutParams("fit"))
+    pump(qapp, 100)
+    pv = win.preview
+    c = pv.rect().center()
+    QTest.mousePress(pv, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, c)
+    QTest.mouseMove(pv, c + QPoint(-80, 0))
+    QTest.mouseRelease(pv, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, c + QPoint(-80, 0))
+    assert win.project.state.story.cut_x == {}

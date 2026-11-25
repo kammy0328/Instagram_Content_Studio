@@ -312,6 +312,41 @@ def _check_publisher(work: Path) -> str:
     return f"모듈 로드 OK, 비밀값 보관({'DPAPI' if sec.persistent else '메모리'}), 수동 내보내기 {len(files)}개"
 
 
+def _check_reframe(work: Path) -> str:
+    """배포본에 OpenCV 와 인물/얼굴 모델이 들어 있고, 크롭 위치가 컷마다 바뀌어 출력되는지."""
+    import numpy as np
+
+    from .core import ffbin, frameindex, media, reframe
+    from .core.layout import LayoutParams, compute_geometry
+    from .render import engine
+
+    det = reframe.PersonDetector()
+    if det.detect(np.zeros((360, 640, 3), np.uint8)):
+        raise RuntimeError("빈 화면에서 인물이 검출되었습니다.")
+    src = work / "reframe.mp4"
+    p = ffbin.run([
+        ffbin.ffmpeg(), "-v", "error", "-y", "-f", "lavfi", "-i",
+        "color=c=black:s=320x180:r=24:d=1,drawbox=x=0:y=0:w=8:h=180:c=white:t=fill",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", str(src),
+    ], timeout=60)  # fmt: skip
+    if p.returncode:
+        raise RuntimeError("리프레이밍 테스트 영상 생성 실패")
+    info = media.analyze(str(src))
+    idx = frameindex.build_frame_index(info)
+    g = compute_geometry(320, 180, "916", LayoutParams("fill"))
+    out = work / "reframe_out.mp4"
+    engine.render_video(info, idx, engine.VideoSpec(0, 12, g, x_steps=[(0, 0), (6, 320 - g.crop_w)]), str(out))
+    from .core.decode import decode_frame_rgb
+
+    oi = media.analyze(str(out))
+    oix = frameindex.build_frame_index(oi)
+    a = decode_frame_rgb(oi, oix, 2)[0]
+    b = decode_frame_rgb(oi, oix, 9)[0]
+    if not (a[:, :3].mean() > 150 and b[:, :3].mean() < 60):
+        raise RuntimeError("컷별 가로 크롭이 출력에 반영되지 않았습니다.")
+    return "OpenCV/모델 로드, 컷 경계에서 가로 크롭 전환 통과"
+
+
 def run_selftest(outfile: str | None = None) -> int:
     target = Path(outfile) if outfile else Path(tempfile.gettempdir()) / "ics_selftest.txt"
     rep = _Report(target)
@@ -336,6 +371,7 @@ def run_selftest(outfile: str | None = None) -> int:
         rep.run("Qt 로드와 플랫폼 플러그인", _check_qt)
         rep.run("영상 생성 -> 분석 -> 렌더 -> 편집 창", lambda: _check_pipeline(work, pump))
         rep.run("검정 띠 감지와 자동 크롭 출력", lambda: _check_letterbox(work))
+        rep.run("인물 기준 자동 맞춤: 모델 로드와 컷별 크롭", lambda: _check_reframe(work))
         rep.run("소리: 재생용 WAV 생성과 출력 장치", lambda: _check_audio(work, pump))
         rep.run("Publisher: 모듈/비밀값 보관/수동 내보내기", lambda: _check_publisher(work))
     except Exception:  # noqa: BLE001

@@ -38,6 +38,7 @@ class VideoSpec:
     fps_out: Fraction | None = None
     overlay_png: str | None = None  # 캔버스 크기 투명 PNG (STORY 로고/제목). 여백(배경) 위에만 그려져 있다
     bg_dim: int | None = None  # 값이 있으면 여백을 흐린 영상 배경으로 채우고 이만큼(%) 어둡게 한다
+    x_steps: list[tuple[int, int]] | None = None  # Fill: 컷별 가로 크롭 위치 [(구간 시작 기준 프레임, 표시 좌표 x)]
 
 
 def _assert_original(info: MediaInfo, src: str) -> None:
@@ -77,6 +78,7 @@ def build_video_cmd(
         fps_out if (not index.is_cfr or fps_out != index.fps) else None,
         overlay=use_ov,
         bg_dim=spec.bg_dim,
+        x_steps=spec.x_steps,
     )
     enc = filters.x264_params(spec.geo, fps_out)
     af, aargs = filters.audio_filter_and_args(info, a_off, dur)

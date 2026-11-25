@@ -11,6 +11,9 @@ Instagram Content Studio 는 아래 소프트웨어를 사용합니다. 배포 �
 | NumPy | 배열 처리 | BSD 3-Clause |
 | regex | 유니코드 글자 단위 계산 | Apache 2.0 |
 | SQLite | 프로젝트 저장 | Public Domain |
+| OpenCV (opencv-python-headless) | 인물/얼굴 검출 실행 (DNN) | Apache 2.0 |
+| NanoDet-Plus 모델 (OpenCV Zoo `object_detection_nanodet_2022nov.onnx`) | STORY/REELS 인물 기준 자동 맞춤: 인물 검출 | Apache 2.0 |
+| YuNet 모델 (OpenCV Zoo `face_detection_yunet_2023mar.onnx`) | STORY/REELS 인물 기준 자동 맞춤: 얼굴 검출 | MIT (Copyright (c) 2020 Shiqi Yu) |
 
 ## FFmpeg / x264 (GPL) 배포 시 유의 사항
 
@@ -25,3 +28,11 @@ Instagram Content Studio 는 아래 소프트웨어를 사용합니다. 배포 �
 ## PySide6 (LGPL 3)
 
 - PyInstaller 로 묶은 폴더 배포(onedir) 방식을 사용하므로 Qt 라이브러리를 사용자가 교체할 수 있습니다.
+
+## 인물 검출 모델 (assets/models)
+
+- 출처: https://github.com/opencv/opencv_zoo (models/object_detection_nanodet, models/face_detection_yunet). 파일은 수정 없이
+  그대로 포함합니다. 라이선스 전문은 `LICENSES/NANODET_LICENSE.txt` (Apache 2.0), `LICENSES/YUNET_LICENSE.txt` (MIT).
+- SHA-256: nanodet `4b82da9944b88577175ee23a459dce2e26e6e4be573def65b1055dc2d9720186`,
+  yunet `8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4`.
+- 실행 중 네트워크를 쓰지 않습니다 (모델은 설치 폴더에 포함).

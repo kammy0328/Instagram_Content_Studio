@@ -237,9 +237,12 @@ class LayoutEditor(QGroupBox):
     changed = Signal(object)  # LayoutParams
     committed = Signal(object)
     cropRequested = Signal(bool)  # True: 다시 감지, False: 기존 원본 감지 결과 재사용 가능
+    reframeRequested = Signal()  # 인물 기준 자동 맞춤 (컷별 가로 위치)
+    reframeReset = Signal()
 
-    def __init__(self, title="화면 배치"):
+    def __init__(self, title="화면 배치", reframe: bool = False):
         super().__init__(title)
+        self._has_reframe = reframe
         v = QVBoxLayout(self)
         v.setSpacing(8)
         # Fit / Fill 은 두 칸짜리 세그먼트 버튼
@@ -291,6 +294,32 @@ class LayoutEditor(QGroupBox):
         self.info.setObjectName("hint")
         self.info.setWordWrap(True)
         v.addWidget(self.info)
+        # ---- Fill 9:16: 컷별 가로 위치 (인물 자동 맞춤 + 미리보기 좌우 드래그)
+        self.reframe_box = QWidget()
+        rv = QVBoxLayout(self.reframe_box)
+        rv.setContentsMargins(0, 4, 0, 0)
+        rv.setSpacing(4)
+        rr = QHBoxLayout()
+        rr.setSpacing(6)
+        self.reframe_btn = QPushButton("인물 기준 자동 맞춤")
+        self.reframe_btn.setToolTip(
+            "컷마다 인물이 평균적으로 가장 많이 보이는 가로 위치로 맞춥니다.\n"
+            "컷 안에서 움직이지 않고(키프레임 없음), 세로 위치와 확대는 그대로입니다. 인물이 없는 컷은 바꾸지 않습니다."
+        )
+        self.reframe_btn.clicked.connect(self.reframeRequested.emit)
+        rr.addWidget(self.reframe_btn, 1)
+        self.reframe_reset = QPushButton("초기화")
+        self.reframe_reset.setObjectName("link")
+        self.reframe_reset.setToolTip("모든 컷의 가로 위치를 가운데로 되돌립니다")
+        self.reframe_reset.clicked.connect(self.reframeReset.emit)
+        rr.addWidget(self.reframe_reset)
+        rv.addLayout(rr)
+        self.reframe_info = QLabel("미리보기를 좌우로 끌면 지금 컷만 옮겨집니다")
+        self.reframe_info.setObjectName("hint")
+        self.reframe_info.setWordWrap(True)
+        rv.addWidget(self.reframe_info)
+        v.addWidget(self.reframe_box)
+        self.reframe_box.setVisible(False)
         self._block = False
         self._crop_busy = False
         self.auto_crop.toggled.connect(self._crop_toggled)
@@ -299,6 +328,7 @@ class LayoutEditor(QGroupBox):
         self.py.valueChanged.connect(self._emit)
         self.py.sliderReleased.connect(lambda: self.committed.emit(self.value()))
         self.r_fit.toggled.connect(self._sync_enabled)
+        self.r_fill.toggled.connect(lambda on: self.reframe_box.setVisible(self._has_reframe and on))
         self._sync_enabled()
 
     def _sync_enabled(self):
@@ -346,6 +376,7 @@ class LayoutEditor(QGroupBox):
         self.crop_info.setText(txt)
         self.crop_info.setVisible(bool(txt))
         (self.r_fill if lp.mode == "fill" else self.r_fit).setChecked(True)
+        self.reframe_box.setVisible(self._has_reframe and lp.mode == "fill")
         self.py.setValue(int(round(lp.pos_y * 100)))
         self._sync_enabled()
         self._block = False
@@ -360,6 +391,11 @@ class LayoutEditor(QGroupBox):
     def _emit(self, *_):
         if not self._block:
             self.changed.emit(self.value())
+
+    def set_reframe_status(self, text: str, busy: bool = False) -> None:
+        self.reframe_info.setText(text or "미리보기를 좌우로 끌면 지금 컷만 옮겨집니다")
+        self.reframe_btn.setEnabled(not busy)
+        self.reframe_btn.setText("분석 중…" if busy else "인물 기준 자동 맞춤")
 
     def set_info(self, text: str, tip: str = "") -> None:
         self.info.setText(text)
@@ -421,7 +457,7 @@ class SelectionPanel(QWidget):
         self.len_lbl.setObjectName("hint")
         gl.addWidget(self.len_lbl)
         v.addWidget(g)
-        self.layout_editor = LayoutEditor()
+        self.layout_editor = LayoutEditor(reframe=True)
         self.layout_editor.changed.connect(self.layoutLive.emit)
         self.layout_editor.committed.connect(self.layoutCommit.emit)
         v.addWidget(self.layout_editor)
@@ -508,6 +544,11 @@ class SelectionPanel(QWidget):
             b.setChecked(sel.enabled and sel.preset == k)
             b.blockSignals(False)
         self.layout_editor.set_value(sel.layout)
+        if self.layout_editor.reframe_btn.isEnabled():  # 분석 중이 아니면 현재 상태를 보여 준다
+            n = len(sel.cut_x)
+            self.layout_editor.set_reframe_status(
+                f"컷 {n}개에 가로 위치 지정됨 · 미리보기를 좌우로 끌면 지금 컷만 옮겨집니다" if n else ""
+            )
         if p.media:
             g = compute_geometry(p.media.display_w, p.media.display_h, "916", sel.layout)
             self.layout_editor.set_info(f"출력 {g.canvas_w}×{g.canvas_h}", g.tier_note)

@@ -23,11 +23,24 @@ def output_fps(info: MediaInfo, vfr_avg: Fraction | None = None) -> Fraction:
     return f
 
 
-def crop_filter(info: MediaInfo, geo: Geometry) -> str:
-    """지오메트리의 크롭 창(표시 좌표)을 코딩 좌표 crop 필터로 환산한다. 크롭 후 한 번에 스케일해 이중 리샘플링을 피한다."""
+def crop_filter(info: MediaInfo, geo: Geometry, x_steps: list[tuple[int, int]] | None = None) -> str:
+    """지오메트리의 크롭 창(표시 좌표)을 코딩 좌표 crop 필터로 환산한다. 크롭 후 한 번에 스케일해 이중 리샘플링을 피한다.
+    x_steps=[(시작 프레임 오프셋, 표시 좌표 x), ...] 이면 컷마다 가로 위치가 바뀐다 (n = 구간 첫 프레임부터 센 원본 프레임 번호).
+    키프레임 이동이 아니라 컷 경계에서 바로 바뀐다."""
     gw = info.width if info.rotation not in (90, 270) else info.height
     sx = gw / info.display_w
     cw = max(2, int(round(geo.crop_w * sx)))
+
+    def code_x(x: int) -> int:
+        cx = int(round(x * sx))
+        cx -= cx % 2
+        return max(0, min(cx, gw - cw))
+
+    if x_steps and len(x_steps) > 1:
+        expr = str(code_x(x_steps[-1][1]))
+        for (_n_from, _x), (n_next, _) in reversed(list(zip(x_steps[:-1], x_steps[1:]))):
+            expr = f"if(lt(n,{n_next}),{code_x(_x)},{expr})"
+        return f"crop={cw}:{geo.crop_h}:'{expr}':{geo.crop_y}"
     cx = int(round(geo.crop_x * sx))
     if cx + cw > gw:
         cw = gw - cx
@@ -96,6 +109,7 @@ def video_filter(
     pix_fmt: str = "yuv420p",
     overlay: bool = False,
     bg_dim: int | None = None,
+    x_steps: list[tuple[int, int]] | None = None,
 ) -> str:
     """원본 디코딩 프레임 -> (디인터레이스) -> [크롭] -> 스케일(+색변환, 디더) -> pad(검정) -> setsar=1.
     overlay 또는 배경(bg_dim) 이 있으면 filter_complex 문자열을 돌려준다: 입력 1 번(투명 PNG)을 캔버스 전체에 합성하고
@@ -106,7 +120,7 @@ def video_filter(
     if geo.mode == "fill":
         # 크롭 좌표는 표시(SAR 반영) 좌표계 -> 먼저 표시 크기로 정사각 픽셀화 후 크롭하면 이중 리샘플링이 되므로,
         # 코딩 좌표로 환산해 크롭 후 한 번에 스케일한다.
-        parts.append(crop_filter(info, geo))
+        parts.append(crop_filter(info, geo, x_steps))
         parts.append(f"scale={geo.canvas_w}:{geo.canvas_h}:{scale_opts}")
         parts.append(f"format={pix_fmt}")
     else:

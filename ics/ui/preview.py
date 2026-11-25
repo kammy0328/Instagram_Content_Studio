@@ -15,6 +15,8 @@ class PreviewWidget(QWidget):
     dragStarted = Signal()
     dragFinished = Signal()
     clicked = Signal()
+    hDragged = Signal(float)  # Fill 9:16: 끌고 있는 동안의 가로 위치 (0..1)
+    hDragFinished = Signal(float)
 
     def __init__(self):
         super().__init__()
@@ -30,6 +32,8 @@ class PreviewWidget(QWidget):
         self.label = ""
         self.overlay_img: QImage | None = None  # 출력 보기에서 캔버스 위에 겹쳐 그리는 오버레이 (STORY 로고/제목)
         self.bg_dim: int | None = None  # STORY: 여백을 흐린 영상으로 채울 때 어둡게 하는 정도(%), None 이면 검정 여백
+        self.h_drag_enabled = False  # STORY/REELS Fill 출력 보기에서만: 좌우로 끌어 지금 컷의 가로 위치 조정
+        self._drag = None  # (시작 마우스 x, 시작 crop_x, 이동 가능 폭(소스 px), 소스 px / 위젯 px)
         self.setMouseTracking(True)
 
     # ---------------------------------------------------------------- API
@@ -159,6 +163,41 @@ class PreviewWidget(QWidget):
         p.drawText(QPointF(cr.x() + 6, cr.bottom() - 8), info)
 
     # ---------------------------------------------------------------- 마우스
+    def _can_h_drag(self) -> bool:
+        if not (self.h_drag_enabled and self.mode == "output" and self.layout.mode == "fill"):
+            return False
+        g = self.geometry_now()
+        bx, _by, bw, _bh = source_bounds(self.disp[0], self.disp[1], self.layout) or (0, 0, *self.disp)
+        return bw - g.crop_w > 2
+
     def mousePressEvent(self, e):
-        """미리보기에서 마우스를 끌어도 가로/세로 위치가 바뀌지 않는다 (위치는 우측 패널의 값으로만 조정)."""
+        """Fill 9:16 출력 보기에서는 좌우로만 끌 수 있다 (세로 위치와 확대는 바뀌지 않음). 그 밖에는 위치가 바뀌지 않는다."""
         self.clicked.emit()
+        if e.button() == Qt.MouseButton.LeftButton and self._can_h_drag():
+            g = self.geometry_now()
+            bx, _by, bw, _bh = source_bounds(self.disp[0], self.disp[1], self.layout) or (0, 0, *self.disp)
+            cr = self._canvas_rect(g.canvas_w, g.canvas_h)
+            self._drag = (e.position().x(), g.crop_x - bx, bw - g.crop_w, g.crop_w / max(1.0, cr.width()))
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            e.accept()
+
+    def _drag_pos(self, x: float) -> float:
+        x0, c0, span, k = self._drag
+        return min(1.0, max(0.0, (c0 - (x - x0) * k) / span))
+
+    def mouseMoveEvent(self, e):
+        if self._drag is not None:
+            self.hDragged.emit(self._drag_pos(e.position().x()))
+            e.accept()
+            return
+        self.setCursor(Qt.CursorShape.OpenHandCursor if self._can_h_drag() else Qt.CursorShape.ArrowCursor)
+
+    def mouseReleaseEvent(self, e):
+        if self._drag is not None:
+            pos = self._drag_pos(e.position().x())
+            moved = abs(e.position().x() - self._drag[0]) >= 2
+            self._drag = None
+            self.setCursor(Qt.CursorShape.OpenHandCursor)
+            if moved:
+                self.hDragFinished.emit(pos)
+            e.accept()

@@ -74,6 +74,52 @@ class LetterboxService(QObject):
             self.finished.emit(crop, error)
 
 
+class ReframeService(QObject):
+    """STORY/REELS 컷별 인물 위치 분석을 백그라운드에서 한 건씩 한다 (원본을 축소 디코딩해 검출)."""
+
+    progress = Signal(str, float)
+    finished = Signal(str, object, str)  # (which, {컷 키: pos_x}, 오류)
+
+    def __init__(self, info: MediaInfo, index: FrameIndex, parent=None):
+        super().__init__(parent)
+        self.info, self.index = info, index
+        self.busy = False
+        self._cancel = threading.Event()
+
+    def start(self, which: str, layout, segs) -> bool:
+        if self.busy:
+            return False
+        self.busy = True
+        self._cancel.clear()
+        threading.Thread(target=self._run, args=(which, layout, list(segs)), name="ics-reframe", daemon=True).start()
+        return True
+
+    def cancel(self) -> None:
+        self._cancel.set()
+
+    def _run(self, which, layout, segs) -> None:
+        from ..core import reframe
+        from ..core.decode import decode_frame_rgb
+
+        res, error = {}, ""
+        try:
+            res = reframe.analyze(
+                self.info,
+                self.index,
+                layout,
+                segs,
+                lambda n, w, h: decode_frame_rgb(self.info, self.index, n, w, h)[0],
+                self._cancel,
+                lambda f: self.progress.emit(which, f),
+            )
+        except InterruptedError:
+            error = "취소했습니다."
+        except Exception as e:  # noqa: BLE001
+            error = f"인물 분석 실패: {e}"
+        self.busy = False
+        self.finished.emit(which, res, error)
+
+
 # ======================================================================= 프록시
 class ProxyBuilder(QObject):
     """고해상도 재생용 프록시(MJPEG all-intra, 프레임 번호 1:1)와 오디오 WAV 생성. 최종 렌더링에는 사용하지 않는다."""

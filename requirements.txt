@@ -2,3 +2,4 @@ PySide6>=6.6,<7
 Pillow>=10.0
 numpy>=1.26
 regex>=2023.10.3
+opencv-python-headless>=4.8,<6  # STORY/REELS 인물 기준 자동 맞춤 (DNN 으로 ONNX 모델 실행)
