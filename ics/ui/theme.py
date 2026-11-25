@@ -161,6 +161,10 @@ QLabel#hint {{ color: #7a7a7a; font-size: 11px; }}
 QToolButton#sectionHead {{ background: transparent; border: none; color: #d0d0d0; font-weight: 700; font-size: 11px;
     padding: 8px 0 2px 0; text-align: left; }}
 QToolButton#sectionHead:hover {{ color: #ffffff; }}
+QPushButton#winBtn, QPushButton#winClose {{ background: transparent; border: none; border-radius: 0; color: {MUTED};
+    padding: 0; min-height: 0; font-size: 13px; }}
+QPushButton#winBtn:hover {{ background: #232323; color: {TEXT}; }}
+QPushButton#winClose:hover {{ background: #c42b1c; color: #ffffff; }}
 QLabel#subhead {{ color: #d0d0d0; font-weight: 700; font-size: 11px; padding-top: 8px; }}
 QLabel#fieldLabel {{ color: #b0b0b0; min-width: 56px; }}
 QPushButton#chip {{ background: #171717; border: 1px solid #262626; border-radius: 6px; padding: 4px 0; min-height: 18px;

@@ -46,6 +46,7 @@ from .dialogs import (
     ShortcutsDialog,
     XmlImportDialog,
 )
+from .frameless import FramelessHelper, window_buttons
 from .panels import FeedPanel, SelectionPanel, TransportBar
 from .preview import PreviewWidget
 from .services import (
@@ -102,6 +103,7 @@ class EditorWindow(QMainWindow):
         # progress(): 만드는 도중 몇 번 불러 로딩 화면이 다시 그려지게 한다 (창 생성은 UI 스레드에서만 가능하므로 단계 사이에 숨을 돌림)
         self._progress = progress
         self.project, self.settings, self.iddict = project, settings, iddict
+        self._cache_dir = cache_dir
         info, index = project.media, project.index
         self.setWindowTitle(f"{project.rec.name} - Instagram Content Studio")
         self.resize(1480, 920)
@@ -138,6 +140,7 @@ class EditorWindow(QMainWindow):
         self._over_notified = False
         self._tick()
         self._build_ui()
+        self._frameless = FramelessHelper(self, self.centralWidget(), self._topbar_frame)
         self._tick()
         self.setAcceptDrops(True)  # 편집 XML 을 창에 끌어다 놓으면 바로 컷을 자른다
         self._build_actions()
@@ -303,6 +306,10 @@ class EditorWindow(QMainWindow):
         rw.setLayout(right)
         rw.setMinimumWidth(180)
         h.addWidget(rw, 1)
+        # Windows 제목 표시줄 대신: 최소화 / 최대화·복원 / 닫기 (상단바 빈 곳을 끌면 창 이동, 더블클릭 최대화)
+        h.addWidget(window_buttons(self), 0, Qt.AlignmentFlag.AlignTop)
+        h.setContentsMargins(14, 8, 0, 8)
+        self._topbar_frame = f
         return f
 
     def _editor_page(self) -> QWidget:
@@ -371,7 +378,11 @@ class EditorWindow(QMainWindow):
         self.cut_strip.contextRequested.connect(self._show_cut_menu)
         self.cut_strip.reframe_info = self._cut_reframe_info
         bv.addWidget(self.cut_strip)
-        self.cut_scrub = CutScrubber(self.thumbs, float(self.project.fps))
+        # 컷 확대 타임라인 전용 썸네일 (타임라인 썸네일 요청과 서로 밀어내지 않게 따로, 디스크에 캐시)
+        self.cutline_thumbs = ThumbService(
+            self.decoder, self._cache_dir, self.project.media, height=48, subdir="cutline_thumbs", coarse=False
+        )
+        self.cut_scrub = CutScrubber(self.cutline_thumbs, float(self.project.fps))
         self.cut_scrub.scrubbed.connect(self._cut_scrubbed)
         bv.addWidget(self.cut_scrub)
         self.timeline = TimelineWidget(self.project, self.thumbs)
@@ -746,7 +757,11 @@ class EditorWindow(QMainWindow):
         if not hasattr(self, "cut_scrub"):
             return
         if not self.cut_scrub._drag:  # 끄는 동안에는 범위를 고정 (끝까지 가도 다음 컷으로 넘어가지 않게)
-            self.cut_scrub.set_range(*self._scrub_range(n))
+            rng = self._scrub_range(n)
+            if (rng[0], rng[1]) != (self.cut_scrub.start, self.cut_scrub.end):
+                cuts = self.project.state.cuts
+                self.cut_scrub.prefetch(cuts, cuts_mod.cut_index_at(cuts, n))  # 지금 컷 앞뒤를 먼저 준비
+            self.cut_scrub.set_range(*rng)
         self.cut_scrub.set_playhead(n)
 
     def _cut_scrubbed(self, n: int) -> None:
@@ -1139,6 +1154,12 @@ class EditorWindow(QMainWindow):
             self._set_cut_selection(sel)
         else:
             self.cut_strip.refresh(self.sel_ids)
+        cuts = self.project.state.cuts
+        if (
+            tuple((c.start, c.end) for c in cuts) != self.cut_scrub._cuts_sig
+        ):  # 컷이 바뀌면(XML, 나누기, 병합) 다시 준비
+            self.cut_scrub.prefetch(cuts, cuts_mod.cut_index_at(cuts, self.playhead))
+            self._update_cut_scrub(self.playhead)
             self.timeline.update()
         n = next(k for k, c in enumerate(self.project.state.cuts) if c.id == right) + 1
         self.toast(f"{self.project.tc(frame)} 에서 컷을 나눴습니다 (#{n - 1} | #{n})")
@@ -1732,5 +1753,6 @@ class EditorWindow(QMainWindow):
         self.frames.stop()
         self.thumbs.stop()
         self.cut_thumbs.stop()
+        self.cutline_thumbs.stop()
         super().closeEvent(e)
         self.closed.emit()

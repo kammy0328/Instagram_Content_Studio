@@ -1338,3 +1338,62 @@ def test_story_and_reels_share_the_cut_positions(qapp, win, monkeypatch):
     assert win.project.state.reels.cut_x == {}
     win.do_undo()  # 한 번에 되돌림
     assert win.project.state.story.cut_x[50] == 0.4 and win.project.state.reels.cut_x[50] == 0.4
+
+
+def test_cut_strip_does_not_jump_on_split_or_merge(qapp, win):
+    p = win.project
+    p.import_cuts([(i * 4, i * 4 + 4, str(i), {}) for i in range(60)], {"file": "x"})
+    win._refresh()
+    win.goto(30 * 4 + 1)
+    pump(qapp, 200)
+    sb = win.cut_strip.horizontalScrollBar()
+    assert sb.value() > 0
+    trace = []
+    sb.valueChanged.connect(trace.append)
+    before = sb.value()
+    win.split_at_playhead()
+    pump(qapp, 200)
+    assert sb.value() == before and trace == []
+    cs = p.state.cuts
+    win._set_cut_selection([cs[30].id, cs[31].id])
+    pump(qapp, 50)
+    trace.clear()
+    win.merge_selected()
+    pump(qapp, 200)
+    assert sb.value() == before and trace == []
+
+
+def test_cut_timeline_thumbs_are_prefetched_for_all_cuts(qapp, win):
+    from pathlib import Path
+
+    from ics.ui.cutstrip import CutScrubber
+
+    win.import_xml_file(str(Path(__file__).parent / "data" / "sample_premiere.xml"))
+    pump(qapp, 100)
+    want = {f for c in win.project.state.cuts for f in CutScrubber.sample_frames(c.start, c.end)}
+    assert _wait(qapp, lambda: all(win.cutline_thumbs.get(f) is not None for f in want), 60)
+    assert not win.preview.show_info  # '1080×1920 · Fill' 글자 없음
+    assert win.cut_scrub.cursor().shape() == Qt.CursorShape.ArrowCursor
+
+
+def test_window_has_no_native_title_bar_and_own_window_buttons(qapp, win):
+    from PySide6.QtCore import QPoint
+    from PySide6.QtWidgets import QPushButton
+
+    from ics.ui import frameless
+
+    assert win.windowFlags() & Qt.WindowType.FramelessWindowHint
+    names = {b.accessibleName() for b in win._topbar_frame.findChildren(QPushButton)}
+    assert {"최소화", "최대화", "닫기"} <= names
+    fh = win._frameless
+    root = win.centralWidget()
+    if not win.isMaximized():
+        assert root.layout().contentsMargins().left() == frameless.EDGE  # 가장자리 끌어 크기 조절
+        assert fh.edges_at(QPoint(1, 1)) == (Qt.Edge.LeftEdge | Qt.Edge.TopEdge)
+        assert fh.edges_at(QPoint(root.width() // 2, root.height() // 2)) == Qt.Edge(0)
+    frameless.toggle_max(win)
+    pump(qapp, 100)
+    if win.isMaximized():  # 최대화하면 가장자리 여백 없음, 버튼 모양 바뀜
+        assert root.layout().contentsMargins().left() == 0 and win._win_max_btn.text() == "❐"
+        frameless.toggle_max(win)
+        pump(qapp, 100)

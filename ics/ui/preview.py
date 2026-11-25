@@ -32,6 +32,7 @@ class PreviewWidget(QWidget):
         self.label = ""
         self.overlay_img: QImage | None = None  # 출력 보기에서 캔버스 위에 겹쳐 그리는 오버레이 (STORY 로고/제목)
         self.bg_dim: int | None = None  # STORY: 여백을 흐린 영상으로 채울 때 어둡게 하는 정도(%), None 이면 검정 여백
+        self.show_info = False  # 출력 크기 · Fit/Fill 글자 (표시 안 함)
         self.h_drag_enabled = False  # STORY/REELS Fill 출력 보기에서만: 좌우로 끌어 지금 컷의 가로 위치 조정
         self._drag = None  # (시작 마우스 x, 시작 crop_x, 이동 가능 폭(소스 px), 소스 px / 위젯 px)
         self.setMouseTracking(True)
@@ -154,13 +155,14 @@ class PreviewWidget(QWidget):
             p.drawRect(QRectF(gx, gy, gw, gh))
             p.setPen(theme.C["ACCENT"])
             p.drawText(QPointF(gx + 6, gy + 16), f"프로필 그리드 {asp}")
-        info = f"{g.canvas_w}×{g.canvas_h} · " + (
-            "원본 비율" if self.kind == "orig" else ("Fit" if g.mode == "fit" else "Fill")
-        )
-        if g.upscaled:
-            info += f" · 확대 {g.scale:.2f}x"
-        p.setPen(theme.C["MUTED"])
-        p.drawText(QPointF(cr.x() + 6, cr.bottom() - 8), info)
+        if self.show_info:
+            info = f"{g.canvas_w}×{g.canvas_h} · " + (
+                "원본 비율" if self.kind == "orig" else ("Fit" if g.mode == "fit" else "Fill")
+            )
+            if g.upscaled:
+                info += f" · 확대 {g.scale:.2f}x"
+            p.setPen(theme.C["MUTED"])
+            p.drawText(QPointF(cr.x() + 6, cr.bottom() - 8), info)
 
     # ---------------------------------------------------------------- 마우스
     def _can_h_drag(self) -> bool:
