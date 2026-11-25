@@ -97,8 +97,10 @@ class EditorWindow(QMainWindow):
     queueFinished = Signal()
     closed = Signal()  # 창이 실제로 닫혔을 때 (렌더 중 취소한 경우는 발생하지 않음)
 
-    def __init__(self, project, settings: Settings, iddict, cache_dir: Path):
+    def __init__(self, project, settings: Settings, iddict, cache_dir: Path, progress=None):
         super().__init__()
+        # progress(): 만드는 도중 몇 번 불러 로딩 화면이 다시 그려지게 한다 (창 생성은 UI 스레드에서만 가능하므로 단계 사이에 숨을 돌림)
+        self._progress = progress
         self.project, self.settings, self.iddict = project, settings, iddict
         info, index = project.media, project.index
         self.setWindowTitle(f"{project.rec.name} - Instagram Content Studio")
@@ -115,7 +117,8 @@ class EditorWindow(QMainWindow):
         self.proxy = ProxyBuilder(info, cache_dir)
         self.letterbox = LetterboxService(info, index, self)
         self.letterbox.finished.connect(self._letterbox_finished)
-        self.reframer = ReframeService(info, index, self)
+        self.reframer = ReframeService(info, index, self, cache_dir)
+        self._reframe_queue: list[str] = []
         self.reframer.progress.connect(self._reframe_progress)
         self.reframer.finished.connect(self._reframe_finished)
         self._crop_pending: set[tuple[str, str | None]] = set()
@@ -133,9 +136,12 @@ class EditorWindow(QMainWindow):
         self._layout_group = False
         self._closing = False
         self._over_notified = False
+        self._tick()
         self._build_ui()
+        self._tick()
         self.setAcceptDrops(True)  # 편집 XML 을 창에 끌어다 놓으면 바로 컷을 자른다
         self._build_actions()
+        self._tick()
         # ---- 연결
         project.add_listener(self._on_project_change)
         project.status_listeners.append(lambda s, m: self.saveStatus.emit(s, m))
@@ -154,6 +160,7 @@ class EditorWindow(QMainWindow):
         self._init_audio_ui()
         # 이미 만들어 둔 프록시가 있어도 항상 시작한다: 없는 것만 만들고, 소리 연결과 프록시 색인 로드를 같은 경로로 처리한다
         self.proxy.start()
+        self._tick()
         self._apply_ui_state()
         self.goto(self.playhead)
         self._refresh()
@@ -161,6 +168,13 @@ class EditorWindow(QMainWindow):
         QTimer.singleShot(0, self._resume_letterbox)
 
     # ================================================================ UI 구성
+    def _tick(self) -> None:
+        if self._progress is not None:
+            try:
+                self._progress()
+            except Exception:  # noqa: BLE001  (로딩 화면이 이미 닫혔어도 창 만들기는 계속)
+                self._progress = None
+
     def _build_ui(self) -> None:
         root = QWidget()
         root.setObjectName("root")
@@ -169,11 +183,13 @@ class EditorWindow(QMainWindow):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
         outer.addWidget(self._topbar())
+        self._tick()
         body = QHBoxLayout()
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(0)
         self.pages = QStackedWidget()
         self.pages.addWidget(self._editor_page())
+        self._tick()
         self.credits = CreditsPage(self.project, self.iddict)
         self.credits.toast.connect(self.toast)
         self.credits.openDictionary.connect(lambda: IdDictionaryDialog(self.iddict, self).exec())
@@ -371,6 +387,7 @@ class EditorWindow(QMainWindow):
                 lambda w=which: self.request_reframe(w, self._reframe_target_keys(w))
             )
             panel.layout_editor.reframeReset.connect(lambda w=which: self.project.clear_cut_x(w))
+            panel.layout_editor.reframeCancel.connect(self._cancel_reframe)
             panel.layoutLive.connect(lambda lp, w=which: self._layout_live(w, lp))
             panel.layoutCommit.connect(lambda _lp: self._layout_commit())
             panel.layout_editor.cropRequested.connect(lambda again, w=which: self._request_letterbox(w, again))
@@ -448,6 +465,12 @@ class EditorWindow(QMainWindow):
         menu.addAction("원래 컷 복원", self.restore_cuts)
         menu.addSeparator()
         menu.addAction("XML 세부 설정으로 불러오기…", self.import_xml_advanced)
+        act = menu.addAction("XML 불러온 뒤 인물 기준 자동 맞춤")
+        act.setCheckable(True)
+        act.setChecked(bool(self.settings.get("reframe_after_xml", False)))
+        act.setToolTip("Fill 인 STORY / REELS 의 전체 컷을 XML 을 불러오자마자 자동으로 맞춥니다")
+        act.toggled.connect(self._toggle_reframe_after_xml)
+        self.reframe_after_xml_action = act
         more.setMenu(menu)
         h.addWidget(more)
         self.snap_btn = btn("스냅", self.toggle_snap, "스냅 켜기/끄기 (N)", checkable=True)
@@ -662,6 +685,10 @@ class EditorWindow(QMainWindow):
         if self.reframer.start(which, sel.layout, segs, keys):
             panel.layout_editor.set_reframe_status("인물을 찾는 중… 0%", busy=True)
 
+    def _cancel_reframe(self) -> None:
+        self._reframe_queue = []
+        self.reframer.cancel()
+
     def _reframe_progress(self, which: str, f: float) -> None:
         panel = self.story_panel if which == "story" else self.reels_panel
         panel.layout_editor.set_reframe_status(f"인물을 찾는 중… {int(f * 100)}%", busy=True)
@@ -671,7 +698,11 @@ class EditorWindow(QMainWindow):
         if error:
             panel.layout_editor.set_reframe_status(error)
             self.toast(error)
+            self._reframe_queue = []
             return
+        if self._reframe_queue:  # XML 불러온 뒤 자동 맞춤: 다음 탭 (검출 결과를 다시 쓰므로 금방 끝난다)
+            nxt = self._reframe_queue.pop(0)
+            QTimer.singleShot(0, lambda: self.request_reframe(nxt))
         analyzed = [s.key for s in self.project.reframe_segments(which, whole=True)] if keys is None else list(keys)
         self.project.set_cut_x(
             which,
@@ -955,7 +986,24 @@ class EditorWindow(QMainWindow):
         if meta["warnings"]:
             msg += "  ·  확인 필요: " + meta["warnings"][0]
         self.toast(msg)
+        if self.settings.get("reframe_after_xml", False):
+            self._auto_reframe_after_xml()
         return True
+
+    def _auto_reframe_after_xml(self) -> None:
+        """설정이 켜져 있으면 XML 을 불러온 뒤 Fill 인 STORY/REELS 를 차례로 인물 기준 자동 맞춤."""
+        st = self.project.state
+        todo = [w for w, sel in (("story", st.story), ("reels", st.reels)) if sel.layout.mode == "fill"]
+        if not todo or self.reframer.busy:
+            return
+        self._reframe_queue = todo[1:]
+        self.request_reframe(todo[0])
+
+    def _toggle_reframe_after_xml(self, on: bool) -> None:
+        self.settings.set("reframe_after_xml", bool(on))
+        self.toast(
+            "XML 을 불러오면 인물 기준 자동 맞춤까지 합니다" if on else "XML 을 불러와도 자동 맞춤은 하지 않습니다"
+        )
 
     def import_xml_advanced(self) -> None:
         """시퀀스/트랙/오프셋을 직접 고르는 기존 창 (자동 선택이 틀렸을 때만)."""
@@ -1606,6 +1654,7 @@ class EditorWindow(QMainWindow):
     def _on_proxy_done(self, ok: bool, err: str) -> None:
         if ok and self.proxy.index is not None:
             self.decoder.set_proxy(str(self.proxy.video_path), self.proxy.index)
+            self.reframer.set_proxy(str(self.proxy.video_path), self.proxy.index)
             self.frames.clear_cache()
             self.proxy_lbl.setText("")
             self._request_display_frame()

@@ -158,6 +158,9 @@ QWidget#inspector QGroupBox::title {{ subcontrol-origin: margin; left: 0; top: 6
     font-size: 10px; letter-spacing: 1px; }}
 QWidget#inspector QGroupBox QGroupBox {{ border-top: none; margin-top: 16px; padding-top: 8px; }}
 QLabel#hint {{ color: #7a7a7a; font-size: 11px; }}
+QToolButton#sectionHead {{ background: transparent; border: none; color: #d0d0d0; font-weight: 700; font-size: 11px;
+    padding: 8px 0 2px 0; text-align: left; }}
+QToolButton#sectionHead:hover {{ color: #ffffff; }}
 QLabel#subhead {{ color: #d0d0d0; font-weight: 700; font-size: 11px; padding-top: 8px; }}
 QLabel#fieldLabel {{ color: #b0b0b0; min-width: 56px; }}
 QPushButton#chip {{ background: #171717; border: 1px solid #262626; border-radius: 6px; padding: 4px 0; min-height: 18px;

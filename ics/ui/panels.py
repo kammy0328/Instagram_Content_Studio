@@ -240,6 +240,7 @@ class LayoutEditor(QGroupBox):
     reframeRequested = Signal()  # 인물 기준 자동 맞춤: 구간 안 모든 컷 (컷마다 따로 위치)
     reframeSomeRequested = Signal()  # 선택한 컷(없으면 지금 컷)만 자동 맞춤
     reframeReset = Signal()
+    reframeCancel = Signal()
 
     def __init__(self, title="화면 배치", reframe: bool = False):
         super().__init__(title)
@@ -319,6 +320,12 @@ class LayoutEditor(QGroupBox):
         self.reframe_reset.setToolTip("모든 컷의 가로 위치를 가운데로 되돌립니다")
         self.reframe_reset.clicked.connect(self.reframeReset.emit)
         rr.addWidget(self.reframe_reset)
+        self.reframe_cancel = QPushButton("취소")
+        self.reframe_cancel.setObjectName("link")
+        self.reframe_cancel.setToolTip("인물 분석을 멈춥니다 (그때까지 찾은 결과는 다음에 다시 씁니다)")
+        self.reframe_cancel.clicked.connect(self.reframeCancel.emit)
+        self.reframe_cancel.setVisible(False)
+        rr.addWidget(self.reframe_cancel)
         rv.addLayout(rr)
         self.reframe_info = QLabel("미리보기를 좌우로 끌면 지금 컷만 옮겨집니다")
         self.reframe_info.setObjectName("hint")
@@ -403,6 +410,8 @@ class LayoutEditor(QGroupBox):
         self.reframe_btn.setEnabled(not busy)
         self.reframe_some_btn.setEnabled(not busy)
         self.reframe_btn.setText("분석 중…" if busy else "전체 컷 자동 맞춤")
+        self.reframe_cancel.setVisible(busy)
+        self.reframe_reset.setVisible(not busy)
         self._busy = busy
 
     def set_reframe_target(self, n_selected: int) -> None:

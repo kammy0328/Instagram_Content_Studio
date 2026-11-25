@@ -1204,3 +1204,85 @@ def test_auto_reframe_covers_cuts_outside_the_range(qapp, win, monkeypatch):
     assert _wait(qapp, lambda: seen, 10)
     assert seen[-1] == [0, 50, 120, 200]
     assert win._cut_reframe_info(200, 240) is not None  # 구간 밖 컷도 컷 목록에 표시
+
+
+def test_reframe_after_xml_option_runs_story_then_reels(qapp, win, monkeypatch):
+    from pathlib import Path
+
+    from ics.core import reframe
+
+    runs = []
+    monkeypatch.setattr(reframe, "analyze", lambda i, x, lp, segs, *a, **k: runs.append(1) or {0: 0.2})
+    win.project.set_selection_layout("reels", LayoutParams("fill"))
+    xml = str(Path(__file__).parent / "data" / "sample_premiere.xml")
+    assert not win.reframe_after_xml_action.isChecked()
+    win.import_xml_file(xml)
+    pump(qapp, 200)
+    assert runs == []  # 기본은 꺼짐
+    win.reframe_after_xml_action.setChecked(True)
+    assert win.settings.get("reframe_after_xml") is True
+    win.import_xml_file(xml)
+    assert _wait(qapp, lambda: len(runs) == 2 and win.project.state.reels.cut_x, 10)
+    assert win.project.state.story.cut_x == {0: 0.2} and win.project.state.reels.cut_x == {0: 0.2}
+    win.reframe_after_xml_action.setChecked(False)
+
+
+def test_reframe_can_be_cancelled_and_uses_the_proxy(qapp, win, monkeypatch):
+    import threading
+
+    from ics.core import reframe
+
+    gate = threading.Event()
+
+    def slow(info, index, layout, segs, decode, cancel, progress, **k):
+        while not cancel.is_set():
+            gate.wait(0.02)
+        raise InterruptedError
+
+    monkeypatch.setattr(reframe, "analyze", slow)
+    win.set_tab("story")
+    le = win.story_panel.layout_editor
+    le.reframe_btn.click()
+    pump(qapp, 50)
+    assert le.reframe_cancel.isVisible() and not le.reframe_btn.isEnabled()
+    le.reframe_cancel.click()
+    assert _wait(qapp, lambda: le.reframe_btn.isEnabled(), 10)
+    assert not le.reframe_cancel.isVisible() and win.project.state.story.cut_x == {}
+    # 프록시가 준비되면 분석도 프록시를 읽는다 (프레임 수가 같을 때만)
+    assert _wait(qapp, lambda: win.proxy.index is not None, 60)
+    pump(qapp, 200)
+    assert win.reframer.proxy_path == str(win.proxy.video_path)
+
+
+def test_overlay_sections_collapse_and_remember(qapp, win):
+    oe = win.story_panel.overlay_editor
+    assert oe.sec_title.body.isVisibleTo(oe) and not oe.sec_look.body.isVisibleTo(oe)  # '표시' 는 접힌 채 시작
+    oe.sec_title.head.click()
+    assert not oe.sec_title.body.isVisibleTo(oe) and win.settings.get("overlay_section_title") is False
+    oe.sec_title.head.click()
+    assert oe.sec_title.body.isVisibleTo(oe)
+
+
+def test_editor_window_ticks_progress_while_building(qapp, prores_2398, tmp_path):
+    from ics import paths
+    from ics.core import frameindex, media
+    from ics.core.iddict import IdDictionary
+    from ics.core.project import Project
+    from ics.core.store import Library
+    from ics.ui.main_window import EditorWindow
+    from ics.ui.settings import Settings
+
+    lib = Library()
+    rec = lib.create("TICK", "A", "T", str(prores_2398), str(tmp_path / "out"))
+    info = media.analyze(str(prores_2398))
+    idx = frameindex.build_frame_index(info, paths.cache_dir(rec.id))
+    p = Project(rec, lib)
+    p.open()
+    p.attach_media(info, idx)
+    ticks = []
+    w = EditorWindow(p, Settings(), IdDictionary(), paths.cache_dir(rec.id), progress=lambda: ticks.append(1))
+    try:
+        assert len(ticks) >= 4  # 단계 사이마다 로딩 화면을 다시 그릴 기회가 있다
+    finally:
+        w.close()
+        pump(qapp, 100)

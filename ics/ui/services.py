@@ -75,16 +75,27 @@ class LetterboxService(QObject):
 
 
 class ReframeService(QObject):
-    """STORY/REELS 컷별 인물 위치 분석을 백그라운드에서 한 건씩 한다 (원본을 축소 디코딩해 검출)."""
+    """STORY/REELS 컷별 인물 위치 분석을 백그라운드에서 한 건씩 한다.
+    - 미리보기 프록시가 준비되면 프록시를 축소 디코딩한다 (4K 원본보다 훨씬 빠름; 검출에는 화질 차이가 무의미)
+    - 검출 결과는 프로젝트 캐시 폴더에 저장해 STORY/REELS, 다시 누르기, 컷 하나만 맞추기가 함께 쓴다"""
 
     progress = Signal(str, float)
     finished = Signal(str, object, str, object)  # (which, {컷 키: pos_x}, 오류, 분석한 컷 키 목록 또는 None=전체)
 
-    def __init__(self, info: MediaInfo, index: FrameIndex, parent=None):
+    def __init__(self, info: MediaInfo, index: FrameIndex, parent=None, cache_dir: Path | None = None):
         super().__init__(parent)
         self.info, self.index = info, index
         self.busy = False
         self._cancel = threading.Event()
+        self.cache_path = Path(cache_dir) / "reframe_dets.json" if cache_dir else None
+        self._cache: dict | None = None
+        self._lock = threading.Lock()
+        self.proxy_path: str | None = None
+        self.proxy_index: FrameIndex | None = None
+
+    def set_proxy(self, path: str, index: FrameIndex) -> None:
+        if index.count == self.index.count:  # 프레임이 1:1 로 맞을 때만
+            self.proxy_path, self.proxy_index = path, index
 
     def start(self, which: str, layout, segs, keys: list[int] | None = None) -> bool:
         if self.busy:
@@ -99,25 +110,47 @@ class ReframeService(QObject):
     def cancel(self) -> None:
         self._cancel.set()
 
-    def _run(self, which, layout, segs, keys) -> None:
-        from ..core import reframe
+    def _decode(self, n: int, w: int, h: int):
         from ..core.decode import decode_frame_rgb
 
+        if self.proxy_path and self.proxy_index:
+            try:
+                return decode_frame_rgb(
+                    self.info, self.proxy_index, n, w, h, source_path=self.proxy_path, color_opts=PROXY_COLOR, pre=False
+                )[0]
+            except Exception:  # noqa: BLE001  (프록시가 지워졌거나 손상: 원본으로)
+                pass
+        return decode_frame_rgb(self.info, self.index, n, w, h)[0]
+
+    def _run(self, which, layout, segs, keys) -> None:
+        from ..core import reframe
+
         res, error = {}, ""
+        with self._lock:
+            if self._cache is None:
+                self._cache = reframe.load_cache(self.cache_path) if self.cache_path else {}
+            cache = self._cache
+        before = len(cache)
         try:
             res = reframe.analyze(
                 self.info,
                 self.index,
                 layout,
                 segs,
-                lambda n, w, h: decode_frame_rgb(self.info, self.index, n, w, h)[0],
+                self._decode,
                 self._cancel,
                 lambda f: self.progress.emit(which, f),
+                cache=cache,
             )
         except InterruptedError:
             error = "취소했습니다."
         except Exception as e:  # noqa: BLE001
             error = f"인물 분석 실패: {e}"
+        if self.cache_path and len(cache) != before:  # 취소해도 그때까지 검출한 것은 남긴다
+            try:
+                reframe.save_cache(self.cache_path, cache)
+            except OSError:
+                pass
         self.busy = False
         self.finished.emit(which, res, error, keys)
 
