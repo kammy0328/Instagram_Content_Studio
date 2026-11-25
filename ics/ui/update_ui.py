@@ -132,7 +132,22 @@ class UpdateDialog(QDialog):
             self.go.setEnabled(True)
             return
         self.msg.setText("설치를 시작합니다. 잠시 후 자동으로 다시 열립니다.")
-        QTimer.singleShot(400, QApplication.quit)
+        QTimer.singleShot(300, shutdown_for_update)
+
+
+def shutdown_for_update() -> None:
+    """업데이트 설치를 위해 앱을 확실히 끝낸다. 편집 창은 정상적으로 닫아(자동저장/정상 종료 기록) 두고,
+    남아 있는 백그라운드 스레드 때문에 프로세스가 살아 있지 않도록 마지막에 프로세스를 직접 끝낸다.
+    (프로세스가 남아 있으면 설치 파일이 실행 파일을 바꾸지 못해 업데이트 후 다시 열리지 않는다.)"""
+    import os
+
+    app = QApplication.instance()
+    for w in list(app.topLevelWidgets()) if app else []:
+        if w.isVisible() and not isinstance(w, QDialog):
+            w.close()
+    if app is not None:
+        app.processEvents()
+    os._exit(0)
 
 
 def check_and_prompt(settings, parent=None) -> None:

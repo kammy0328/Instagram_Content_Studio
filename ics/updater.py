@@ -152,21 +152,56 @@ def installed_per_machine() -> bool:
     return any(r and str(exe).lower().startswith(str(Path(r)).lower()) for r in roots)
 
 
+def install_log_path() -> Path:
+    """설치 기록 (업데이트 후 앱이 다시 안 열릴 때 원인 확인용)."""
+    import tempfile
+
+    return Path(tempfile.gettempdir()) / "ics_update" / "install.log"
+
+
 def installer_command(setup: Path, silent: bool) -> list[str]:
     cmd = [str(setup)]
     if silent:
         cmd += ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS", "/LAUNCH=1"]
+    cmd.append(f"/LOG={install_log_path()}")
     return cmd
 
 
+def _ps_quote(s: str) -> str:
+    return "'" + str(s).replace("'", "''") + "'"
+
+
+def launcher_command(setup: Path, silent: bool, wait_pid: int) -> list[str]:
+    """앱 프로세스가 완전히 끝난 뒤(파일 잠금 해제) 설치 파일을 실행하는 PowerShell 명령.
+    앱이 아직 떠 있는 동안 설치가 시작되면, 조용한 설치는 '사용 중인 파일' 을 바꾸지 못하고 멈춰 다시 열리지 않는다."""
+    cmd = installer_command(setup, silent)
+    args = ",".join(_ps_quote(a) for a in cmd[1:]) or "@()"
+    script = (
+        f"Wait-Process -Id {int(wait_pid)} -Timeout 60 -ErrorAction SilentlyContinue; "
+        "Start-Sleep -Milliseconds 500; "
+        f"Start-Process -FilePath {_ps_quote(cmd[0])} -ArgumentList {args}"
+    )
+    return ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
+            "-Command", script]  # fmt: skip
+
+
 def launch_installer(setup: Path) -> None:
-    """설치 파일을 분리 실행한다. 호출한 쪽은 곧바로 앱을 종료해야 한다 (설치가 실행 파일을 교체함)."""
+    """설치 파일을 분리 실행한다. 설치는 이 프로세스가 끝난 뒤에 시작되므로, 호출한 쪽은 곧바로 앱을 종료해야 한다."""
     if not sys.platform.startswith("win"):
         raise UpdateError("자동 설치는 Windows 에서만 지원합니다.")
-    flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-    subprocess.Popen(
-        installer_command(setup, not installed_per_machine()), close_fds=True, creationflags=flags
-    )  # noqa: S603
+    install_log_path().parent.mkdir(parents=True, exist_ok=True)
+    flags = (
+        getattr(subprocess, "DETACHED_PROCESS", 0)
+        | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    )
+    silent = not installed_per_machine()
+    try:
+        subprocess.Popen(
+            launcher_command(setup, silent, os.getpid()), close_fds=True, creationflags=flags
+        )  # noqa: S603
+    except OSError:  # PowerShell 을 못 쓰는 환경: 예전처럼 바로 실행 (앱은 곧바로 종료한다)
+        subprocess.Popen(installer_command(setup, silent), close_fds=True, creationflags=flags)  # noqa: S603
 
 
 def due(last_check: float, now: float | None = None) -> bool:
