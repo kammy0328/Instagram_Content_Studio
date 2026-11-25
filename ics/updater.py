@@ -122,7 +122,10 @@ def download(
 ) -> Path:
     dest_dir = Path(dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
-    out = dest_dir / info.asset_name
+    _cleanup_old(dest_dir)
+    # 받을 때마다 다른 이름: 예전 업데이트의 설치 파일이 아직 실행 중이거나(파일 잠금) 백신이 검사 중이어도 겹치지 않는다
+    stem, suffix = Path(info.asset_name).stem, Path(info.asset_name).suffix
+    out = dest_dir / f"{stem}_{info.build_id[:7]}_{os.getpid()}_{int(time.time())}{suffix}"
     part = out.with_name(out.name + ".part")
     h = hashlib.sha256()
     done = 0
@@ -138,11 +141,40 @@ def download(
                     progress(min(1.0, done / info.size))
         if h.hexdigest() != info.sha256:
             raise UpdateError("내려받은 파일의 검증(sha256)이 맞지 않아 설치하지 않습니다.")
-        os.replace(part, out)
+        _replace_retry(part, out)
     except BaseException:
-        part.unlink(missing_ok=True)
+        try:
+            part.unlink(missing_ok=True)
+        except OSError:
+            pass
         raise
     return out
+
+
+def _replace_retry(src: Path, dst: Path, tries: int = 40, wait: float = 0.25) -> None:
+    """막 받은 실행 파일은 백신이 잠깐 잠글 수 있다 (WinError 32): 잠시 기다렸다 다시 시도한다."""
+    for i in range(tries):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if i == tries - 1:
+                raise UpdateError(
+                    "내려받은 설치 파일을 다른 프로그램이 사용 중입니다 (백신 검사 또는 이전 설치가 아직 실행 중). "
+                    "잠시 후 다시 시도하거나, 작업 관리자에서 'Setup' 이 남아 있으면 끝낸 뒤 다시 시도하세요."
+                ) from None
+            time.sleep(wait)
+
+
+def _cleanup_old(dest_dir: Path, keep_hours: float = 1.0) -> None:
+    """예전에 받은 설치 파일 정리 (사용 중이면 그냥 둔다). 방금 받은 것은 남긴다."""
+    now = time.time()
+    for f in dest_dir.glob("*"):
+        try:
+            if f.is_file() and now - f.stat().st_mtime > keep_hours * 3600:
+                f.unlink()
+        except OSError:
+            pass
 
 
 def installed_per_machine() -> bool:
