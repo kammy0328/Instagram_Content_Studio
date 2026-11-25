@@ -68,6 +68,7 @@ class Project:
                 if k in info:
                     setattr(self.rec, k, info[k])
             self.state = EditState.from_dict(payload.get("state", {}))
+            self._link_cut_x()
             self.recovered = crashed
         return {
             "crashed": crashed,
@@ -331,6 +332,10 @@ class Project:
         with self.edit(f"{which.upper()} 화면 배치", (which, "state")):
             sel.layout = layout
 
+    # 컷별 가로 위치는 STORY 와 REELS 가 함께 쓴다: 둘 다 같은 컷을 같은 9:16 으로 자르므로,
+    # 한쪽에서 자동 맞춤/드래그/초기화하면 다른 쪽에도 그대로 반영한다 (저장은 두 구간에 같은 값으로).
+    REFRAME_LINKED = ("story", "reels")
+
     def set_cut_x(
         self,
         which: str,
@@ -343,7 +348,7 @@ class Project:
         """컷별 가로 위치 (Fill 9:16). replace_all 이면 기존 값을 모두 지우고 values 로 바꾼다.
         analyzed: 자동 분석한 컷 키 목록 (values 에 없는 키는 '인물 없음' 으로 기록하고 위치는 그대로 둔다)."""
         sel = self._sel(which)
-        with self.edit(label or f"{which.upper()} 가로 위치", (which, "state")):
+        with self.edit(label or "컷 가로 위치", self.REFRAME_LINKED + ("state",)):
             new = {} if replace_all else dict(sel.cut_x)
             new_src = {} if replace_all else dict(sel.cut_x_src)
             for k, v in values.items():
@@ -352,17 +357,32 @@ class Project:
             for k in analyzed or []:
                 if int(k) not in values:
                     new_src[int(k)] = "none" if int(k) not in new else new_src.get(int(k), "manual")
-            sel.cut_x, sel.cut_x_src = new, new_src
+            self._put_cut_x(new, new_src)
 
     def clear_cut_x(self, which: str, keys: list[int] | None = None) -> None:
-        """keys 가 없으면 모든 컷을 가운데로, 있으면 그 컷만."""
+        """keys 가 없으면 모든 컷을 가운데로, 있으면 그 컷만. (STORY/REELS 함께)"""
         sel = self._sel(which)
-        with self.edit(f"{which.upper()} 가로 위치 초기화", (which, "state")):
+        with self.edit("컷 가로 위치 초기화", self.REFRAME_LINKED + ("state",)):
             if keys is None:
-                sel.cut_x, sel.cut_x_src = {}, {}
+                self._put_cut_x({}, {})
             else:
-                sel.cut_x = {k: v for k, v in sel.cut_x.items() if k not in keys}
-                sel.cut_x_src = {k: v for k, v in sel.cut_x_src.items() if k not in keys}
+                self._put_cut_x(
+                    {k: v for k, v in sel.cut_x.items() if k not in keys},
+                    {k: v for k, v in sel.cut_x_src.items() if k not in keys},
+                )
+
+    def _put_cut_x(self, cut_x: dict, src: dict) -> None:
+        for w in self.REFRAME_LINKED:
+            sel = self._sel(w)
+            sel.cut_x, sel.cut_x_src = dict(cut_x), dict(src)
+
+    def _link_cut_x(self) -> None:
+        """예전 저장본: 한쪽에만 컷별 위치가 있으면 다른 쪽에도 복사한다 (둘 다 있으면 STORY 기준)."""
+        st, rl = self.state.story, self.state.reels
+        if st.cut_x or st.cut_x_src:
+            self._put_cut_x(st.cut_x, st.cut_x_src)
+        elif rl.cut_x or rl.cut_x_src:
+            self._put_cut_x(rl.cut_x, rl.cut_x_src)
 
     def reframe_segments(self, which: str, whole: bool = False):
         """컷 단위 조각. whole 이면 구간과 상관없이 영상 전체의 모든 컷 (자동 맞춤은 전체 컷에 미리 해 둔다:

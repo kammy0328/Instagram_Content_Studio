@@ -220,3 +220,32 @@ def test_back_turned_person_without_face_still_uses_the_body():
     frames = [[R.Det(600, 0, 700, 600, 0.5)]]
     x = R.best_window_x(frames, 0, 1000, 300) * 700
     assert abs((x + 150) - 650) < 8
+
+
+def test_old_save_with_positions_only_on_one_side_is_linked(prores_2398, tmp_path):
+    from ics import paths
+    from ics.core import frameindex, media
+    from ics.core.project import Project
+    from ics.core.store import Library
+
+    lib = Library()
+    rec = lib.create("LINK", "A", "T", str(prores_2398), str(tmp_path / "out"))
+    info = media.analyze(str(prores_2398))
+    ix = frameindex.build_frame_index(info, paths.cache_dir(rec.id))
+    p = Project(rec, lib)
+    p.open()
+    p.attach_media(info, ix)
+    p.state.reels.cut_x, p.state.reels.cut_x_src = {0: 0.3}, {0: "auto"}  # 예전 버전: REELS 에만 있음
+    p.close()
+    q = Project(rec, lib)
+    q.open()
+    assert q.state.story.cut_x == {0: 0.3} and q.state.story.cut_x_src == {0: "auto"}
+    q.close()
+
+
+def test_frames_where_the_face_stays_longest():
+    # 얼굴이 컷의 3/4 동안 300 근처, 마지막 1/4 동안 800 으로 이동 -> 단순 평균(425)이 아니라 오래 머문 300
+    stay = [[R.Det(260, 0, 340, 400, 0.5), R.Det(280, 20, 320, 60, 0.7, True)]] * 6
+    moved = [[R.Det(760, 0, 840, 400, 0.5), R.Det(780, 20, 820, 60, 0.7, True)]] * 2
+    x = R.best_window_x(stay + moved, 0, 1000, 300) * 700
+    assert abs((x + 150) - 300) < 10

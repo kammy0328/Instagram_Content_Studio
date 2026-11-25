@@ -136,12 +136,39 @@ def _subject_centers(dets: Sequence[Det], xs: np.ndarray, win_w: float) -> list[
     return out
 
 
+DWELL_MARGIN = 0.1  # 창 양쪽 끝 이 비율 안쪽에 인물 가운데가 들어와야 '잘 보인다' 로 센다
+DWELL_MAJORITY = 0.55  # 한 자리에 이 비율보다 오래 머물렀을 때만 그쪽으로 (아니면 경로 평균)
+
+
+def _dwell_center(centers: Sequence[float], lo: float, span: float, win_w: float, steps: int = 96) -> float:
+    """인물(얼굴)이 가장 오래 머문 쪽의 가운데.
+    표본은 시간상 고르게 뽑았으므로 '창 안쪽에 가운데가 들어오는 표본 수' = 머문 시간이다.
+    그 수가 전체의 절반을 넘으면, 그런 창들 중 들어온 표본들의 평균이 전체 평균에 가장 가까운 창을 고르고 그 평균을 돌려준다.
+    한쪽에 오래 있다 잠깐 이동하면 오래 있던 쪽으로, 컷 내내 고르게 움직이면 경로의 가운데로 맞춰진다."""
+    c = np.asarray(centers, dtype=float)
+    overall = float(c.mean())
+    inner = win_w * (1 - 2 * DWELL_MARGIN)
+    xs = lo + np.linspace(0.0, max(0.0, span), steps + 1) + win_w * DWELL_MARGIN  # 안쪽 구간의 왼쪽 끝
+    inside = (c[None, :] >= xs[:, None]) & (c[None, :] <= xs[:, None] + inner)
+    count = inside.sum(axis=1)
+    if count.max() <= DWELL_MAJORITY * len(c):  # 오래 머문 자리가 따로 없다 (고르게 움직임 등): 경로 평균
+        return overall
+    best, best_d = overall, math.inf
+    for i in np.where(count == count.max())[0]:
+        m = float(c[inside[i]].mean())
+        d = abs(m - overall)
+        if d < best_d:
+            best, best_d = m, d
+    return best
+
+
 def best_window_x(frames: Sequence[Sequence[Det]], lo: float, hi: float, win_w: float, steps: int = 96) -> float | None:
     """창 [x, x+win_w] 의 x 를 [lo, hi-win_w] 에서 고른다.
 
     1) 컷 전체로 보아 인물이 가장 많이 보이는 쪽(여러 명이면 여러 명이 모인 쪽)을 정한다.
     2) 표본 프레임마다 그쪽 인물(무리)의 가운데를 구한다. 같은 노출의 후보가 여럿이면 1) 에 가까운 쪽.
-    3) 프레임별 가운데의 평균에 창 가운데를 맞춘다: 인물이 컷 안에서 움직이면 움직인 경로의 평균 위치가 가운데가 된다.
+    3) 프레임별 가운데 중 가장 오래 머문 쪽(머문 표본들의 평균)에 창 가운데를 맞춘다.
+       한쪽에 오래 있다 잠깐 움직이면 오래 있던 쪽, 컷 내내 고르게 움직이면 경로의 가운데.
     인물이 하나도 없으면 None (위치를 바꾸지 않음). 반환: 0..1 위치 (pos_x)."""
     span = hi - lo - win_w
     allp = [d for fr in frames for d in fr if d.x2 > d.x1]
@@ -164,8 +191,8 @@ def best_window_x(frames: Sequence[Sequence[Det]], lo: float, hi: float, win_w: 
         cs = _subject_centers(fr, xs, win_w)
         if cs:
             centers.append(min((c[0] for c in cs), key=lambda c: abs(c - g)))
-    center = float(np.mean(centers)) if centers else g
-    # 3) 평균 위치를 창 가운데로
+    center = _dwell_center(centers, lo, span, win_w) if centers else g
+    # 3) 그 위치를 창 가운데로
     x = min(max(center - win_w / 2, lo), lo + span)
     # 4) 그 위치에서 얼굴이 창 가장자리에 걸리면, 가까운 범위 안에서 얼굴이 덜 잘리는 위치로 살짝 옮긴다
     near = np.linspace(max(lo, x - NUDGE * win_w), min(lo + span, x + NUDGE * win_w), 61)

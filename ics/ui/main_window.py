@@ -1018,12 +1018,11 @@ class EditorWindow(QMainWindow):
         return True
 
     def _auto_reframe_after_xml(self) -> None:
-        """설정이 켜져 있으면 XML 을 불러온 뒤 Fill 인 STORY/REELS 를 차례로 인물 기준 자동 맞춤."""
+        """설정이 켜져 있으면 XML 을 불러온 뒤 인물 기준 자동 맞춤 (STORY/REELS 는 위치를 함께 쓰므로 한 번만)."""
         st = self.project.state
         todo = [w for w, sel in (("story", st.story), ("reels", st.reels)) if sel.layout.mode == "fill"]
         if not todo or self.reframer.busy:
             return
-        self._reframe_queue = todo[1:]
         self.request_reframe(todo[0])
 
     def _toggle_reframe_after_xml(self, on: bool) -> None:
