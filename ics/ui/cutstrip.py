@@ -261,7 +261,6 @@ class CutStrip(QListWidget):
             p.setPen(theme.C["MUTED"])
             p.drawText(
                 self.viewport().rect().adjusted(12, 0, -12, 0),
-                Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
-                "컷 정보 없음. 'XML 불러오기' 로 한 번만 불러오면 STORY / REELS / FEED 모두에서 같은 컷이 "
-                "같은 크기의 타일로 표시됩니다.",
+                Qt.AlignmentFlag.AlignCenter,
+                "편집 XML · FCPXML · EDL 을 여기로 끌어다 놓으면 바로 컷이 잘립니다",
             )

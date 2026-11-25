@@ -343,3 +343,33 @@ def suggest_offset(seq: XmlSequence, track: XmlTrack, master_frames: int) -> int
     if first > 0 and (last - first) == master_frames:
         return -first
     return 0
+
+
+@dataclass
+class AutoMapping:
+    sequence: XmlSequence
+    track: XmlTrack
+    report: MappingReport
+
+
+def auto_map(
+    doc: XmlDoc, master_fps: Fraction, master_frames: int, master_tc_start: int | None = None
+) -> AutoMapping | None:
+    """창 없이 바로 적용할 매핑을 고른다. 시퀀스마다 컷이 가장 많은 영상 트랙과 제안 오프셋으로 맞춰 보고,
+    마스터링 길이와 가장 가깝게 맞는 것(같으면 컷이 많은 것, 그다음 파일 안의 앞 순서)을 택한다."""
+    best: tuple[tuple, AutoMapping] | None = None
+    for i, seq in enumerate(doc.sequences):
+        track = seq.best_track()
+        if track is None or not track.clips:
+            continue
+        rep = map_to_master(
+            seq, track, master_fps, master_frames, suggest_offset(seq, track, master_frames), master_tc_start
+        )
+        if not rep.cuts:
+            continue
+        scale = master_fps / seq.fps if round(float(seq.fps)) != round(float(master_fps)) else Fraction(1)
+        total = int(round(max(c.end for c in track.clips) * scale)) + rep.offset
+        key = (abs(master_frames - total), -len(rep.cuts), i)
+        if best is None or key < best[0]:
+            best = (key, AutoMapping(seq, track, rep))
+    return best[1] if best else None

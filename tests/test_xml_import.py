@@ -100,3 +100,18 @@ def test_xmeml_excludes_disabled_video_track(tmp_path):
     )
     seq = X.parse_file(str(p)).sequences[0]
     assert [t.label for t in seq.tracks] == ["V2"]
+
+
+def test_auto_map_picks_main_track_without_any_dialog_input():
+    doc = X.parse_file(str(DATA / "sample_premiere.xml"))
+    m = X.auto_map(doc, F2398, 240)
+    assert m is not None and m.track.label == "V1" and m.report.offset == 0
+    assert [(a, b) for a, b, _n, _m in m.report.cuts] == [(0, 50), (50, 120), (120, 200), (200, 240)]
+
+
+def test_auto_map_prefers_the_sequence_that_matches_the_master_length():
+    doc = X.parse_file(str(DATA / "sample_premiere.xml"))
+    real = doc.sequences[0]
+    short = X.XmlSequence(name="TEASER", fps=real.fps, tc_start=real.tc_start, tracks=[real.tracks[1]])
+    doc.sequences.insert(0, short)  # 파일 앞쪽에 짧은 시퀀스가 있어도 길이가 맞는 본편을 고른다
+    assert X.auto_map(doc, F2398, 240).sequence.name == real.name
