@@ -86,7 +86,10 @@ def test_download_verifies_sha256_and_cleans_part(tmp_path):
 def test_installer_command_and_due(tmp_path):
     cmd = updater.installer_command(tmp_path / "s.exe", True)
     assert "/VERYSILENT" in cmd and "/LAUNCH=1" in cmd and "/CLOSEAPPLICATIONS" in cmd
-    assert updater.installer_command(tmp_path / "s.exe", False) == [str(tmp_path / "s.exe")]
+    assert updater.installer_command(tmp_path / "s.exe", False) == [
+        str(tmp_path / "s.exe"),
+        f"/LOG={updater.install_log_path()}",
+    ]
     assert updater.due(0, now=updater.CHECK_INTERVAL_S + 1)
     assert not updater.due(100, now=200)
 
@@ -98,3 +101,38 @@ def test_redirect_handler_drops_authorization():
     req = urllib.request.Request("https://api.github.com/x", headers={"Authorization": "Bearer t"})
     new = h.redirect_request(req, None, 302, "Found", {}, "https://objects.example.com/y")
     assert new is not None and "Authorization" not in {k.title() for k in new.headers}
+
+
+def test_installer_waits_for_the_app_process_to_exit(tmp_path):
+    """설치는 앱 프로세스가 끝난 뒤에 시작해야 실행 파일을 바꿀 수 있다 (업데이트 후 다시 안 열리던 문제)."""
+    setup = tmp_path / "it's setup.exe"  # 작은따옴표와 공백이 있어도 안전하게 전달
+    cmd = updater.launcher_command(setup, True, 4321)
+    assert cmd[0] == "powershell.exe" and "-Command" in cmd
+    script = cmd[-1]
+    assert script.index("Wait-Process -Id 4321") < script.index("Start-Process")
+    assert "'" + str(setup).replace("'", "''") + "'" in script
+    assert "'/LAUNCH=1'" in script and "'/VERYSILENT'" in script and "/LOG=" in script
+
+
+def test_shutdown_for_update_closes_editor_windows_then_exits(monkeypatch):
+    import os
+
+    from PySide6.QtWidgets import QApplication, QMainWindow
+
+    from ics.ui import update_ui
+
+    app = QApplication.instance() or QApplication([])
+    closed = []
+
+    class W(QMainWindow):
+        def closeEvent(self, e):  # noqa: N802
+            closed.append(True)
+            e.accept()
+
+    w = W()
+    w.show()
+    exited = []
+    monkeypatch.setattr(os, "_exit", lambda code: exited.append(code))
+    update_ui.shutdown_for_update()
+    assert closed == [True] and exited == [0]
+    assert app is not None
