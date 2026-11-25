@@ -353,6 +353,7 @@ class EditorWindow(QMainWindow):
         self.cut_strip.selectionIdsChanged.connect(self._strip_selected)
         self.cut_strip.cutActivated.connect(self.goto)
         self.cut_strip.contextRequested.connect(self._show_cut_menu)
+        self.cut_strip.reframe_info = self._cut_reframe_info
         bv.addWidget(self.cut_strip)
         self.timeline = TimelineWidget(self.project, self.thumbs)
         self.timeline.playheadRequested.connect(self.goto)
@@ -366,6 +367,9 @@ class EditorWindow(QMainWindow):
             panel.presetClicked.connect(lambda p, w=which: self.apply_preset(w, p))
             panel.fromCutsClicked.connect(self.cuts_to_inout)
             panel.layout_editor.reframeRequested.connect(lambda w=which: self.request_reframe(w))
+            panel.layout_editor.reframeSomeRequested.connect(
+                lambda w=which: self.request_reframe(w, self._reframe_target_keys(w))
+            )
             panel.layout_editor.reframeReset.connect(lambda w=which: self.project.clear_cut_x(w))
             panel.layoutLive.connect(lambda lp, w=which: self._layout_live(w, lp))
             panel.layoutCommit.connect(lambda _lp: self._layout_commit())
@@ -543,6 +547,7 @@ class EditorWindow(QMainWindow):
                 self.reels_panel.cover_prev.blockSignals(False)
             self._update_preview_layout()
             self.timeline.update()
+            self.cut_strip.viewport().update()  # 컷 타일의 9:16 창/자동 표시는 탭(STORY/REELS)마다 다르다
         self.project.set_ui("tab", key)
 
     # ================================================================ 이동/재생
@@ -554,6 +559,7 @@ class EditorWindow(QMainWindow):
         self.project.set_playhead(n)
         self.timeline.set_playhead(n, follow=True)
         self.cut_strip.set_playhead(n)
+        self._follow_cut(n)
         self.transport.set_frame(n)
         if request:
             self._request_display_frame()
@@ -593,6 +599,20 @@ class EditorWindow(QMainWindow):
         if abs(self.preview.layout.pos_x - px) > 1e-9:
             self.preview.layout = replace(self.preview.layout, pos_x=px)
 
+    def _cut_reframe_info(self, start: int, end: int):
+        """컷 스트립 표시용: STORY/REELS Fill 구간과 겹치는 컷의 9:16 창 위치와 맞춤 출처."""
+        if self.cover_mode or self.tab not in ("story", "reels"):
+            return None
+        sel = self.project.state.story if self.tab == "story" else self.project.state.reels
+        if sel.layout.mode != "fill":
+            return None
+        m = self.project.media
+        key = start if any(c.start == start for c in self.project.state.cuts) else -1
+        g = compute_geometry(
+            m.display_w, m.display_h, "916", replace(sel.layout, pos_x=sel.cut_x.get(key, sel.layout.pos_x))
+        )
+        return sel.cut_x_src.get(key), g.crop_x / m.display_w, g.crop_w / m.display_w
+
     def _segment_key_at(self, which: str, frame: int) -> int:
         for s in self.project.reframe_segments(which):
             if s.start <= frame < s.end:
@@ -610,52 +630,89 @@ class EditorWindow(QMainWindow):
         if self.tab not in ("story", "reels") or self.cover_mode:
             return
         key = self._segment_key_at(self.tab, self.playhead)
-        self.project.set_cut_x(self.tab, {key: pos}, label="컷 가로 위치")
+        self.project.set_cut_x(self.tab, {key: pos}, label="컷 가로 위치", src="manual")
+        self.cut_strip.viewport().update()
         self.toast("이 컷의 가로 위치를 옮겼습니다" if key != -1 else "가로 위치를 옮겼습니다")
 
-    def request_reframe(self, which: str) -> None:
+    def _reframe_target_keys(self, which: str) -> list[int]:
+        """'지금 컷만' 대상: 선택한 컷 또는 재생 헤드가 있는 컷 (구간 밖이어도 된다)."""
+        segs = self.project.reframe_segments(which, whole=True)
+        if self.sel_ids:
+            starts = {c.start for c in self.project.state.cuts if c.id in self.sel_ids}
+            keys = [s.key for s in segs if s.key in starts]
+            if keys:
+                return keys
+        return [self._segment_key_at(which, self.playhead)]
+
+    def request_reframe(self, which: str, keys: list[int] | None = None) -> None:
+        """keys 가 없으면 영상 전체의 모든 컷(구간 밖 포함), 있으면 그 컷들만 자동 맞춤."""
         p = self.project
         sel = p.state.story if which == "story" else p.state.reels
-        if not sel.enabled:
-            self.toast(f"{which.upper()} 구간을 먼저 지정하세요.")
-            return
         if self.reframer.busy:
             return
         if sel.layout.mode != "fill":
             p.set_selection_layout(which, replace(sel.layout, mode="fill"))
-        segs = p.reframe_segments(which)
+        segs = p.reframe_segments(which, whole=True)
+        if keys is not None:
+            segs = [s for s in segs if s.key in set(keys)]
+            if not segs:
+                self.toast("자동으로 맞출 컷을 고르세요.")
+                return
         panel = self.story_panel if which == "story" else self.reels_panel
-        if self.reframer.start(which, sel.layout, segs):
+        if self.reframer.start(which, sel.layout, segs, keys):
             panel.layout_editor.set_reframe_status("인물을 찾는 중… 0%", busy=True)
 
     def _reframe_progress(self, which: str, f: float) -> None:
         panel = self.story_panel if which == "story" else self.reels_panel
         panel.layout_editor.set_reframe_status(f"인물을 찾는 중… {int(f * 100)}%", busy=True)
 
-    def _reframe_finished(self, which: str, res: dict, error: str) -> None:
+    def _reframe_finished(self, which: str, res: dict, error: str, keys) -> None:
         panel = self.story_panel if which == "story" else self.reels_panel
         if error:
             panel.layout_editor.set_reframe_status(error)
             self.toast(error)
             return
-        n = len(self.project.reframe_segments(which))
-        self.project.set_cut_x(which, res, replace_all=True, label="인물 기준 자동 맞춤")
+        analyzed = [s.key for s in self.project.reframe_segments(which, whole=True)] if keys is None else list(keys)
+        self.project.set_cut_x(
+            which,
+            res,
+            replace_all=keys is None,
+            label="인물 기준 자동 맞춤" if keys is None else "선택 컷 자동 맞춤",
+            src="auto",
+            analyzed=analyzed,
+        )
+        n = len(analyzed)
         msg = (
             f"컷 {n}개 중 {len(res)}개를 인물 기준으로 맞췄습니다"
             if res
             else "인물을 찾지 못해 위치를 바꾸지 않았습니다"
         )
-        panel.layout_editor.set_reframe_status(msg)
         self.toast(msg + (" (실행 취소로 되돌릴 수 있음)" if res else ""))
+        panel.layout_editor.set_reframe_status("")  # 분석 중 상태 해제 (버튼 다시 켜기)
+        panel.refresh()
+        self.cut_strip.viewport().update()
         self._update_preview_layout()
         self._sync_reframe(self.playhead)
         self.preview.update()
+
+    def _follow_cut(self, n: int) -> None:
+        """재생 헤드가 다른 컷으로 넘어가면 컷 선택도 따라간다 (방향키, 재생 후 멈춤, 타임라인 이동).
+        Shift/Ctrl 로 여러 컷을 고른 중이면 선택을 유지하고, FEED 에서 In/Out 을 직접 지정한 중이면 건드리지 않는다."""
+        if len(self.sel_ids) > 1 or (self.tab == "feed" and self._range_source == "manual"):
+            return
+        i = cuts_mod.cut_index_at(self.project.state.cuts, n)
+        if i is None:
+            return
+        cid = self.project.state.cuts[i].id
+        if self.sel_ids != [cid]:
+            self._set_cut_selection([cid])
 
     def _on_play_pos(self, n: int) -> None:
         self.playhead = n
         self.project.set_playhead(n)
         self.timeline.set_playhead(n, follow=True)
         self.cut_strip.set_playhead(n)
+        self._follow_cut(n)
         self.transport.set_frame(n)
 
     def _active_range(self) -> tuple[int, int] | None:
@@ -1046,6 +1103,24 @@ class EditorWindow(QMainWindow):
         )
         m.addSeparator()
         if self.tab in ("story", "reels"):
+            w = self.tab
+            add(
+                m,
+                "reframe_sel",
+                f"선택한 컷 인물 기준 자동 맞춤 ({w.upper()})",
+                lambda: self.request_reframe(w, self._reframe_target_keys(w)),
+                bool(sel) and not self.reframer.busy,
+                "컷을 선택하세요.",
+            )
+            add(
+                m,
+                "reframe_clear",
+                "선택한 컷 가로 위치 가운데로",
+                lambda: self.project.clear_cut_x(w, [c.start for c in sel]),
+                bool(sel),
+                "컷을 선택하세요.",
+            )
+            m.addSeparator()
             add(
                 m,
                 "to_inout",

@@ -78,7 +78,7 @@ class ReframeService(QObject):
     """STORY/REELS 컷별 인물 위치 분석을 백그라운드에서 한 건씩 한다 (원본을 축소 디코딩해 검출)."""
 
     progress = Signal(str, float)
-    finished = Signal(str, object, str)  # (which, {컷 키: pos_x}, 오류)
+    finished = Signal(str, object, str, object)  # (which, {컷 키: pos_x}, 오류, 분석한 컷 키 목록 또는 None=전체)
 
     def __init__(self, info: MediaInfo, index: FrameIndex, parent=None):
         super().__init__(parent)
@@ -86,18 +86,20 @@ class ReframeService(QObject):
         self.busy = False
         self._cancel = threading.Event()
 
-    def start(self, which: str, layout, segs) -> bool:
+    def start(self, which: str, layout, segs, keys: list[int] | None = None) -> bool:
         if self.busy:
             return False
         self.busy = True
         self._cancel.clear()
-        threading.Thread(target=self._run, args=(which, layout, list(segs)), name="ics-reframe", daemon=True).start()
+        threading.Thread(
+            target=self._run, args=(which, layout, list(segs), keys), name="ics-reframe", daemon=True
+        ).start()
         return True
 
     def cancel(self) -> None:
         self._cancel.set()
 
-    def _run(self, which, layout, segs) -> None:
+    def _run(self, which, layout, segs, keys) -> None:
         from ..core import reframe
         from ..core.decode import decode_frame_rgb
 
@@ -117,7 +119,7 @@ class ReframeService(QObject):
         except Exception as e:  # noqa: BLE001
             error = f"인물 분석 실패: {e}"
         self.busy = False
-        self.finished.emit(which, res, error)
+        self.finished.emit(which, res, error, keys)
 
 
 # ======================================================================= 프록시

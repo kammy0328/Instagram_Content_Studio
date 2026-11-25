@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QPoint, QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QPoint, QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -62,10 +62,21 @@ class _TileDelegate(QStyledItemDelegate):
         th = QRectF(r.x() + 2, r.y() + 2, r.width() - 4, r.height() - 4 - 22)
         p.fillRect(th, QColor("#0c0c0c"))
         img = self.strip.thumb(d["rep"])
+        rf = self.strip.reframe_info(d["start"], d["end"]) if self.strip.reframe_info else None
         if img is not None and img.height() > 0:
             sc = min(th.width() / img.width(), th.height() / img.height())
             w, h = img.width() * sc, img.height() * sc
-            p.drawImage(QRectF(th.x() + (th.width() - w) / 2, th.y() + (th.height() - h) / 2, w, h), img)
+            ir = QRectF(th.x() + (th.width() - w) / 2, th.y() + (th.height() - h) / 2, w, h)
+            p.drawImage(ir, img)
+            if rf is not None:  # STORY/REELS Fill: 9:16 로 잘릴 창을 썸네일 위에 보여 준다 (창 밖은 어둡게)
+                _src, xf, wf = rf
+                win = QRectF(ir.x() + ir.width() * xf, ir.y(), ir.width() * wf, ir.height())
+                shade = QColor(0, 0, 0, 150)
+                p.fillRect(QRectF(ir.x(), ir.y(), win.x() - ir.x(), ir.height()), shade)
+                p.fillRect(QRectF(win.right(), ir.y(), ir.right() - win.right(), ir.height()), shade)
+                p.setPen(QPen(QColor(255, 255, 255, 200), 1))
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.drawRect(win.adjusted(0.5, 0.5, -0.5, -0.5))
         # 번호 배지 (왼쪽 위)
         p.setFont(self._f_badge)
         label = f"#{d['num']}"
@@ -75,6 +86,27 @@ class _TileDelegate(QStyledItemDelegate):
         p.fillRect(badge, QColor(8, 10, 14, 215))
         p.setPen(theme.C["TEXT"])
         p.drawText(badge, Qt.AlignmentFlag.AlignCenter, label)
+        # 가로 위치를 어떻게 정했는지 (오른쪽 위): 자동 / 수동 / 인물 없음
+        src = rf[0] if rf is not None else None
+        if src:
+            p.setFont(self._f_small)
+            txt = {"auto": "자동", "manual": "수동", "none": "인물 없음"}[src]
+            fm2 = p.fontMetrics()
+            tw = fm2.horizontalAdvance(txt) + 10
+            pill = QRectF(th.right() - tw - 3, th.y() + 3, tw, fm2.height() + 2)
+            p.setPen(Qt.PenStyle.NoPen)
+            if src == "auto":
+                p.setBrush(QColor("#ececec"))
+                fg = QColor("#0a0a0a")
+            elif src == "manual":
+                p.setBrush(QColor(theme.ACCENT2))
+                fg = QColor("#0a0a0a")
+            else:
+                p.setBrush(QColor(20, 20, 20, 220))
+                fg = QColor(theme.MUTED)
+            p.drawRoundedRect(pill, 4, 4)
+            p.setPen(fg)
+            p.drawText(pill, Qt.AlignmentFlag.AlignCenter, txt)
         # 하단: 길이 + 병합/수동 표시
         p.setFont(self._f_small)
         n = d["end"] - d["start"]
@@ -92,7 +124,14 @@ class _TileDelegate(QStyledItemDelegate):
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawRoundedRect(r.adjusted(0, 0, -1, -1), 5, 5)
         if d["id"] == self.strip.current_id:
-            p.fillRect(QRectF(r.x(), r.bottom() - 3, r.width(), 3), theme.C["ACCENT2"])
+            # 이 컷 안에서의 재생 헤드: 썸네일 위 세로선 + 아래 진행 막대
+            n = max(1, d["end"] - d["start"])
+            f = min(1.0, max(0.0, (self.strip.playhead - d["start"]) / n))
+            p.fillRect(QRectF(r.x(), r.bottom() - 3, r.width(), 3), QColor(255, 255, 255, 40))
+            p.fillRect(QRectF(r.x(), r.bottom() - 3, r.width() * f, 3), theme.C["ACCENT2"])
+            hx = th.x() + th.width() * f
+            p.setPen(QPen(theme.C["ACCENT2"], 2))
+            p.drawLine(QPointF(hx, th.y()), QPointF(hx, th.bottom()))
         p.restore()
 
 
@@ -105,6 +144,9 @@ class CutStrip(QListWidget):
         super().__init__()
         self.project, self.thumbs = project, thumbs
         self.current_id: int | None = None
+        self.playhead = 0
+        # (컷 시작, 컷 끝) -> (출처 'auto'|'manual'|'none'|None, 창 x 비율, 창 폭 비율) 또는 None (표시 안 함)
+        self.reframe_info = None
         self._sig: tuple = ()
         self._block = False
         self.setViewMode(QListView.ViewMode.IconMode)
@@ -121,6 +163,8 @@ class CutStrip(QListWidget):
         self.setFrameShape(QListWidget.Shape.NoFrame)
         self.setFixedHeight(STRIP_H)
         self.setItemDelegate(_TileDelegate(self))
+        # 방향키는 항상 프레임 이동(편집 창 단축키)에 쓰도록 컷 목록은 키보드 포커스를 받지 않는다
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setSpacing(0)
         self.setToolTip(
             "컷 목록 (길이와 무관하게 같은 크기). 클릭: 선택 / Shift+클릭: 범위 / Ctrl+클릭: 추가·해제 / 오른쪽 클릭: 메뉴 (병합 등)"
@@ -203,12 +247,24 @@ class CutStrip(QListWidget):
         """재생 헤드가 있는 컷을 표시하고 스트립 가운데로 스크롤한다 (재생 헤드 근방 썸네일이 보이도록)."""
         i = cuts_mod.cut_index_at(self.project.state.cuts, frame)
         cid = self.project.state.cuts[i].id if i is not None else None
+        self.playhead = frame
         if cid == self.current_id:
+            if i is not None and i < self.count():  # 같은 컷 안: 그 타일의 재생 헤드만 다시 그린다
+                self.viewport().update(self.visualItemRect(self.item(i)))
             return
         self.current_id = cid
         if i is not None and i < self.count():
-            self.scrollToItem(self.item(i), QAbstractItemView.ScrollHint.PositionAtCenter)
+            self._center_on(i)
         self.viewport().update()
+
+    def _center_on(self, i: int) -> None:
+        """i 번째 타일을 스트립 가운데로 (scrollToItem 의 가운데 맞춤은 아이콘 보기에서 어긋날 때가 있어 직접 계산)."""
+        sb = self.horizontalScrollBar()
+        r = self.visualItemRect(self.item(i))
+        if r.width() <= 0:
+            self.scrollToItem(self.item(i), QAbstractItemView.ScrollHint.PositionAtCenter)
+            return
+        sb.setValue(sb.value() + r.center().x() - self.viewport().width() // 2)
 
     # ------------------------------------------------------------ 입력
     def _on_selection(self) -> None:

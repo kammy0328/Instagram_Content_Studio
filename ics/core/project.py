@@ -331,22 +331,46 @@ class Project:
         with self.edit(f"{which.upper()} 화면 배치", (which, "state")):
             sel.layout = layout
 
-    def set_cut_x(self, which: str, values: dict[int, float], replace_all: bool = False, label: str = "") -> None:
-        """컷별 가로 위치 (Fill 9:16). replace_all 이면 기존 값을 모두 지우고 values 로 바꾼다."""
+    def set_cut_x(
+        self,
+        which: str,
+        values: dict[int, float],
+        replace_all: bool = False,
+        label: str = "",
+        src: str = "manual",
+        analyzed: list[int] | None = None,
+    ) -> None:
+        """컷별 가로 위치 (Fill 9:16). replace_all 이면 기존 값을 모두 지우고 values 로 바꾼다.
+        analyzed: 자동 분석한 컷 키 목록 (values 에 없는 키는 '인물 없음' 으로 기록하고 위치는 그대로 둔다)."""
         sel = self._sel(which)
         with self.edit(label or f"{which.upper()} 가로 위치", (which, "state")):
             new = {} if replace_all else dict(sel.cut_x)
-            new.update({int(k): min(1.0, max(0.0, float(v))) for k, v in values.items()})
-            sel.cut_x = new
+            new_src = {} if replace_all else dict(sel.cut_x_src)
+            for k, v in values.items():
+                new[int(k)] = min(1.0, max(0.0, float(v)))
+                new_src[int(k)] = src
+            for k in analyzed or []:
+                if int(k) not in values:
+                    new_src[int(k)] = "none" if int(k) not in new else new_src.get(int(k), "manual")
+            sel.cut_x, sel.cut_x_src = new, new_src
 
-    def clear_cut_x(self, which: str) -> None:
+    def clear_cut_x(self, which: str, keys: list[int] | None = None) -> None:
+        """keys 가 없으면 모든 컷을 가운데로, 있으면 그 컷만."""
         sel = self._sel(which)
         with self.edit(f"{which.upper()} 가로 위치 초기화", (which, "state")):
-            sel.cut_x = {}
+            if keys is None:
+                sel.cut_x, sel.cut_x_src = {}, {}
+            else:
+                sel.cut_x = {k: v for k, v in sel.cut_x.items() if k not in keys}
+                sel.cut_x_src = {k: v for k, v in sel.cut_x_src.items() if k not in keys}
 
-    def reframe_segments(self, which: str):
+    def reframe_segments(self, which: str, whole: bool = False):
+        """컷 단위 조각. whole 이면 구간과 상관없이 영상 전체의 모든 컷 (자동 맞춤은 전체 컷에 미리 해 둔다:
+        나중에 구간을 옮겨도 위치가 남아 있도록 컷 시작 프레임을 키로 쓴다)."""
         from .reframe import segments
 
+        if whole:
+            return segments(0, self.count, self.state.cuts)
         sel = self._sel(which)
         return segments(sel.start, sel.end, self.state.cuts)
 

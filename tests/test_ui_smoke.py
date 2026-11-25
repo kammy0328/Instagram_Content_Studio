@@ -230,9 +230,10 @@ def test_timeline_has_no_cut_lane_but_scrubbing_the_playhead_still_works(qapp, w
     QTest.mouseRelease(tl, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(int(tl.x_of(130)), y))
     assert abs(win.playhead - 130) <= 2
     assert [(c.start, c.end) for c in p.state.cuts] == before and len(p._undo) == n0
-    # 컷 레인이 있던 자리(예전 Y_CUT)를 눌러도 선택/경계 편집은 일어나지 않고 재생 헤드만 이동
+    # 컷 레인이 있던 자리(예전 Y_CUT)를 눌러도 경계 편집은 일어나지 않고 재생 헤드만 이동 (컷 선택은 재생 헤드를 따라감)
     QTest.mouseClick(tl, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(int(tl.x_of(60)), 15))
-    assert abs(win.playhead - 60) <= 2 and win.sel_ids == []
+    assert abs(win.playhead - 60) <= 2 and win.sel_ids == [p.state.cuts[1].id]
+    assert [(c.start, c.end) for c in p.state.cuts] == before
 
 
 def test_playback_advances_and_pauses(qapp, win):
@@ -1108,3 +1109,98 @@ def test_preview_drag_does_nothing_in_fit(qapp, win):
     QTest.mouseMove(pv, c + QPoint(-80, 0))
     QTest.mouseRelease(pv, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, c + QPoint(-80, 0))
     assert win.project.state.story.cut_x == {}
+
+
+def test_reframe_single_cut_and_markers(qapp, win, monkeypatch):
+    from pathlib import Path
+
+    from ics.core import reframe
+
+    win.import_xml_file(str(Path(__file__).parent / "data" / "sample_premiere.xml"))
+    win.set_tab("reels")
+    win.project.set_range("reels", 0, 240)
+    win.project.set_selection_layout("reels", LayoutParams("fill"))
+    seen = []
+
+    def fake(info, index, layout, segs, *a, **k):
+        seen.append([s.key for s in segs])
+        return {s.key: 0.9 for s in segs if s.key != 120}  # 세 번째 컷에는 인물 없음
+
+    monkeypatch.setattr(reframe, "analyze", fake)
+    # 전체 컷
+    win.reels_panel.layout_editor.reframe_btn.click()
+    assert _wait(qapp, lambda: win.project.state.reels.cut_x_src, 10)
+    sel = win.project.state.reels
+    assert seen[-1] == [0, 50, 120, 200]  # 영상 전체 컷
+    assert sel.cut_x_src == {0: "auto", 50: "auto", 120: "none", 200: "auto"} and 120 not in sel.cut_x
+    # 컷 스트립 표시: 9:16 창 위치와 출처
+    src, xf, wf = win._cut_reframe_info(0, 50)
+    assert src == "auto" and 0 < wf < 1 and xf > 0.5
+    assert win._cut_reframe_info(120, 200)[0] == "none"
+    # 지금 컷만 (선택 없음 -> 재생 헤드가 있는 컷)
+    win.project.clear_cut_x("reels")
+    win.goto(60)
+    win.reels_panel.layout_editor.reframe_some_btn.click()
+    assert _wait(qapp, lambda: win.project.state.reels.cut_x_src, 10)
+    assert seen[-1] == [50] and win.project.state.reels.cut_x_src == {50: "auto"}
+    # 선택 컷 2개만
+    cs = win.project.state.cuts
+    win._set_cut_selection([cs[2].id, cs[3].id])
+    assert win.reels_panel.layout_editor.reframe_some_btn.text() == "선택 컷 2"
+    win.reels_panel.layout_editor.reframe_some_btn.click()
+    assert _wait(qapp, lambda: 200 in win.project.state.reels.cut_x_src, 10)
+    assert seen[-1] == [120, 200]
+    assert win.project.state.reels.cut_x_src == {50: "auto", 120: "none", 200: "auto"}  # 앞서 맞춘 컷은 그대로
+    # 드래그(수동)는 '수동' 으로 표시
+    win.project.set_cut_x("reels", {0: 0.1}, src="manual")
+    assert win._cut_reframe_info(0, 50)[0] == "manual"
+    # STORY 탭/피드에는 표시하지 않는다
+    win.set_tab("feed")
+    assert win._cut_reframe_info(0, 50) is None
+    win.cut_strip.grab()  # 타일 그리기에서 오류가 나지 않는다
+
+
+def test_cut_selection_follows_the_playhead_and_strip_centers_it(qapp, win):
+    from pathlib import Path
+
+    win.import_xml_file(str(Path(__file__).parent / "data" / "sample_premiere.xml"))
+    win.set_tab("story")
+    cs = win.project.state.cuts
+    win.goto(10)
+    assert win.sel_ids == [cs[0].id]
+    for _ in range(45):  # 방향키로 컷 경계를 넘는다
+        win.actions["step_fwd"].trigger()
+    assert win.playhead >= 50 and win.sel_ids == [cs[1].id]
+    assert win.cut_strip.selected_ids() == [cs[1].id] and win.cut_strip.current_id == cs[1].id
+    # 여러 컷을 고른 중이면 선택을 유지한다
+    win._set_cut_selection([cs[1].id, cs[2].id])
+    win.goto(210)
+    assert win.sel_ids == [cs[1].id, cs[2].id]
+    assert win.cut_strip.focusPolicy() == Qt.FocusPolicy.NoFocus  # 방향키는 프레임 이동용
+
+
+def test_current_cut_tile_shows_the_playhead_inside_the_cut(qapp, win):
+    from pathlib import Path
+
+    win.import_xml_file(str(Path(__file__).parent / "data" / "sample_premiere.xml"))
+    win.goto(85)  # 두 번째 컷 (50~120) 의 중간
+    pump(qapp, 100)
+    assert win.cut_strip.playhead == 85 and win.cut_strip.current_id == win.project.state.cuts[1].id
+    img = win.cut_strip.grab().toImage()
+    assert not img.isNull()
+
+
+def test_auto_reframe_covers_cuts_outside_the_range(qapp, win, monkeypatch):
+    from pathlib import Path
+
+    from ics.core import reframe
+
+    win.import_xml_file(str(Path(__file__).parent / "data" / "sample_premiere.xml"))
+    win.set_tab("story")
+    win.project.set_range("story", 60, 100)  # 두 번째 컷 일부만 구간
+    seen = []
+    monkeypatch.setattr(reframe, "analyze", lambda i, x, lp, segs, *a, **k: seen.append([s.key for s in segs]) or {})
+    win.story_panel.layout_editor.reframe_btn.click()
+    assert _wait(qapp, lambda: seen, 10)
+    assert seen[-1] == [0, 50, 120, 200]
+    assert win._cut_reframe_info(200, 240) is not None  # 구간 밖 컷도 컷 목록에 표시
