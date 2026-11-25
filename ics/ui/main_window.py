@@ -1,4 +1,4 @@
-"""편집 창: 상단(프로젝트·자동저장·렌더링) / 좌측(STORY·REELS·FEED·CREDITS) / 중앙(미리보기) / 하단(타임라인) / 우측(선택 구간 설정)."""
+"""편집 창: 상단(프로젝트·작업 탭·내보내기) / 중앙(미리보기) / 하단(컷 목록·타임라인) / 우측(선택 구간 설정)."""
 
 from __future__ import annotations
 
@@ -6,10 +6,9 @@ import threading
 from dataclasses import replace
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Qt, QTimer, Signal
+from PySide6.QtCore import QObject, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QImage, QKeySequence, QPixmap
 from PySide6.QtWidgets import (
-    QButtonGroup,
     QDialog,
     QFileDialog,
     QFrame,
@@ -23,7 +22,6 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSplitter,
     QStackedWidget,
-    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -34,7 +32,7 @@ from ..core.model import FEED_MAX_FINAL
 from ..render import engine
 from ..render.planner import plan_render
 from ..render.queue import RenderQueue
-from . import theme
+from . import icons, motion, theme
 from .credits_page import CreditsPage
 from .cutstrip import CutScrubber, CutStrip
 from .dialogs import (
@@ -46,7 +44,7 @@ from .dialogs import (
     ShortcutsDialog,
     XmlImportDialog,
 )
-from .frameless import FramelessHelper, window_buttons
+from .frameless import ChromeDialog, FramelessHelper, window_buttons
 from .panels import FeedPanel, SelectionPanel, TransportBar
 from .preview import PreviewWidget
 from .services import (
@@ -61,7 +59,7 @@ from .services import (
 )
 from .settings import DEFAULT_SHORTCUTS, Settings
 from .timeline import TimelineWidget
-from .widgets import ElidedLabel, SegButton, studio_icon
+from .widgets import ElidedLabel, NavTabs, icon_button, menu_button, studio_icon
 
 
 class StillLoader(QObject):
@@ -78,7 +76,7 @@ class StillLoader(QObject):
         threading.Thread(target=work, daemon=True).start()
 
 
-class StillZoomDialog(QDialog):
+class StillZoomDialog(ChromeDialog):
     def __init__(self, img: QImage, parent=None):
         super().__init__(parent)
         self.setWindowTitle(f"스틸 확대 (100%) - {img.width()}×{img.height()}")
@@ -108,7 +106,7 @@ class EditorWindow(QMainWindow):
         self.setWindowTitle(f"{project.rec.name} - Instagram Content Studio")
         self.resize(1480, 920)
         self.setWindowIcon(studio_icon())
-        self.setStyleSheet(theme.STYLE)
+        self.setStyleSheet(theme.stylesheet())
         # ---- 서비스
         self.decoder = Decoder(info, index)
         self.frames = FrameService(self.decoder)
@@ -200,33 +198,31 @@ class EditorWindow(QMainWindow):
         body.addWidget(self.pages, 1)
         outer.addLayout(body, 1)
         self.toast_lbl = QLabel("", root)
-        self.toast_lbl.setStyleSheet("background:#262626;border:1px solid #9a9a9a;border-radius:9px;padding:10px 18px;")
+        self.toast_lbl.setObjectName("toast")
+        self.toast_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.toast_lbl.hide()
         self._toast_timer = QTimer(self)
         self._toast_timer.setSingleShot(True)
-        self._toast_timer.timeout.connect(self.toast_lbl.hide)
+        self._toast_timer.timeout.connect(lambda: motion.fade_out(self.toast_lbl, motion.NORMAL))
 
     def _topbar(self) -> QWidget:
-        """한 줄짜리 상단바: 뒤로 · 제목/상태 | 작업 탭(가운데) | 실행 취소 · 도구 · 게시 · 내보내기."""
+        """한 줄짜리 상단바: 뒤로 · 제목/상태 | 작업 탭(가운데) | 실행 취소 · 도구 · 게시 · 내보내기 · 창 단추."""
         f = QFrame()
         f.setObjectName("topbar")
+        f.setFixedHeight(54)
         h = QHBoxLayout(f)
-        h.setContentsMargins(14, 8, 14, 8)
-        h.setSpacing(10)
-        b = QPushButton("←")
-        b.setObjectName("ghost")
-        b.setFixedWidth(30)
-        b.setToolTip("프로젝트 목록으로 돌아가기")
-        b.setAccessibleName("프로젝트 목록으로 돌아가기")
-        b.clicked.connect(self._to_projects)
-        h.addWidget(b)
+        h.setContentsMargins(10, 0, 0, 0)
+        h.setSpacing(8)
+        b = icon_button("arrow-left", "프로젝트 목록으로 돌아가기", self._to_projects, size=32, color=theme.MUTED)
+        h.addWidget(b, 0, Qt.AlignmentFlag.AlignVCenter)
         titles = QVBoxLayout()
-        titles.setSpacing(0)
+        titles.setSpacing(1)
+        titles.setContentsMargins(0, 0, 0, 0)
         self.title_lbl = ElidedLabel()
         self.title_lbl.setObjectName("title")
         titles.addWidget(self.title_lbl)
         status = QHBoxLayout()
-        status.setSpacing(10)
+        status.setSpacing(8)
         self.save_lbl = QLabel("● 저장됨")
         self.save_lbl.setObjectName("status")
         status.addWidget(self.save_lbl)
@@ -239,61 +235,47 @@ class EditorWindow(QMainWindow):
         titles.addLayout(status)
         left = QWidget()
         left.setLayout(titles)
-        left.setMinimumWidth(180)
-        h.addWidget(left, 1)
-        # ---- 작업 탭 (가운데 세그먼트)
-        seg = QFrame()
-        seg.setObjectName("segbar")
-        sh = QHBoxLayout(seg)
-        sh.setContentsMargins(3, 3, 3, 3)
-        sh.setSpacing(2)
-        self.nav_group = QButtonGroup(self)
-        self.nav_btns: dict[str, QPushButton] = {}
-        specs = (
-            ("story", "STORY", "9:16 · 최대 60초"),
-            ("reels", "REELS", "영상 + 커버"),
-            ("feed", "FEED", "캐러셀 · 최대 20개"),
-            ("credits", "CREDITS", "크레딧과 캡션"),
+        left.setMinimumWidth(160)
+        h.addWidget(left, 1, Qt.AlignmentFlag.AlignVCenter)
+        # ---- 작업 탭 (가운데): 고른 탭 표시가 미끄러져 옮겨 간다
+        self.nav_tabs = NavTabs(
+            (
+                ("story", "STORY", "smartphone", "9:16 · 최대 60초"),
+                ("reels", "REELS", "clapperboard", "영상 + 커버"),
+                ("feed", "FEED", "layout-grid", "캐러셀 · 최대 20개"),
+                ("credits", "CREDITS", "text", "크레딧과 캡션"),
+            )
         )
-        for key, label, tip in specs:
-            bt = SegButton(label)
-            bt.setToolTip(tip)
-            bt.clicked.connect(lambda _=False, k=key: self.set_tab(k))
-            self.nav_group.addButton(bt)
-            sh.addWidget(bt)
-            self.nav_btns[key] = bt
+        self.nav_tabs.tabClicked.connect(self.set_tab)
+        self.nav_btns: dict[str, QPushButton] = dict(self.nav_tabs.buttons)
         self.nav_btns["story"].setChecked(True)
-        h.addWidget(seg, 0, Qt.AlignmentFlag.AlignCenter)
+        h.addWidget(self.nav_tabs, 0, Qt.AlignmentFlag.AlignCenter)
         # ---- 오른쪽 동작
         right = QHBoxLayout()
-        right.setSpacing(6)
+        right.setSpacing(4)
         right.addStretch(1)
         self.render_lbl = ElidedLabel()
         self.render_lbl.setObjectName("status")
         self.render_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         right.addWidget(self.render_lbl, 1)
-        self.b_undo = QPushButton("↶")
-        self.b_redo = QPushButton("↷")
-        self.b_undo.clicked.connect(self.do_undo)
-        self.b_redo.clicked.connect(self.do_redo)
-        for x in (self.b_undo, self.b_redo):
-            x.setObjectName("ghost")
-            x.setFixedWidth(30)
-            right.addWidget(x)
-        more = QToolButton()
-        more.setObjectName("ghostTool")
-        more.setText("···")
-        more.setToolTip("도구")
-        more.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.b_undo = icon_button("undo-2", "실행 취소", self.do_undo, size=32)
+        self.b_redo = icon_button("redo-2", "다시 실행", self.do_redo, size=32)
+        right.addWidget(self.b_undo)
+        right.addWidget(self.b_redo)
+        more = menu_button("ellipsis", "도구", 32)
         menu = QMenu(more)
-        menu.addAction("영상 정보", lambda: MediaReportDialog(self.project.media, self).exec())
-        menu.addAction("단축키 설정", self.open_shortcuts)
+        menu.addAction(
+            icons.icon("info", theme.MUTED, 14), "영상 정보", lambda: MediaReportDialog(self.project.media, self).exec()
+        )
+        menu.addAction(icons.icon("keyboard", theme.MUTED, 14), "단축키 설정", self.open_shortcuts)
         menu.addSeparator()
-        menu.addAction("업로드 준비", self.open_ready)
-        menu.addAction("업데이트…", self.open_update)
+        menu.addAction(icons.icon("check", theme.MUTED, 14), "업로드 준비", self.open_ready)
+        menu.addAction(icons.icon("download", theme.MUTED, 14), "업데이트…", self.open_update)
         more.setMenu(menu)
         right.addWidget(more)
+        right.addSpacing(6)
         bp = QPushButton("게시")
+        bp.setIcon(icons.icon("send", theme.TEXT, 14))
         bp.setToolTip("Instagram 에 게시/예약합니다 (Cloudflare 중계 필요).")
         bp.clicked.connect(self.open_publisher)
         right.addWidget(bp)
@@ -305,35 +287,25 @@ class EditorWindow(QMainWindow):
         rw = QWidget()
         rw.setLayout(right)
         rw.setMinimumWidth(180)
-        h.addWidget(rw, 1)
+        h.addWidget(rw, 1, Qt.AlignmentFlag.AlignVCenter)
+        h.addSpacing(6)
         # Windows 제목 표시줄 대신: 최소화 / 최대화·복원 / 닫기 (상단바 빈 곳을 끌면 창 이동, 더블클릭 최대화)
         h.addWidget(window_buttons(self), 0, Qt.AlignmentFlag.AlignTop)
-        h.setContentsMargins(14, 8, 0, 8)
         self._topbar_frame = f
         return f
 
     def _editor_page(self) -> QWidget:
         sp = QSplitter(Qt.Orientation.Vertical)
-        sp.setContentsMargins(12, 12, 12, 12)
+        sp.setContentsMargins(10, 10, 10, 10)
         sp.setChildrenCollapsible(False)
         top = QSplitter(Qt.Orientation.Horizontal)
         top.setChildrenCollapsible(False)
-        # --- 중앙
+        # --- 중앙: 미리보기 (머리글 없이 화면을 최대한 크게) + 재생 줄
         center = QFrame()
         center.setObjectName("workspaceCard")
         cv = QVBoxLayout(center)
-        cv.setContentsMargins(0, 0, 0, 0)
+        cv.setContentsMargins(1, 1, 1, 0)
         cv.setSpacing(0)
-        preview_header = QHBoxLayout()
-        preview_header.setContentsMargins(14, 8, 10, 4)
-        self.preview_title = QLabel("STORY 미리보기")
-        self.preview_title.setObjectName("eyebrow")
-        preview_header.addWidget(self.preview_title)
-        preview_header.addStretch(1)
-        self.preview_badge = QLabel("9:16")
-        self.preview_badge.setObjectName("badge")
-        preview_header.addWidget(self.preview_badge)
-        cv.addLayout(preview_header)
         self.preview = PreviewWidget()
         cv.addWidget(self.preview, 1)
         self.transport = TransportBar(self.project)
@@ -347,29 +319,33 @@ class EditorWindow(QMainWindow):
         self.transport.muteToggled.connect(self.set_muted)
         self.transport.volumeChanged.connect(self.set_volume)
         cv.addWidget(self.transport)
+        self._center_card = center
         top.addWidget(center)
         # --- 우측 인스펙터
         self.inspector = QStackedWidget()
         self.inspector.setObjectName("inspector")
         self.story_panel = SelectionPanel("story", self.project, self.settings)
-        self.reels_panel = SelectionPanel("reels", self.project)
-        self.feed_panel = FeedPanel(self.project, self.thumbs)
+        self.reels_panel = SelectionPanel("reels", self.project, self.settings)
+        self.feed_panel = FeedPanel(self.project, self.thumbs, self.settings)
         for w in (self.story_panel, self.reels_panel, self.feed_panel):
+            w.setObjectName("inspectorBody")
             sc = QScrollArea()
             sc.setWidgetResizable(True)
             sc.setWidget(w)
             sc.setFrameShape(QFrame.Shape.NoFrame)
+            sc.viewport().setAutoFillBackground(False)
             self.inspector.addWidget(sc)
-        self.inspector.setMinimumWidth(340)
-        self.inspector.setMaximumWidth(460)
+        self.inspector.setMinimumWidth(330)
+        self.inspector.setMaximumWidth(440)
         top.addWidget(self.inspector)
-        top.setSizes([900, 380])
+        top.setSizes([900, 370])
         top.setStretchFactor(0, 1)
         sp.addWidget(top)
-        # --- 하단 타임라인
-        bottom = QWidget()
+        # --- 하단: 컷 도구 · 컷 목록 · 컷 확대 타임라인 · 전체 타임라인 (한 카드, 같은 바탕과 간격)
+        bottom = QFrame()
+        bottom.setObjectName("bottomCard")
         bv = QVBoxLayout(bottom)
-        bv.setContentsMargins(0, 0, 0, 0)
+        bv.setContentsMargins(1, 0, 1, 1)
         bv.setSpacing(0)
         bv.addWidget(self._cut_toolbar())
         self.cut_strip = CutStrip(self.project, self.cut_thumbs)
@@ -444,13 +420,16 @@ class EditorWindow(QMainWindow):
         f = QFrame()
         f.setObjectName("timelineToolbar")
         h = QHBoxLayout(f)
-        h.setContentsMargins(10, 10, 10, 10)
-        h.setSpacing(6)
+        h.setContentsMargins(10, 8, 10, 8)
+        h.setSpacing(4)
 
-        def btn(text, fn, tip="", checkable=False):
+        def btn(text, fn, tip="", checkable=False, icon=None):
             b = QPushButton(text)
             b.setObjectName("compact")
             b.setToolTip(tip)
+            if icon:
+                b.setIcon(icons.icon(icon, theme.TEXT, 14, on="#ffffff"))
+                b.setIconSize(QSize(14, 14))
             b.clicked.connect(fn)
             b.setCheckable(checkable)
             h.addWidget(b)
@@ -460,23 +439,20 @@ class EditorWindow(QMainWindow):
             "XML 불러오기",
             self.import_xml,
             "Premiere/FCP7 XML · FCPXML · EDL: 고르면 바로 컷이 잘립니다. 창에 끌어다 놓아도 됩니다.",
+            icon="file-input",
         )
-        btn(
-            "병합",
-            self.merge_selected,
-            "선택한 연속 컷을 하나로 병합 (단축키 M · 오른쪽 클릭 메뉴에서도 가능)",
-        )
+        h.addSpacing(4)
+        btn("병합", self.merge_selected, "선택한 연속 컷을 하나로 병합 (M) · 오른쪽 클릭 메뉴에서도 가능", icon="merge")
         btn(
             "컷 나누기",
             self.split_at_playhead,
-            "재생 헤드 위치에서 컷을 둘로 나눔 (단축키 C · 재생 헤드 프레임이 뒤쪽 컷의 첫 프레임)",
+            "재생 헤드 위치에서 컷을 둘로 나눔 (C) · 재생 헤드 프레임이 뒤쪽 컷의 첫 프레임",
+            icon="scissors",
         )
-        more = QToolButton()
-        more.setText("추가 작업")
-        more.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        more = menu_button("ellipsis", "추가 작업 (병합 해제, 원래 컷 복원, XML 세부 설정…)")
         menu = QMenu(more)
         menu.addAction("병합 해제", self.unmerge_selected)
-        menu.addAction("원래 컷 복원", self.restore_cuts)
+        menu.addAction(icons.icon("rotate-ccw", theme.MUTED, 14), "원래 컷 복원", self.restore_cuts)
         menu.addSeparator()
         menu.addAction("XML 세부 설정으로 불러오기…", self.import_xml_advanced)
         act = menu.addAction("XML 불러온 뒤 인물 기준 자동 맞춤")
@@ -487,22 +463,20 @@ class EditorWindow(QMainWindow):
         self.reframe_after_xml_action = act
         more.setMenu(menu)
         h.addWidget(more)
-        self.snap_btn = btn("스냅", self.toggle_snap, "스냅 켜기/끄기 (N)", checkable=True)
+        h.addSpacing(4)
+        self.snap_btn = btn("스냅", self.toggle_snap, "스냅 켜기/끄기 (N)", checkable=True, icon="magnet")
         self.snap_btn.setChecked(True)
+        h.addSpacing(10)
         self.cut_info = ElidedLabel()
-        self.cut_info.setObjectName("muted")
+        self.cut_info.setObjectName("hint")
         self.cut_info.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         h.addWidget(self.cut_info, 1)
-        for t, fn in (
-            ("－", lambda: self.timeline.zoom(0.8)),
-            ("＋", lambda: self.timeline.zoom(1.25)),
-            ("전체", lambda: self.timeline.fit()),
+        for name, tip, fn in (
+            ("zoom-out", "타임라인 축소 (-)", lambda: self.timeline.zoom(0.8)),
+            ("zoom-in", "타임라인 확대 (+)", lambda: self.timeline.zoom(1.25)),
+            ("maximize-2", "전체 보기", lambda: self.timeline.fit()),
         ):
-            b = QPushButton(t)
-            b.setObjectName("compact")
-            b.setFixedWidth(46 if t == "전체" else 32)
-            b.clicked.connect(fn)
-            h.addWidget(b)
+            h.addWidget(icon_button(name, tip, fn, size=28, icon_size=15, color=theme.MUTED))
         return f
 
     # ================================================================ 액션/단축키
@@ -566,7 +540,19 @@ class EditorWindow(QMainWindow):
             self.toast("단축키를 저장했습니다.")
 
     # ================================================================ 탭
+    TAB_ORDER = ("story", "reels", "feed", "credits")
+
     def set_tab(self, key: str) -> None:
+        prev = getattr(self, "tab", key)
+        # 전환 효과: 바뀌기 전 화면을 찍어 두고(상태는 아래에서 즉시 바뀜), 바뀐 뒤 화면과 겹쳐 밀어 보인다
+        trs: list[tuple[motion.Transition, int]] = []
+        if prev != key and self.isVisible():
+            d = 1 if self.TAB_ORDER.index(key) > self.TAB_ORDER.index(prev) else -1
+            if "credits" in (prev, key):
+                trs.append((motion.Transition(self.pages), 36 * d))
+            else:
+                trs.append((motion.Transition(self.inspector, theme.PANEL, radius=12), 28 * d))
+                trs.append((motion.Transition(self.preview), 0))  # 미리보기는 제자리에서 겹쳐 바뀐다 (재생 줄은 그대로)
         self.tab = key
         self.nav_btns[key].setChecked(True)
         self.playback.pause()
@@ -586,6 +572,8 @@ class EditorWindow(QMainWindow):
             self.timeline.update()
             self.cut_strip.viewport().update()  # 컷 타일의 9:16 창/자동 표시는 탭(STORY/REELS)마다 다르다
         self.project.set_ui("tab", key)
+        for tr, dx in trs:
+            tr.play(dx=dx)
 
     # ================================================================ 이동/재생
     def goto(self, n: int, request: bool = True) -> None:
@@ -595,7 +583,7 @@ class EditorWindow(QMainWindow):
         self.playhead = n
         self.project.set_playhead(n)
         self.timeline.set_playhead(n, follow=True)
-        self.cut_strip.set_playhead(n)
+        self.cut_strip.set_playhead(n, smooth=not self.playback.playing)
         self._follow_cut(n)
         self._update_cut_scrub(n)
         self.transport.set_frame(n)
@@ -783,7 +771,7 @@ class EditorWindow(QMainWindow):
         self.playhead = n
         self.project.set_playhead(n)
         self.timeline.set_playhead(n, follow=True)
-        self.cut_strip.set_playhead(n)
+        self.cut_strip.set_playhead(n, smooth=False)
         self._follow_cut(n)
         self._update_cut_scrub(n)
         self.transport.set_frame(n)
@@ -806,7 +794,7 @@ class EditorWindow(QMainWindow):
         if self.playback.playing:
             self.playback.pause()
             self.rate_level = 0
-            self.transport.rate_lbl.setText("")
+            self.transport.set_rate("")
             return
         loop = self._active_range() if self.transport.loop.isChecked() else None
         start = self.playhead
@@ -821,13 +809,13 @@ class EditorWindow(QMainWindow):
         if self.playback.playing:
             self.playback.pause()
             self.rate_level = 0
-            self.transport.rate_lbl.setText("")
+            self.transport.set_rate("")
             return
         loop = self._active_range() if self.transport.loop.isChecked() else None
         start = self.playhead
         if loop and not (loop[0] < start <= loop[1]):
             start = loop[1] - 1
-        self.transport.rate_lbl.setText("-1×")
+        self.transport.set_rate("-1×")
         self.playback.play(start, -1.0, loop)
 
     def shuttle(self, direction: int) -> None:
@@ -836,7 +824,7 @@ class EditorWindow(QMainWindow):
             rate = 1.0 if cur <= 0 else min(8.0, cur * 2)
         else:
             rate = -1.0 if cur >= 0 else max(-8.0, cur * 2)
-        self.transport.rate_lbl.setText(f"{rate:g}×")
+        self.transport.set_rate(f"{rate:g}×")
         loop = self._active_range() if self.transport.loop.isChecked() else None
         self.playback.play(self.playhead, rate, loop)
 
@@ -1283,20 +1271,26 @@ class EditorWindow(QMainWindow):
         self.snap_btn.blockSignals(False)
 
     def _update_cut_info(self) -> None:
+        """짧게: '57컷 · 선택 #33 · 8.05s'. XML 이름과 자세한 내용은 툴팁에."""
         cs = self.project.state.cuts
         if not cs:
-            self.cut_info.setText("")
+            self.cut_info.setText("XML 을 불러오거나 창에 끌어다 놓으면 컷이 잘립니다")
             return
         sel = [c for c in cs if c.id in self.sel_ids]
         iss = self.project.cut_issues()
         xml_name = Path(str(self.project.state.xml_meta.get("file", ""))).name
-        txt = f"컷 {len(cs)}개" + (f" · XML {xml_name}" if xml_name else "") + " (STORY/REELS/FEED 공용)"
+        txt = f"{len(cs)}컷"
         if sel:
             nums = [cs.index(c) + 1 for c in sel]
-            txt += f" · 선택 #{min(nums)}~#{max(nums)} ({len(sel)}개, {self.project.seconds(min(c.start for c in sel), max(c.end for c in sel)):.2f}s)"
+            a, b = min(nums), max(nums)
+            sec = self.project.seconds(min(c.start for c in sel), max(c.end for c in sel))
+            txt += f" · 선택 #{a}" + (f"~#{b}" if b != a else "") + f" · {sec:.2f}s"
         if iss:
-            txt += f" · ⚠ 겹침/빈 구간 {len(iss)}곳"
+            txt += f" · ⚠ 겹침/빈 구간 {len(iss)}"
         self.cut_info.setText(txt)
+        self.cut_info.setToolTip(
+            (f"XML: {xml_name}\n" if xml_name else "") + "컷 정보는 STORY / REELS / FEED 공용입니다."
+        )
 
     # ================================================================ 레이아웃 편집
     def _resume_letterbox(self) -> None:
@@ -1474,11 +1468,9 @@ class EditorWindow(QMainWindow):
         self.preview.overlay_img = (
             self._story_overlay_image() if (self.tab == "story" and not self.cover_mode) else None
         )
+        if not (view_out or self.cover_mode):
+            self.preview.label = "원본 보기"
         self.preview.set_output(view_out or self.cover_mode, kind, lp)
-        self.preview_title.setText("릴스 커버 미리보기" if self.cover_mode else f"{self.tab.upper()} 미리보기")
-        self.preview_badge.setText(
-            {"916": "9:16", "45": "4:5", "orig": "원본 비율"}[kind] if view_out or self.cover_mode else "원본 보기"
-        )
 
     # ================================================================ 렌더링 / 업로드 준비
     def open_render(self, sections: set[str] | None = None) -> None:
@@ -1714,12 +1706,17 @@ class EditorWindow(QMainWindow):
 
     # ================================================================ 기타
     def toast(self, text: str, ms: int = 2600) -> None:
-        self.toast_lbl.setText(text)
-        self.toast_lbl.adjustSize()
+        """아래 가운데에 잠깐 떠오르는 알림 (올라오며 나타나고, 흐려지며 사라진다)."""
+        lbl = self.toast_lbl
+        was = lbl.isVisible() and lbl.graphicsEffect() is None
+        lbl.setText(text)
+        lbl.adjustSize()
         w = self.centralWidget()
-        self.toast_lbl.move((w.width() - self.toast_lbl.width()) // 2, w.height() - self.toast_lbl.height() - 60)
-        self.toast_lbl.show()
-        self.toast_lbl.raise_()
+        lbl.move((w.width() - lbl.width()) // 2, w.height() - lbl.height() - 64)
+        lbl.show()
+        lbl.raise_()
+        if not was:  # 이미 떠 있으면 글자만 바꾼다 (깜빡이지 않게)
+            motion.slide_fade_in(lbl, 10, motion.NORMAL)
         self._toast_timer.start(ms)
 
     def _warn(self, msg: str) -> None:
@@ -1728,6 +1725,12 @@ class EditorWindow(QMainWindow):
 
     def _to_projects(self) -> None:
         self.requestProjects.emit()
+
+    def showEvent(self, e) -> None:  # noqa: N802
+        super().showEvent(e)
+        if not getattr(self, "_shown_once", False):  # 처음 열릴 때 살짝 페이드 (로딩 화면에서 자연스럽게 넘어가게)
+            self._shown_once = True
+            motion.window_fade_in(self, motion.NORMAL)
 
     def closeEvent(self, e) -> None:
         if self.render_queue and self.render_queue.running:

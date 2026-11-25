@@ -15,7 +15,6 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
-    QDialog,
     QDialogButtonBox,
     QFileDialog,
     QFormLayout,
@@ -42,6 +41,7 @@ from ..core import media as media_mod
 from ..core import xml_import as xmlmod
 from ..core.timecode import frame_to_tc, tc_to_frame
 from ..render.planner import RenderJob, RenderPlan
+from .frameless import ChromeDialog
 from .settings import DEFAULT_SHORTCUTS
 from .widgets import studio_icon
 
@@ -68,7 +68,7 @@ def fmt_bytes(n: float) -> str:
 
 
 # ============================================================================ 미디어 분석 리포트
-class MediaReportDialog(QDialog):
+class MediaReportDialog(ChromeDialog):
     def __init__(self, info: media_mod.MediaInfo, parent=None):
         super().__init__(parent)
         self.setWindowTitle("영상 분석 결과")
@@ -95,7 +95,7 @@ class MediaReportDialog(QDialog):
 
 
 # ============================================================================ 새 프로젝트
-class NewProjectDialog(QDialog):
+class NewProjectDialog(ChromeDialog):
     def __init__(self, parent=None, default_output: str = ""):
         super().__init__(parent)
         self.setWindowTitle("새 프로젝트")
@@ -207,7 +207,9 @@ class NewProjectDialog(QDialog):
 
 
 # ============================================================================ 프로젝트 목록
-class ProjectListDialog(QDialog):
+class ProjectListDialog(ChromeDialog):
+    chrome_minimize = True  # 시작 창이므로 최소화 단추도
+
     def __init__(self, library, parent=None):
         super().__init__(parent)
         self.library = library
@@ -342,7 +344,7 @@ class ProjectListDialog(QDialog):
 
 
 # ============================================================================ XML 불러오기
-class XmlImportDialog(QDialog):
+class XmlImportDialog(ChromeDialog):
     def __init__(self, project, parent=None):
         super().__init__(parent)
         self.project = project
@@ -505,7 +507,7 @@ class XmlImportDialog(QDialog):
 
 
 # ============================================================================ 렌더링
-class ExportChooser(QDialog):
+class ExportChooser(ChromeDialog):
     """내보낼 묶음 선택: STORY / REELS / FEED / CREDITS 를 각각 따로 내보낼 수 있다."""
 
     LABELS = (
@@ -556,7 +558,7 @@ class ExportChooser(QDialog):
         return {k for k, cb in self.boxes.items() if cb.isChecked()}
 
 
-class RenderDialog(QDialog):
+class RenderDialog(ChromeDialog):
     startRequested = Signal(bool)  # overwrite
     cancelRequested = Signal()
     retryRequested = Signal()
@@ -701,7 +703,7 @@ class RenderDialog(QDialog):
 
 
 # ============================================================================ 업로드 준비
-class ReadyDialog(QDialog):
+class ReadyDialog(ChromeDialog):
     def __init__(self, project, parent=None, toast=None):
         super().__init__(parent)
         self.project = project
@@ -827,7 +829,7 @@ class ReadyDialog(QDialog):
 
 
 # ============================================================================ 단축키
-class ShortcutsDialog(QDialog):
+class ShortcutsDialog(ChromeDialog):
     def __init__(self, settings, parent=None):
         super().__init__(parent)
         self.settings = settings
@@ -882,7 +884,7 @@ class ShortcutsDialog(QDialog):
 
 
 # ============================================================================ ID 사전
-class IdDictionaryDialog(QDialog):
+class IdDictionaryDialog(ChromeDialog):
     def __init__(self, iddict, parent=None):
         super().__init__(parent)
         self.iddict = iddict

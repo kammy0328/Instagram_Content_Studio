@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFormLayout,
+    QFrame,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -36,6 +37,16 @@ def _copy(text: str, toast=None) -> None:
         toast("복사했습니다 (줄바꿈 유지)")
 
 
+def _card() -> tuple[QFrame, QVBoxLayout]:
+    """편집 화면과 같은 카드 (둥근 모서리, 같은 바탕과 여백)."""
+    w = QFrame()
+    w.setObjectName("workspaceCard")
+    v = QVBoxLayout(w)
+    v.setContentsMargins(16, 14, 16, 16)
+    v.setSpacing(8)
+    return w, v
+
+
 class CreditsPage(QWidget):
     openDictionary = Signal()
     toast = Signal(str)
@@ -45,7 +56,7 @@ class CreditsPage(QWidget):
         self.project, self.iddict = project, iddict
         self._block = False
         root = QHBoxLayout(self)
-        root.setContentsMargins(8, 8, 8, 8)
+        root.setContentsMargins(10, 10, 10, 10)
         sp = QSplitter(Qt.Orientation.Horizontal)
         root.addWidget(sp)
         sp.addWidget(self._left())
@@ -64,16 +75,15 @@ class CreditsPage(QWidget):
 
     # ------------------------------------------------------------------ 왼쪽: 원문
     def _left(self) -> QWidget:
-        w = QWidget()
-        v = QVBoxLayout(w)
-        h = QLabel("크레딧 원문 (자유 텍스트)")
-        h.setObjectName("h1")
+        w, v = _card()
+        h = QLabel("크레딧 원문")
+        h.setObjectName("cardTitle")
         v.addWidget(h)
         hint = QLabel(
             "콜론·하이픈·슬래시·파이프, @아이디, instagram.com 링크 등 어떤 표기든 붙여넣으세요.\n"
             "표준 형식: ROLE | NAME (@instagram_id)"
         )
-        hint.setObjectName("muted")
+        hint.setObjectName("hint")
         hint.setWordWrap(True)
         v.addWidget(hint)
         self.raw = QPlainTextEdit()
@@ -99,10 +109,10 @@ class CreditsPage(QWidget):
 
     # ------------------------------------------------------------------ 가운데: 결과 표
     def _middle(self) -> QWidget:
-        w = QWidget()
-        v = QVBoxLayout(w)
-        h = QLabel("정규화 결과 (직접 수정 가능)")
-        h.setObjectName("h1")
+        w, v = _card()
+        h = QLabel("정규화 결과")
+        h.setObjectName("cardTitle")
+        h.setToolTip("변환 결과 칸은 직접 고칠 수 있습니다")
         v.addWidget(h)
         self.summary = QLabel("")
         v.addWidget(self.summary)
@@ -134,10 +144,9 @@ class CreditsPage(QWidget):
 
     # ------------------------------------------------------------------ 오른쪽: 캡션/댓글
     def _right(self) -> QWidget:
-        w = QWidget()
-        lay = QVBoxLayout(w)
+        w, lay = _card()
         h = QLabel("캡션 / 댓글")
-        h.setObjectName("h1")
+        h.setObjectName("cardTitle")
         lay.addWidget(h)
         self.body = QPlainTextEdit()
         self.body.setPlaceholderText("캡션 본문 (해시태그·이모지 포함)")
@@ -146,6 +155,7 @@ class CreditsPage(QWidget):
         lay.addWidget(self.body)
         f = QFormLayout()
         self.limit = QSpinBox()
+        self.limit.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
         self.limit.setRange(100, 10000)
         self.limit.setValue(2200)
         self.limit.valueChanged.connect(lambda v: None if self._block else self.project.set_caption_options(limit=v))
@@ -169,7 +179,7 @@ class CreditsPage(QWidget):
         f.addRow("배치", self.pos)
         lay.addLayout(f)
         self.counts = QLabel("")
-        self.counts.setObjectName("muted")
+        self.counts.setObjectName("hint")
         self.counts.setWordWrap(True)
         lay.addWidget(self.counts)
         cap_box = QGroupBox("CAPTION")

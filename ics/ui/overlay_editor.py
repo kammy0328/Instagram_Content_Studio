@@ -20,7 +20,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QSpinBox,
-    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -29,6 +28,7 @@ from ..core.model import StoryOverlay
 from ..overlay_presets import LogoPresets
 from ..render import overlay as ov_mod
 from .panels import ResetSlider
+from .widgets import Section, menu_button
 
 
 def _shrinkable(c: QComboBox) -> None:
@@ -46,49 +46,12 @@ FONT_STYLES = (
 )
 
 
-class Section(QWidget):
-    """접고 펼 수 있는 작은 묶음 (머리 글자를 누르면 접힘). 접힘 상태는 설정에 남긴다."""
-
-    def __init__(self, title: str, key: str, settings=None, open_default: bool = True, parent=None):
-        super().__init__(parent)
-        self._settings, self._key = settings, f"overlay_section_{key}"
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(6)
-        self.head = QToolButton()
-        self.head.setObjectName("sectionHead")
-        self.head.setText(title)
-        self.head.setCheckable(True)
-        self.head.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self.head.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        lay.addWidget(self.head)
-        self.body = QWidget()
-        self.lay = QVBoxLayout(self.body)
-        self.lay.setContentsMargins(0, 0, 0, 4)
-        self.lay.setSpacing(6)
-        lay.addWidget(self.body)
-        is_open = open_default
-        if settings is not None:
-            is_open = bool(settings.get(self._key, open_default))
-        self.head.setChecked(is_open)
-        self._apply(is_open)
-        self.head.toggled.connect(self._toggled)
-
-    def _apply(self, on: bool) -> None:
-        self.body.setVisible(on)
-        self.head.setArrowType(Qt.ArrowType.DownArrow if on else Qt.ArrowType.RightArrow)
-
-    def _toggled(self, on: bool) -> None:
-        self._apply(on)
-        if self._settings is not None:
-            self._settings.set(self._key, bool(on))
-
-
 class OverlayEditor(QGroupBox):
     changed = Signal(object)  # StoryOverlay (확정된 변경)
 
     def __init__(self, settings, parent=None):
-        super().__init__("로고 · 제목 · 문구", parent)
+        super().__init__("", parent)
+        self.setObjectName("flat")  # 묶음 머리는 아래 Section 들이 맡는다 (구간/화면 배치와 같은 모양)
         ov_mod.ensure_fonts()
         self.presets = LogoPresets(settings)
         self._ov = StoryOverlay()
@@ -98,6 +61,8 @@ class OverlayEditor(QGroupBox):
         self._timer.setInterval(450)
         self._timer.timeout.connect(self._commit)
         v = QVBoxLayout(self)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(0)
 
         # ---- 배경 (Fit 전용)
         self.legacy_bg = QWidget()
@@ -120,7 +85,14 @@ class OverlayEditor(QGroupBox):
         br.addWidget(self.bg_dim_lbl)
         lv.addLayout(br)
 
-        v.addWidget(self.legacy_bg)
+        self.sec_fit = Section(
+            "여백 꾸미기",
+            "overlay_section_fit",
+            settings,
+            help_text="Fit(검정 여백) 일 때: 여백 배경과 글자 모양, 위치를 정합니다.",
+        )
+        self.sec_fit.lay.addWidget(self.legacy_bg)
+        v.addWidget(self.sec_fit)
 
         def vrow(label, widget, value_lbl=None, into=None):
             r = QHBoxLayout()
@@ -139,7 +111,9 @@ class OverlayEditor(QGroupBox):
 
         outer = v
         # ---- 제목
-        self.sec_title = Section("제목", "title", settings)
+        self.sec_title = Section(
+            "제목", "overlay_section_title", settings, help_text="비워 두면 프로젝트의 아티스트 / 곡 제목을 씁니다."
+        )
         outer.addWidget(self.sec_title)
         v = self.sec_title.lay
         self.text_on = QCheckBox("아티스트 · 제목 표시")
@@ -158,7 +132,9 @@ class OverlayEditor(QGroupBox):
         v.addWidget(self.upper)
 
         # ---- 로고
-        self.sec_logo = Section("로고", "logo", settings)
+        self.sec_logo = Section(
+            "로고", "overlay_section_logo", settings, help_text="로고 프리셋은 모든 프로젝트 공통입니다."
+        )
         outer.addWidget(self.sec_logo)
         v = self.sec_logo.lay
         self.logo_on = QCheckBox("로고 표시")
@@ -171,11 +147,7 @@ class OverlayEditor(QGroupBox):
         _shrinkable(self.preset_combo)
         self.preset_combo.activated.connect(lambda _i: self._apply_preset())
         pr.addWidget(self.preset_combo, 1)
-        more = QToolButton()
-        more.setObjectName("ghostTool")
-        more.setText("···")
-        more.setToolTip("로고 파일 / 프리셋 관리")
-        more.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        more = menu_button("ellipsis", "로고 파일 / 프리셋 관리")
         m = QMenu(more)
         m.addAction("로고 파일 선택…", self._pick_logo)
         m.addAction("프리셋 다시 적용", self._apply_preset)
@@ -201,17 +173,28 @@ class OverlayEditor(QGroupBox):
         self.logo_size_lbl = QLabel("")
         vrow("크기", self.logo_size, self.logo_size_lbl)
 
-        # ---- Fill 전용: 문구, 불투명도, 그라데이션, 위치
-        self.fill_box = QWidget()
-        fv = QVBoxLayout(self.fill_box)
-        fv.setContentsMargins(0, 0, 0, 0)
-        fv.setSpacing(6)
+        # 로고 높이 (Fill 전용)
+        self.logo_y_row = QWidget()
+        ly = QVBoxLayout(self.logo_y_row)
+        ly.setContentsMargins(0, 0, 0, 0)
         self.logo_y = ResetSlider()
         self.logo_y.setRange(600, 950)
         self.logo_y.default = 838
         self.logo_y_lbl = QLabel("")
-        vrow("높이", self.logo_y, self.logo_y_lbl, fv)
-        self.sec_cap = Section("로고 위 문구", "caption", settings)
+        vrow("높이", self.logo_y, self.logo_y_lbl, ly)
+        v.addWidget(self.logo_y_row)
+
+        # ---- Fill 전용: 문구, 불투명도, 그라데이션, 위치
+        self.fill_box = QWidget()
+        fv = QVBoxLayout(self.fill_box)
+        fv.setContentsMargins(0, 0, 0, 0)
+        fv.setSpacing(0)
+        self.sec_cap = Section(
+            "로고 위 문구",
+            "overlay_section_caption",
+            settings,
+            help_text="고른 작업에 맞게 BEAUTY BY / CLEANUP BY / BEAUTY & CLEANUP BY 로 표시됩니다.",
+        )
         fv.addWidget(self.sec_cap)
         cap_l = self.sec_cap.lay
         wr = QHBoxLayout()
@@ -233,7 +216,13 @@ class OverlayEditor(QGroupBox):
         self.cap_preview = QLabel("")
         self.cap_preview.setObjectName("hint")
         cap_l.addWidget(self.cap_preview)
-        self.sec_look = Section("표시 (불투명도 · 어둡게 · 위치)", "look", settings, open_default=False)
+        self.sec_look = Section(
+            "표시",
+            "overlay_section_look",
+            settings,
+            open_default=False,
+            help_text="불투명도 · 위아래 어둡게 · 제목 높이.\n기본 위치는 인스타 스토리 UI 에 가려지지 않게 잡았습니다. 더블클릭: 기본값",
+        )
         fv.addWidget(self.sec_look)
         look_l = self.sec_look.lay
         self.opacity = ResetSlider()
@@ -307,7 +296,7 @@ class OverlayEditor(QGroupBox):
         tr2.addWidget(self.color_btn)
         tr2.addStretch(1)
         lt.addLayout(tr2)
-        v.addWidget(self.legacy_text)
+        self.sec_fit.lay.addWidget(self.legacy_text)
         self.warn = QLabel("")
         self.warn.setObjectName("warn")
         self.warn.setWordWrap(True)
@@ -434,9 +423,9 @@ class OverlayEditor(QGroupBox):
     def set_fill_mode(self, fill: bool) -> None:
         """Fill 이면 영상 위 오버레이 설정을, Fit 이면 검정 여백 설정(배경, 글꼴, 위치)을 보인다."""
         self.fill_box.setVisible(fill)
+        self.logo_y_row.setVisible(fill)
         self.f_artist.setVisible(fill)
-        self.legacy_bg.setVisible(not fill)
-        self.legacy_text.setVisible(not fill)
+        self.sec_fit.setVisible(not fill)
         self.logo_pos.setVisible(not fill)
         self.logo_pos_lbl.setVisible(not fill)
 

@@ -14,7 +14,6 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDateTimeEdit,
-    QDialog,
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
@@ -38,6 +37,7 @@ from ..publisher.models import ALL_KINDS, Kind, State
 from ..publisher.relay import RelayError
 from ..publisher.service import DEFAULT_API_VERSION, PublisherService, ReviewRow, SubmitResult
 from .dialogs import open_path
+from .frameless import ChromeDialog
 
 KIND_LABEL = {Kind.STORY: "STORY", Kind.REELS: "REELS", Kind.FEED: "FEED"}
 STATE_LABEL = {
@@ -69,7 +69,7 @@ def _fmt(ts: float | None) -> str:
     return datetime.fromtimestamp(ts).strftime("%m-%d %H:%M") if ts else ""
 
 
-class PublisherDialog(QDialog):
+class PublisherDialog(ChromeDialog):
     def __init__(self, project, service: PublisherService, parent=None, toast=None):
         super().__init__(parent)
         self.project, self.svc, self.toast = project, service, toast or (lambda m: None)

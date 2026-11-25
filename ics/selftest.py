@@ -97,7 +97,18 @@ def _check_qt() -> str:
     found = sorted(p.name for p in (plugins / "platforms").glob("*")) if (plugins / "platforms").is_dir() else []
     if getattr(sys, "frozen", False) and sys.platform.startswith("win") and "qwindows.dll" not in found:
         raise RuntimeError(f"qwindows.dll 이 번들에 없습니다 ({plugins}): {found}")
-    return f"Qt {qVersion()}, platform={app.platformName()}, plugins={found}"
+    # 화면 글꼴(Pretendard)과 선 아이콘(SVG)이 번들에 들어 있고 그려지는지
+    from PySide6.QtGui import QFontDatabase
+
+    from .ui import icons, theme
+
+    theme.ensure_fonts()
+    if "Pretendard" not in QFontDatabase.families():
+        raise RuntimeError("Pretendard 글꼴을 등록하지 못했습니다 (assets/fonts 누락?)")
+    img = icons.pixmap("play", "#ffffff", 16).toImage()
+    if not any(img.pixelColor(x, y).alpha() > 0 for x in range(img.width()) for y in range(img.height())):
+        raise RuntimeError("선 아이콘(SVG)을 그리지 못했습니다 (assets/icons 또는 QtSvg 누락?)")
+    return f"Qt {qVersion()}, platform={app.platformName()}, plugins={found}, 글꼴/아이콘 OK"
 
 
 _TAG_FIELDS = "stream=color_space,color_primaries,color_transfer,color_range"

@@ -70,7 +70,13 @@ class PreviewWidget(QWidget):
 
     def paintEvent(self, _e):
         p = QPainter(self)
-        p.fillRect(self.rect(), theme.C["BG"])
+        # 카드(둥근 모서리) 안의 무대: 위쪽 모서리만 둥글게 (아래는 재생 줄과 이어진다)
+        p.fillRect(self.rect(), theme.C["PANEL"])
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(theme.C["BG"])
+        p.drawRoundedRect(QRectF(self.rect()).adjusted(0, 0, 0, 20), 11, 11)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
         if self.image is None or self.image.isNull():
             p.setPen(theme.C["MUTED"])
@@ -84,9 +90,18 @@ class PreviewWidget(QWidget):
             p.drawRect(r)
         else:
             self._paint_output(p)
-        if self.label:
-            p.setPen(theme.C["MUTED"])
-            p.drawText(14, 22, self.label)
+        if self.label:  # 작은 알약 모양 안내 (예: 원본 보기, 릴스 커버 미리보기)
+            f = p.font()
+            f.setPixelSize(theme.FS_SMALL)
+            p.setFont(f)
+            fm = p.fontMetrics()
+            r = QRectF(12, 12, fm.horizontalAdvance(self.label) + 18, fm.height() + 8)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(20, 20, 23, 220))
+            p.drawRoundedRect(r, r.height() / 2, r.height() / 2)
+            p.setPen(theme.C["TEXT"])
+            p.drawText(r, Qt.AlignmentFlag.AlignCenter, self.label)
 
     def _paint_blur_bg(self, p: QPainter, cr: QRectF) -> None:
         """영상을 캔버스에 가득 차게 잘라 아주 작게 줄였다 키워(=흐림) 그리고, 최종 렌더링처럼 어둡게 한다."""

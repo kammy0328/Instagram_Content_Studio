@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 
 from .. import paths, updater
 from ..publisher.secrets import default_secret_store
+from .frameless import ChromeDialog
 
 TOKEN_KEY = "github_token"
 
@@ -47,7 +48,7 @@ class CheckWorker(QObject):
         self.done.emit(info, err)
 
 
-class UpdateDialog(QDialog):
+class UpdateDialog(ChromeDialog):
     _prog = Signal(float)
     _finished = Signal(str, str)  # (설치 파일 경로, 오류)
 
