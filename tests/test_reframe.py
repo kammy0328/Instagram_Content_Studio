@@ -207,3 +207,16 @@ def test_face_nudge_is_what_prevents_the_cut(monkeypatch):
     x = R.best_window_x([a, a, b, b], 0, 1000, 300) * 700
     vis = max(0.0, min(660, x + 300) - max(600, x)) / 60
     assert 0.15 < vis < 0.85  # 옮기지 않으면 얼굴이 잘린다 (위 테스트가 실제로 옮김을 확인하는지 보증)
+
+
+def test_center_follows_the_face_not_the_body_box():
+    # 몸 상자는 팔을 뻗어 왼쪽으로 넓다 (200~500, 가운데 350). 얼굴은 400~440 (가운데 420) -> 얼굴 가운데
+    frames = [[R.Det(200, 0, 500, 600, 0.5), R.Det(400, 40, 440, 90, 0.7, True)]]
+    x = R.best_window_x(frames, 0, 1000, 300) * 700
+    assert abs((x + 150) - 420) < 8
+
+
+def test_back_turned_person_without_face_still_uses_the_body():
+    frames = [[R.Det(600, 0, 700, 600, 0.5)]]
+    x = R.best_window_x(frames, 0, 1000, 300) * 700
+    assert abs((x + 150) - 650) < 8

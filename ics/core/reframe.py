@@ -105,7 +105,12 @@ def _window_scores(dets: Sequence[Det], xs: np.ndarray, win_w: float):
     face = np.array([d.face for d in dets])
     eff = np.where(face[None, :], cover**4 - FACE_CUT_PENALTY * 4 * cover * (1 - cover), cover)
     contrib = eff * w[None, :]
-    seen = np.clip(cover, 0, 1) * w[None, :]  # 가운데 계산용 (감점 없이 보이는 만큼)
+    # 가운데 계산용: 얼굴이 (절반 이상) 보이면 얼굴만으로, 얼굴이 없으면(뒷모습 등) 몸으로.
+    # 몸 상자는 팔, 머리카락, 기울어진 자세 때문에 얼굴과 중심이 어긋나기 쉽다.
+    seen_face = np.where(face[None, :] & (cover >= 0.5), cover * w[None, :], 0.0)
+    seen_body = np.where(~face[None, :], np.clip(cover, 0, 1) * w[None, :], 0.0)
+    has_face = seen_face.sum(axis=1, keepdims=True) > 0
+    seen = np.where(has_face, seen_face, seen_body)
     return contrib.sum(axis=1), seen, (x1 + x2) / 2
 
 
