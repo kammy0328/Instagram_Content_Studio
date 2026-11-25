@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFormLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -17,7 +18,6 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QPushButton,
-    QRadioButton,
     QSlider,
     QStyle,
     QVBoxLayout,
@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 from ..core.layout import LayoutParams, compute_geometry
 from ..core.model import FEED_MAX_FINAL
 from ..core.timecode import frame_to_tc, tc_to_frame
+from . import theme
 from .widgets import ElidedLabel, control_icon
 
 
@@ -70,6 +71,7 @@ class TransportBar(QWidget):
     viewToggled = Signal(bool)
     frameEntered = Signal(int)
     muteToggled = Signal(bool)  # True = 소리 끔
+    volumeChanged = Signal(int)  # 0~100 (미리보기 음량)
 
     def __init__(self, project):
         super().__init__()
@@ -118,10 +120,17 @@ class TransportBar(QWidget):
         self.view_btn.toggled.connect(lambda on: self.view_btn.setText("출력" if on else "소스"))
         lay.addWidget(self.view_btn)
         self.mute_btn = QPushButton()
-        self.mute_btn.setObjectName("compact")
+        self.mute_btn.setObjectName("iconToggle")
         self.mute_btn.setCheckable(True)
+        self.mute_btn.setFixedWidth(30)
         self.mute_btn.toggled.connect(self.muteToggled.emit)
         lay.addWidget(self.mute_btn)
+        self.volume = ResetSlider(0, 100, 100, default=100)
+        self.volume.setObjectName("volume")
+        self.volume.setFixedWidth(84)
+        self.volume.setToolTip("미리보기 음량 (더블클릭: 100%) · 렌더링 결과와 무관")
+        self.volume.valueChanged.connect(self.volumeChanged.emit)
+        lay.addWidget(self.volume)
         self._has_audio = True
         self.set_muted(False)
         v.addLayout(lay)
@@ -165,6 +174,12 @@ class TransportBar(QWidget):
         self.mute_btn.blockSignals(False)
         self._refresh_mute_btn()
 
+    def set_volume(self, value: int) -> None:
+        """표시만 맞춘다 (volumeChanged 는 내보내지 않는다)."""
+        self.volume.blockSignals(True)
+        self.volume.setValue(int(value))
+        self.volume.blockSignals(False)
+
     def set_audio_available(self, has_audio: bool) -> None:
         self._has_audio = has_audio
         self._refresh_mute_btn()
@@ -177,11 +192,16 @@ class TransportBar(QWidget):
     def _refresh_mute_btn(self) -> None:
         muted = self.mute_btn.isChecked()
         self.mute_btn.setEnabled(self._has_audio)
+        self.volume.setEnabled(self._has_audio and not muted)
+        # 재생 버튼들과 같은 표준 아이콘을 같은 색으로 칠해 통일한다 (이모지 사용 안 함)
+        off = muted or not self._has_audio
+        icon = QStyle.StandardPixmap.SP_MediaVolumeMuted if off else QStyle.StandardPixmap.SP_MediaVolume
+        self.mute_btn.setIcon(control_icon(self, icon, theme.MUTED if off else theme.TEXT))
+        self.mute_btn.setText("")
+        self.mute_btn.setAccessibleName("소리 꺼짐" if off else "소리 켜짐")
         if not self._has_audio:
-            self.mute_btn.setText("🔇")
             self.mute_btn.setToolTip("이 영상에는 오디오 트랙이 없습니다.")
             return
-        self.mute_btn.setText("🔇" if muted else "🔊")
         self.mute_btn.setToolTip(
             "소리 켜기/끄기 (Shift+M)\n미리보기 재생 소리만 끕니다. 렌더링 결과물의 소리에는 영향이 없습니다."
         )
@@ -221,13 +241,26 @@ class LayoutEditor(QGroupBox):
     def __init__(self, title="화면 배치"):
         super().__init__(title)
         v = QVBoxLayout(self)
-        row = QHBoxLayout()
-        self.r_fit = QRadioButton("Fit (원본 전체 + 검정 여백)")
-        self.r_fill = QRadioButton("Fill / Crop")
+        v.setSpacing(8)
+        # Fit / Fill 은 두 칸짜리 세그먼트 버튼
+        self.mode_bar = QFrame()
+        self.mode_bar.setObjectName("segbarSmall")
+        row = QHBoxLayout(self.mode_bar)
+        row.setContentsMargins(2, 2, 2, 2)
+        row.setSpacing(2)
+        self.r_fit = QPushButton("Fit")
+        self.r_fill = QPushButton("Fill")
+        self.r_fit.setToolTip("원본 전체가 보이게 맞추고 남는 곳은 여백")
+        self.r_fill.setToolTip("화면을 꽉 채우고 넘치는 부분은 잘라냄")
+        self._mode_grp = QButtonGroup(self)
+        self._mode_grp.setExclusive(True)
+        for b in (self.r_fit, self.r_fill):
+            b.setObjectName("segSmall")
+            b.setCheckable(True)
+            self._mode_grp.addButton(b)
+            row.addWidget(b)
         self.r_fit.setChecked(True)
-        row.addWidget(self.r_fit)
-        row.addWidget(self.r_fill)
-        v.addLayout(row)
+        v.addWidget(self.mode_bar)
         self._source_crop = None
         self.auto_crop = QCheckBox("검정 띠 자동 크롭")
         self.auto_crop.setToolTip(
@@ -236,27 +269,28 @@ class LayoutEditor(QGroupBox):
             "장면마다 띠나 화면 비율이 달라지면 놓칠 수 있으므로 출력 미리보기를 확인하세요."
         )
         self.detect_crop = QPushButton("다시 감지")
+        self.detect_crop.setObjectName("link")
         self.detect_crop.setEnabled(False)
         self.detect_crop.clicked.connect(lambda: self.cropRequested.emit(True))
         crop_row = QHBoxLayout()
         crop_row.addWidget(self.auto_crop, 1)
         crop_row.addWidget(self.detect_crop)
         v.addLayout(crop_row)
-        self.crop_info = QLabel("원본의 위·아래 / 좌·우 검정 띠를 감지합니다.")
-        self.crop_info.setObjectName("muted")
-        self.crop_info.setWordWrap(True)
+        self.crop_info = QLabel("")
+        self.crop_info.setObjectName("hint")
         v.addWidget(self.crop_info)
-        f = QFormLayout()
+        pr = QHBoxLayout()
+        pr.setSpacing(8)
+        self.py_lbl = QLabel("세로 위치")
+        self.py_lbl.setObjectName("fieldLabel")
+        pr.addWidget(self.py_lbl)
         self.py = slider(0, 100, 50)
-        f.addRow("세로 위치", self.py)
-        v.addLayout(f)
+        pr.addWidget(self.py, 1)
+        v.addLayout(pr)
         self.info = QLabel("")
-        self.info.setObjectName("muted")
+        self.info.setObjectName("hint")
         self.info.setWordWrap(True)
         v.addWidget(self.info)
-        btn = QPushButton("위치 초기화")
-        btn.clicked.connect(self.reset)
-        v.addWidget(btn)
         self._block = False
         self._crop_busy = False
         self.auto_crop.toggled.connect(self._crop_toggled)
@@ -288,6 +322,7 @@ class LayoutEditor(QGroupBox):
         """원본 비율 출력이면 여백/크롭 선택이 의미 없으므로 Fit/Fill 선택을 숨긴다."""
         self.r_fit.setVisible(not on)
         self.r_fill.setVisible(not on)
+        self.mode_bar.setVisible(not on)
 
     def value(self) -> LayoutParams:
         return LayoutParams(
@@ -303,15 +338,13 @@ class LayoutEditor(QGroupBox):
         self._block = True
         self._source_crop = lp.source_crop
         self.auto_crop.setChecked(lp.auto_crop)
-        self.crop_info.setText(
-            (
-                f"감지 영역 {lp.source_crop[2]}×{lp.source_crop[3]} · 크롭 켜짐"
-                if lp.source_crop
-                else "검정 띠 감지 대기 중…"
-            )
+        txt = (
+            (f"감지 영역 {lp.source_crop[2]}×{lp.source_crop[3]}" if lp.source_crop else "검정 띠 감지 중…")
             if lp.auto_crop
-            else "자동 크롭 꺼짐 · 원본 영역 유지"
+            else ""
         )
+        self.crop_info.setText(txt)
+        self.crop_info.setVisible(bool(txt))
         (self.r_fill if lp.mode == "fill" else self.r_fit).setChecked(True)
         self.py.setValue(int(round(lp.pos_y * 100)))
         self._sync_enabled()
@@ -328,8 +361,9 @@ class LayoutEditor(QGroupBox):
         if not self._block:
             self.changed.emit(self.value())
 
-    def set_info(self, text: str) -> None:
+    def set_info(self, text: str, tip: str = "") -> None:
         self.info.setText(text)
+        self.info.setToolTip(tip)
 
 
 class SelectionPanel(QWidget):
@@ -346,40 +380,45 @@ class SelectionPanel(QWidget):
     coverLayoutLive = Signal(object)
     coverLayoutCommit = Signal(object)
     overlayChanged = Signal(object)  # StoryOverlay (STORY 전용)
+    fromCutsClicked = Signal()  # 선택한 컷으로 구간 지정
 
     def __init__(self, which: str, project, settings=None):
         super().__init__()
         self.which, self.project = which, project
         v = QVBoxLayout(self)
-        v.setContentsMargins(14, 14, 14, 14)
-        spec = "최대 60초 · 9:16 · 1080×1920 · MP4" if which == "story" else "최대 180초 · 9:16 · 1080×1920 · MP4"
-        t = QLabel(f"{which.upper()} 설정")
-        t.setObjectName("h1")
-        v.addWidget(t)
+        v.setContentsMargins(16, 14, 16, 16)
+        v.setSpacing(4)
+        spec = "9:16 · 1080×1920 · 최대 60초" if which == "story" else "9:16 · 1080×1920 · 최대 180초"
         s = QLabel(spec)
-        s.setObjectName("muted")
+        s.setObjectName("hint")
         v.addWidget(s)
         g = QGroupBox("구간")
         gl = QVBoxLayout(g)
+        gl.setSpacing(8)
         pr = QHBoxLayout()
+        pr.setSpacing(4)
         presets = ["15", "30", "60"] + (["180"] if which == "reels" else [])
         self.preset_btns: dict[str, QPushButton] = {}
         grp = QButtonGroup(self)
         grp.setExclusive(True)
         for p in presets + ["max"]:
             b = QPushButton(f"{p}초" if p != "max" else "최대")
+            b.setObjectName("chip")
             b.setCheckable(True)
-            b.setToolTip("현재 재생 위치를 시작 지점으로 해당 길이만큼 선택")
+            b.setToolTip("재생 헤드 위치부터 이 길이만큼 선택")
             b.clicked.connect(lambda _=False, pp=p: self.presetClicked.emit(pp))
             grp.addButton(b)
             pr.addWidget(b)
             self.preset_btns[p] = b
+        self.cuts_btn = QPushButton("선택 컷")
+        self.cuts_btn.setObjectName("chip")
+        self.cuts_btn.setToolTip("타임라인에서 고른 컷 범위를 그대로 구간으로 (컷을 Shift+클릭으로 여러 개 선택)")
+        self.cuts_btn.setEnabled(False)
+        self.cuts_btn.clicked.connect(self.fromCutsClicked.emit)
+        pr.addWidget(self.cuts_btn)
         gl.addLayout(pr)
-        self.start_note = QLabel("재생헤드를 시작 지점에 놓고 길이 버튼을 누르세요.")
-        self.start_note.setObjectName("muted")
-        self.start_note.setWordWrap(True)
-        gl.addWidget(self.start_note)
         self.len_lbl = QLabel("")
+        self.len_lbl.setObjectName("hint")
         gl.addWidget(self.len_lbl)
         v.addWidget(g)
         self.layout_editor = LayoutEditor()
@@ -398,6 +437,10 @@ class SelectionPanel(QWidget):
         v.addStretch(1)
         self._in = self._out = 0
 
+    def set_cuts_selected(self, n: int) -> None:
+        self.cuts_btn.setEnabled(n > 0)
+        self.cuts_btn.setText(f"선택 컷 {n}" if n > 1 else "선택 컷")
+
     def _build_cover(self, v: QVBoxLayout) -> None:
         g = QGroupBox("릴스 커버 (JPG)")
         gl = QVBoxLayout(g)
@@ -409,8 +452,9 @@ class SelectionPanel(QWidget):
         b2.clicked.connect(self.coverGoto.emit)
         r.addWidget(b2)
         gl.addLayout(r)
-        self.cover_lbl = QLabel("커버 프레임: 미지정 (릴스 구간과 무관하게 아무 프레임)")
-        self.cover_lbl.setObjectName("muted")
+        self.cover_lbl = QLabel("커버 프레임 미지정")
+        self.cover_lbl.setObjectName("hint")
+        self.cover_lbl.setToolTip("릴스 구간과 상관없이 영상의 아무 프레임이나 커버로 쓸 수 있습니다.")
         self.cover_lbl.setWordWrap(True)
         gl.addWidget(self.cover_lbl)
         self.cover_ratio_combo = QComboBox()
@@ -420,10 +464,12 @@ class SelectionPanel(QWidget):
             lambda _i: self.coverRatioChanged.emit(self.cover_ratio_combo.currentData())
         )
         rr = QHBoxLayout()
-        rr.addWidget(QLabel("커버 출력 비율"))
+        _cl = QLabel("출력 비율")
+        _cl.setObjectName("fieldLabel")
+        rr.addWidget(_cl)
         rr.addWidget(self.cover_ratio_combo, 1)
         gl.addLayout(rr)
-        self.cover_prev = QCheckBox("커버 미리보기 + 프로필 그리드 크롭")
+        self.cover_prev = QCheckBox("커버 미리보기 (프로필 그리드 크롭 표시)")
         self.cover_prev.toggled.connect(self.coverPreview.emit)
         gl.addWidget(self.cover_prev)
         f = QFormLayout()
@@ -432,9 +478,10 @@ class SelectionPanel(QWidget):
         self.grid_combo.currentTextChanged.connect(
             lambda t: self.coverChanged.emit(t, self.project.state.cover.grid_offset)
         )
+        f.setHorizontalSpacing(8)
         f.addRow("그리드 비율", self.grid_combo)
         gl.addLayout(f)
-        self.cover_layout = LayoutEditor("커버 화면 배치 / 위치 조정")
+        self.cover_layout = LayoutEditor("커버 화면 배치")
         self.cover_layout.changed.connect(self.coverLayoutLive.emit)
         self.cover_layout.committed.connect(self.coverLayoutCommit.emit)
         gl.addWidget(self.cover_layout)
@@ -448,11 +495,13 @@ class SelectionPanel(QWidget):
             dur = p.seconds(sel.start, sel.end)
             lim = 60.0 if self.which == "story" else 180.0
             ok = dur <= lim + 1e-6
-            self.len_lbl.setText(f"길이 {dur:.3f}초 ({sel.length}프레임)" + ("" if ok else f"  ⚠ {int(lim)}초 초과"))
-            self.len_lbl.setObjectName("" if ok else "err")
+            self.len_lbl.setText(
+                f"{dur:.3f}초 · {sel.length}f · {frame_to_tc(sel.start, p.fps)} 부터"
+                + ("" if ok else f"  ⚠ {int(lim)}초 초과")
+            )
             self.len_lbl.setStyleSheet("" if ok else "color:#ff5d6c;")
         else:
-            self.len_lbl.setText("미지정 - 재생헤드를 시작 지점에 놓고 길이 버튼을 누르세요.")
+            self.len_lbl.setText("재생 헤드를 시작 지점에 두고 길이를 고르세요")
             self.len_lbl.setStyleSheet("")
         for k, b in self.preset_btns.items():
             b.blockSignals(True)
@@ -461,9 +510,7 @@ class SelectionPanel(QWidget):
         self.layout_editor.set_value(sel.layout)
         if p.media:
             g = compute_geometry(p.media.display_w, p.media.display_h, "916", sel.layout)
-            self.layout_editor.set_info(
-                f"출력 {g.canvas_w}×{g.canvas_h}" + (f" · {g.tier_note}" if g.tier_note else "")
-            )
+            self.layout_editor.set_info(f"출력 {g.canvas_w}×{g.canvas_h}", g.tier_note)
             if self.overlay_editor is not None:
                 from ..render import overlay as ov_mod
 
@@ -477,7 +524,7 @@ class SelectionPanel(QWidget):
         if self.which == "reels":
             c = p.state.cover
             if c.frame is None:
-                self.cover_lbl.setText("커버 프레임: 미지정 (릴스 구간과 무관하게 아무 프레임)")
+                self.cover_lbl.setText("커버 프레임 미지정")
             else:
                 self.cover_lbl.setText(f"커버 프레임: f{c.frame} ({frame_to_tc(c.frame, p.fps)})")
             self.grid_combo.blockSignals(True)
@@ -693,6 +740,4 @@ class FeedPanel(QWidget):
             self.layout_editor.set_value(it.layout)
             if p.media:
                 g = compute_geometry(p.media.display_w, p.media.display_h, p.feed_kind(), it.layout)
-                self.layout_editor.set_info(
-                    f"출력 {g.canvas_w}×{g.canvas_h}" + (f" · {g.tier_note}" if g.tier_note else "")
-                )
+                self.layout_editor.set_info(f"출력 {g.canvas_w}×{g.canvas_h}", g.tier_note)

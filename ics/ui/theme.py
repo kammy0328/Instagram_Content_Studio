@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import tempfile
+from pathlib import Path
+
 from PySide6.QtGui import QColor, QPalette
 
 BG = "#0a0a0a"
@@ -80,6 +83,11 @@ QToolTip {{ background: {PANEL2}; color: {TEXT}; border: 1px solid {BORDER}; }}
 QMenu {{ background: {PANEL}; border: 1px solid {BORDER}; }}
 QMenu::item:selected {{ background: #303030; }}
 QCheckBox::indicator, QRadioButton::indicator {{ width: 14px; height: 14px; }}
+QCheckBox::indicator {{ width: 12px; height: 12px; border: 1px solid #5a5a5a; border-radius: 3px; background: transparent; }}
+QCheckBox::indicator:hover {{ border-color: #9a9a9a; }}
+QCheckBox::indicator:checked {{ background: #ececec; border-color: #ececec; }}
+QCheckBox::indicator:disabled {{ border-color: #333333; }}
+QCheckBox::indicator:checked:disabled {{ background: #555555; border-color: #555555; }}
 QTabWidget::pane {{ border: 1px solid {BORDER}; }}
 QTabBar::tab {{ background: {PANEL2}; padding: 6px 14px; border: 1px solid {BORDER}; }}
 QTabBar::tab:selected {{ background: {ACCENT}; color: #0a0a0a; }}
@@ -143,6 +151,36 @@ QSplitter::handle:hover {{ background: #555555; }}
 QMenu {{ padding: 6px; border-radius: 8px; }}
 QMenu::item {{ padding: 8px 20px; border-radius: 4px; }}
 QMenu::item:selected {{ background: #333333; }}
+/* ---- 인스펙터: 상자 대신 얇은 구분선 + 작은 제목 */
+QWidget#inspector QGroupBox {{ background: transparent; border: none; border-top: 1px solid #222222; border-radius: 0;
+    margin-top: 22px; padding: 14px 0 4px 0; font-weight: 700; }}
+QWidget#inspector QGroupBox::title {{ subcontrol-origin: margin; left: 0; top: 6px; padding: 0; color: {MUTED};
+    font-size: 10px; letter-spacing: 1px; }}
+QWidget#inspector QGroupBox QGroupBox {{ border-top: none; margin-top: 16px; padding-top: 8px; }}
+QLabel#hint {{ color: #7a7a7a; font-size: 11px; }}
+QLabel#subhead {{ color: #d0d0d0; font-weight: 700; font-size: 11px; padding-top: 8px; }}
+QLabel#fieldLabel {{ color: #b0b0b0; min-width: 56px; }}
+QPushButton#chip {{ background: #171717; border: 1px solid #262626; border-radius: 6px; padding: 4px 0; min-height: 18px;
+    font-size: 11px; }}
+QPushButton#chip:hover {{ border-color: #4a4a4a; }}
+QPushButton#chip:checked {{ background: #ececec; color: #0a0a0a; border-color: #ececec; font-weight: 700; }}
+QPushButton#chip:disabled {{ color: #4a4a4a; border-color: #1e1e1e; }}
+QFrame#segbarSmall {{ background: #161616; border: 1px solid #242424; border-radius: 7px; }}
+QPushButton#segSmall {{ background: transparent; border: 1px solid transparent; border-radius: 5px; padding: 4px 0;
+    min-height: 16px; color: {MUTED}; font-weight: 700; }}
+QPushButton#segSmall:checked {{ background: #2a2a2a; color: #ffffff; border-color: #3a3a3a; }}
+QPushButton#link {{ background: transparent; border: none; color: {MUTED}; padding: 2px 4px; min-height: 0; }}
+QPushButton#link:hover {{ color: {TEXT}; text-decoration: underline; }}
+QPushButton#link:disabled {{ color: #444444; }}
+QPushButton#iconToggle {{ background: transparent; border: 1px solid transparent; padding: 3px; }}
+QPushButton#iconToggle:hover {{ background: {PANEL2}; border-color: {BORDER}; }}
+QPushButton#iconToggle:checked {{ background: transparent; border-color: transparent; }}
+QPushButton#compact:checked {{ background: #2a2a2a; color: #ffffff; border-color: #5a5a5a; }}
+QSlider::groove:horizontal {{ height: 3px; background: #2a2a2a; border-radius: 1px; }}
+QSlider::sub-page:horizontal {{ background: #8a8a8a; border-radius: 1px; }}
+QSlider::handle:horizontal {{ background: #ececec; width: 12px; height: 12px; margin: -5px 0; border-radius: 6px; }}
+QSlider::handle:horizontal:disabled {{ background: #555555; }}
+QSlider::sub-page:horizontal:disabled {{ background: #3a3a3a; }}
 """
 
 
@@ -167,4 +205,29 @@ def apply(app) -> None:
     palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, QColor(MUTED))
     palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, QColor(MUTED))
     app.setPalette(palette)
-    app.setStyleSheet(STYLE)
+    app.setStyleSheet(STYLE + _check_icon_rule())
+
+
+def _check_icon_rule() -> str:
+    """체크박스의 체크 표시 이미지(QSS 는 파일 경로만 받으므로 임시 폴더에 그려 둔다). 실패하면 채운 상자만 쓴다."""
+    try:
+        from PySide6.QtCore import QPointF, Qt
+        from PySide6.QtGui import QImage, QPainter, QPen
+
+        out = Path(tempfile.gettempdir()) / "ics_ui" / "check_v1.png"
+        if not out.is_file():
+            out.parent.mkdir(parents=True, exist_ok=True)
+            img = QImage(28, 28, QImage.Format.Format_ARGB32)
+            img.fill(Qt.GlobalColor.transparent)
+            p = QPainter(img)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+            pen = QPen(QColor("#0a0a0a"), 3.4)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            p.setPen(pen)
+            p.drawPolyline([QPointF(7, 14.5), QPointF(12, 19.5), QPointF(21, 9)])
+            p.end()
+            img.save(str(out))
+        return f"\nQCheckBox::indicator:checked {{ image: url({out.as_posix()}); }}\n"
+    except Exception:  # noqa: BLE001
+        return ""

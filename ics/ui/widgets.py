@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QIcon, QLinearGradient, QPainter, QPen, QPixmap
-from PySide6.QtWidgets import QLabel, QPushButton, QSizePolicy, QStyle, QStyleOptionButton, QStylePainter
+from PySide6.QtWidgets import QLabel, QPushButton, QSizePolicy
 
 from . import theme
 
@@ -29,42 +29,51 @@ class ElidedLabel(QLabel):
         self.setToolTip(text)
 
 
-class WorkspaceButton(QPushButton):
-    """단계 번호, 이름, 규격을 함께 보여 주는 접근 가능한 탐색 버튼."""
+class SegButton(QPushButton):
+    """상단 작업 탭. 글자 옆 체크(✓) 대신 오른쪽 위에 작은 점(구간 지정됨)이나 숫자(피드 개수)를 그린다."""
 
-    def __init__(self, step: str, title: str, subtitle: str):
+    def __init__(self, title: str):
         super().__init__(title)
-        self.step, self.subtitle = step, subtitle
-        self.setObjectName("nav")
+        self.setObjectName("seg")
         self.setCheckable(True)
-        self.setMinimumHeight(76)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.done = False  # 구간이 지정되어 내보낼 수 있음
+        self.count = ""  # 예: '3' (피드 항목 수). 비어 있으면 점 표시만
+
+    def set_state(self, done: bool, count: str = "") -> None:
+        if (self.done, self.count) != (bool(done), count):
+            self.done, self.count = bool(done), count
+            self.update()
 
     def sizeHint(self) -> QSize:
-        return QSize(152, 76)
+        sz = super().sizeHint()
+        extra = (self.fontMetrics().horizontalAdvance(self.count) + 10) if self.count else 8
+        return QSize(sz.width() + extra, sz.height())
 
     def paintEvent(self, event):
-        painter = QStylePainter(self)
-        option = QStyleOptionButton()
-        self.initStyleOption(option)
-        option.text = ""
-        painter.drawControl(QStyle.ControlElement.CE_PushButton, option)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(QColor(theme.ACCENT if self.isChecked() else theme.MUTED))
-        font = self.font()
-        font.setPixelSize(10)
-        painter.setFont(font)
-        painter.drawText(14, 21, self.step)
-        font.setPixelSize(14)
-        font.setBold(True)
-        painter.setFont(font)
-        painter.setPen(QColor(theme.TEXT))
-        painter.drawText(14, 42, self.text())
-        font.setPixelSize(11)
-        font.setBold(False)
-        painter.setFont(font)
-        painter.setPen(QColor(theme.MUTED))
-        painter.drawText(14, 61, self.subtitle)
+        super().paintEvent(event)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        tw = self.fontMetrics().horizontalAdvance(self.text())
+        x = (self.width() + tw) / 2 + 5
+        cy = self.height() / 2
+        on = QColor("#ffffff") if self.isChecked() else QColor(theme.TEXT)
+        if self.count:
+            f = self.font()
+            f.setPixelSize(10)
+            f.setBold(True)
+            p.setFont(f)
+            p.setPen(on if self.done else QColor(theme.MUTED))
+            p.drawText(
+                QRectF(x - 2, 0, 40, self.height()),
+                Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                self.count,
+            )
+        elif self.done:
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(theme.OK))
+            p.drawEllipse(QRectF(x - 1, cy - 2.5, 5, 5))
+        p.end()
 
 
 def studio_icon(size: int = 64) -> QIcon:
