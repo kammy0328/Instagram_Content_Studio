@@ -160,6 +160,40 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "ISCC 실패" }
           Get-ChildItem installer/Output | Select-Object Name, @{n="MB";e={[math]::Round($_.Length/1MB,1)}}
 
+      - name: 업데이트 경로 점검 (설치 → 앱에서 업데이트 → 재설치 → 다시 열림)
+        run: |
+          $setup = (Resolve-Path installer/Output/InstagramContentStudio_Setup.exe).Path
+          $first = Join-Path $env:RUNNER_TEMP "first_install.log"
+          $p = Start-Process -FilePath $setup -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/CURRENTUSER","/LOG=`"$first`"" -PassThru
+          $p.WaitForExit()
+          if ($p.ExitCode -ne 0) { Get-Content $first -Tail 30; throw "첫 설치 실패: $($p.ExitCode)" }
+          $exe = Join-Path $env:LOCALAPPDATA "Programs\InstagramContentStudio\InstagramContentStudio.exe"
+          if (-not (Test-Path $exe)) { Get-Content $first -Tail 30; throw "설치된 exe 가 없습니다: $exe" }
+          $upd = Join-Path ([System.IO.Path]::GetTempPath()) "ics_update"
+          Remove-Item $upd -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $upd | Out-Null
+          $s2 = Join-Path $upd "InstagramContentStudio_Setup_ci.exe"   # 앱이 내려받은 것처럼
+          Copy-Item $setup $s2
+          $a = Start-Process -FilePath $exe -ArgumentList "--selftest-update", "`"$s2`"" -PassThru
+          $a.WaitForExit(30000) | Out-Null
+          $log = Join-Path $upd "launcher.log"
+          $done = $false
+          for ($i = 0; $i -lt 90; $i++) {
+            Start-Sleep -Seconds 2
+            if ((Test-Path $log) -and (Select-String -Path $log -Pattern " done" -Quiet)) { $done = $true; break }
+          }
+          Write-Host "---- ics_update"; Get-ChildItem $upd | Select-Object Name, Length | Format-Table | Out-String | Write-Host
+          Write-Host "---- selftest_update.txt"; Get-Content (Join-Path $upd "selftest_update.txt") -ErrorAction SilentlyContinue
+          Write-Host "---- launcher.log"; Get-Content $log -ErrorAction SilentlyContinue
+          Write-Host "---- install.log (마지막 15줄)"; Get-Content (Join-Path $upd "install.log") -Tail 15 -ErrorAction SilentlyContinue
+          if (-not $done) { throw "업데이트 실행기가 끝나지 않았습니다 (앱 종료와 함께 죽었거나 멈춤)" }
+          if (-not (Select-String -Path $log -Pattern "setup exit=0" -Quiet)) { throw "업데이트 설치 실패" }
+          Start-Sleep -Seconds 5
+          $proc = Get-Process -Name InstagramContentStudio -ErrorAction SilentlyContinue
+          if (-not $proc) { throw "업데이트 후 앱이 다시 열리지 않았습니다" }
+          Write-Host "업데이트 후 다시 열림: pid $($proc.Id -join ',')"
+          $proc | Stop-Process -Force
+
       - name: 포터블 zip 만들기
         run: |
           New-Item -ItemType Directory -Force -Path release | Out-Null
