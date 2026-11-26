@@ -76,6 +76,9 @@ class PreviewWidget(QWidget):
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(theme.C["BG"])
         p.drawRoundedRect(QRectF(self.rect()).adjusted(0, 0, 0, 20), 11, 11)
+        p.setBrush(
+            Qt.BrushStyle.NoBrush
+        )  # 아래 테두리(drawRect)가 바탕색으로 영상을 덮지 않게 (원본 보기가 검게 나오던 문제)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
         if self.image is None or self.image.isNull():
@@ -86,6 +89,8 @@ class PreviewWidget(QWidget):
             iw, ih = self.image.width(), self.image.height()
             r = self._canvas_rect(iw, ih)
             p.drawImage(r, self.image)
+            if self.mode == "source":
+                self._paint_source_crop(p, r)
             p.setPen(QPen(theme.C["BORDER"], 1))
             p.drawRect(r)
         else:
@@ -102,6 +107,26 @@ class PreviewWidget(QWidget):
             p.drawRoundedRect(r, r.height() / 2, r.height() / 2)
             p.setPen(theme.C["TEXT"])
             p.drawText(r, Qt.AlignmentFlag.AlignCenter, self.label)
+
+    def _paint_source_crop(self, p: QPainter, r: QRectF) -> None:
+        """원본 보기에서 Fill 로 잘려 나갈 부분을 어둡게, 남는 창은 흰 선으로 보여 준다."""
+        if self.layout is None or self.layout.mode != "fill" or not self.disp[0]:
+            return
+        try:
+            g = self.geometry_now()
+        except Exception:  # noqa: BLE001
+            return
+        if not g.crop_w:
+            return
+        k = r.width() / self.disp[0]
+        win = QRectF(r.x() + g.crop_x * k, r.y() + g.crop_y * k, g.crop_w * k, g.crop_h * k)
+        dim = QColor(0, 0, 0, 150)
+        p.fillRect(QRectF(r.x(), r.y(), r.width(), win.y() - r.y()), dim)
+        p.fillRect(QRectF(r.x(), win.bottom(), r.width(), r.bottom() - win.bottom()), dim)
+        p.fillRect(QRectF(r.x(), win.y(), win.x() - r.x(), win.height()), dim)
+        p.fillRect(QRectF(win.right(), win.y(), r.right() - win.right(), win.height()), dim)
+        p.setPen(QPen(QColor(255, 255, 255, 220), 1.5))
+        p.drawRect(win)
 
     def _paint_blur_bg(self, p: QPainter, cr: QRectF) -> None:
         """영상을 캔버스에 가득 차게 잘라 아주 작게 줄였다 키워(=흐림) 그리고, 최종 렌더링처럼 어둡게 한다."""

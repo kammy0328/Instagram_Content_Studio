@@ -1619,3 +1619,49 @@ def test_shortcuts_still_reach_the_editor_after_clicking_icon_buttons(qapp, win)
         pump(qapp, 30)
         assert win.playback.playing and b.isChecked() == state
         win.playback.pause()
+
+
+def test_source_view_actually_shows_the_frame(qapp, win):
+    """Tab(원본 보기)에서 영상이 보여야 한다. (바탕색 붓이 남아 테두리를 그릴 때 영상을 덮어 검게 나오던 문제)"""
+    from PySide6.QtGui import QColor
+
+    win.goto(30)
+    pump(qapp, 400)
+    win.transport.view_btn.setChecked(False)
+    pump(qapp, 400)
+    assert win.preview.mode == "source" and win.preview.label == "원본 보기"
+    img = win.preview.grab().toImage()
+    c = img.pixelColor(img.width() // 2, img.height() // 2)
+    bg = QColor("#09090a")
+    assert abs(c.red() - bg.red()) + abs(c.green() - bg.green()) + abs(c.blue() - bg.blue()) > 30, c.name()
+    win.transport.view_btn.setChecked(True)
+    pump(qapp, 400)
+    assert win.preview.mode == "output"
+
+
+def test_project_list_search_open_and_row_actions(qapp, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    from ics.core.store import Library
+    from ics.ui.projects import ProjectListDialog, relative_time
+
+    lib = Library(tmp_path / "lib.sqlite")
+    a = lib.create("IZNA_IWALY", "izna", "IWALY", str(tmp_path / "a.mov"), str(tmp_path / "out"))
+    lib.create("LNGSHOT_BANANAS", "LNGSHOT", "Bananas", str(tmp_path / "b.mov"), str(tmp_path / "out"))
+    d = ProjectListDialog(lib)
+    d.show()
+    pump(qapp, 50)
+    assert d.list.count() == 2 and d.count_lbl.text() == "2개"
+    d.search.setText("bana")
+    assert d.list.count() == 1 and d.rec_at(0).name == "LNGSHOT_BANANAS" and d.count_lbl.text() == "1 / 2개"
+    d.search.setText("없는이름")
+    assert d.list.count() == 0 and d.empty.isVisible() and not d.open_btn.isEnabled()
+    d.search.setText("")
+    row = [i for i in range(d.list.count()) if d.rec_at(i).id == a.id][0]
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *x, **k: QMessageBox.StandardButton.Yes))
+    d.row_action(row, "delete")
+    assert d.list.count() == 1 and all(r.id != a.id for r in lib.list())
+    d.list.setCurrentRow(0)
+    d._open()
+    assert d.chosen is not None and d.chosen.name == "LNGSHOT_BANANAS"
+    assert relative_time(1000, now=1030) == "방금" and relative_time(0, now=7200) == "2시간 전"
