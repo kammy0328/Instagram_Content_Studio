@@ -222,6 +222,13 @@ def main(argv: list[str] | None = None) -> int:
 
         from . import updater
 
-        updater.launch_installer(Path(args[1]))
+        diag = updater.update_dir() / "selftest_update.txt"
+        try:
+            pid = updater.launch_installer(Path(args[1]))
+            diag.write_text(f"spawned pid={pid}\nexe={sys.executable}\n", encoding="utf-8")
+        except Exception:  # noqa: BLE001
+            import traceback
+
+            diag.write_text(traceback.format_exc(), encoding="utf-8")
         os._exit(0)
     return App().run()

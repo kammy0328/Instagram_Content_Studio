@@ -182,6 +182,8 @@ jobs:
             Start-Sleep -Seconds 2
             if ((Test-Path $log) -and (Select-String -Path $log -Pattern " done" -Quiet)) { $done = $true; break }
           }
+          Write-Host "---- ics_update"; Get-ChildItem $upd | Select-Object Name, Length | Format-Table | Out-String | Write-Host
+          Write-Host "---- selftest_update.txt"; Get-Content (Join-Path $upd "selftest_update.txt") -ErrorAction SilentlyContinue
           Write-Host "---- launcher.log"; Get-Content $log -ErrorAction SilentlyContinue
           Write-Host "---- install.log (마지막 15줄)"; Get-Content (Join-Path $upd "install.log") -Tail 15 -ErrorAction SilentlyContinue
           if (-not $done) { throw "업데이트 실행기가 끝나지 않았습니다 (앱 종료와 함께 죽었거나 멈춤)" }

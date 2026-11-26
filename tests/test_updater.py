@@ -200,3 +200,25 @@ def test_download_retries_while_antivirus_holds_the_new_file(tmp_path, monkeypat
     monkeypatch.setattr(os, "replace", lambda s, d: (_ for _ in ()).throw(PermissionError(32, "x")))
     with pytest.raises(updater.UpdateError, match="사용 중"):
         updater.download(info, "", tmp_path / "b", opener=make_opener(meta_for(data), data))
+
+
+def test_spawn_never_uses_detached_process(monkeypatch):
+    """powershell.exe 는 콘솔이 아예 없으면(DETACHED_PROCESS) 아무것도 못 하고 끝난다: 숨은 콘솔(CREATE_NO_WINDOW)로 실행."""
+    import subprocess
+
+    monkeypatch.setattr(subprocess, "DETACHED_PROCESS", 0x8, raising=False)
+    monkeypatch.setattr(subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+    monkeypatch.setattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200, raising=False)
+    seen = []
+
+    class P:
+        pid = 77
+
+        def __init__(self, cmd, creationflags=0, **kw):
+            seen.append(creationflags)
+            if creationflags & updater.CREATE_BREAKAWAY_FROM_JOB:
+                raise PermissionError(5, "breakaway not allowed")
+
+    monkeypatch.setattr(subprocess, "Popen", P)
+    assert updater._spawn_detached(["powershell.exe"]) == 77
+    assert len(seen) == 2 and all(f & 0x08000000 and not f & 0x8 for f in seen)

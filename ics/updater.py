@@ -271,21 +271,21 @@ def launcher_command(
 CREATE_BREAKAWAY_FROM_JOB = 0x01000000
 
 
-def _spawn_detached(cmd: list[str]) -> None:
-    """앱이 끝나도 같이 죽지 않게 분리 실행. 앱이 작업 개체(Job) 안에서 실행 중이면 거기서 빠져나오게 한다
-    (빠져나오기가 허용되지 않으면 그냥 분리 실행)."""
-    base = (
-        getattr(subprocess, "DETACHED_PROCESS", 0)
-        | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-        | getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    )
+def _spawn_detached(cmd: list[str]) -> int:
+    """앱이 끝나도 같이 죽지 않게 따로 실행하고 pid 를 돌려준다.
+
+    DETACHED_PROCESS 는 쓰지 않는다: 콘솔이 아예 없으면 powershell.exe 가 시작하자마자 아무것도 못 하고 끝난다
+    (업데이트 후 설치도, 다시 열기도 안 되던 원인). CREATE_NO_WINDOW 는 보이지 않는 콘솔을 만들어 준다.
+    앱이 작업 개체(Job) 안에서 실행 중이면 거기서 빠져나오게 한다 (허용되지 않으면 그냥 실행)."""
+    base = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    kw = dict(close_fds=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
-        subprocess.Popen(cmd, close_fds=True, creationflags=base | CREATE_BREAKAWAY_FROM_JOB)  # noqa: S603
+        return subprocess.Popen(cmd, creationflags=base | CREATE_BREAKAWAY_FROM_JOB, **kw).pid  # noqa: S603
     except OSError:
-        subprocess.Popen(cmd, close_fds=True, creationflags=base)  # noqa: S603
+        return subprocess.Popen(cmd, creationflags=base, **kw).pid  # noqa: S603
 
 
-def launch_installer(setup: Path, wait_pid: int | None = None) -> None:
+def launch_installer(setup: Path, wait_pid: int | None = None) -> int:
     """설치 실행기를 분리 실행한다. 설치는 이 프로세스가 끝난 뒤에 시작되므로, 호출한 쪽은 곧바로 앱을 종료해야 한다."""
     if not sys.platform.startswith("win"):
         raise UpdateError("자동 설치는 Windows 에서만 지원합니다.")
@@ -296,9 +296,9 @@ def launch_installer(setup: Path, wait_pid: int | None = None) -> None:
     except OSError:
         pass
     try:
-        _spawn_detached(launcher_command(setup, silent, wait_pid or os.getpid(), Path(sys.executable), BUILD_ID))
+        return _spawn_detached(launcher_command(setup, silent, wait_pid or os.getpid(), Path(sys.executable), BUILD_ID))
     except OSError:  # PowerShell 을 못 쓰는 환경: 예전처럼 바로 실행 (앱은 곧바로 종료한다)
-        _spawn_detached(installer_command(setup, silent) + ["/LAUNCH=1"])
+        return _spawn_detached(installer_command(setup, silent) + ["/LAUNCH=1"])
 
 
 def last_update_result(max_age_s: float = 6 * 3600) -> tuple[str, str] | None:
