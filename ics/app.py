@@ -214,6 +214,10 @@ def main(argv: list[str] | None = None) -> int:
         from .selftest import run_selftest
 
         return run_selftest(args[1] if len(args) > 1 else None)
+    if args and args[0] == "--selftest-update-ui" and len(args) > 1:  # CI: 실제 화면에서 업데이트 창 흐름 점검
+        from .selftest_ui import run_update_ui_selftest
+
+        return run_update_ui_selftest(args[1])
     if (
         args and args[0] == "--selftest-update" and len(args) > 1
     ):  # CI: 실제 업데이트 경로(실행기 → 설치 → 다시 실행) 점검
