@@ -127,6 +127,16 @@ jobs:
           Write-Host "exit code: $($p.ExitCode)"
           if ($p.ExitCode -ne 0) { exit 1 }
 
+      - name: 업데이트 창 흐름 점검 (실제 화면, ··· 메뉴 → 확인 → 새 버전 창 → 지금 업데이트)
+        run: |
+          $exe = (Resolve-Path "dist/InstagramContentStudio/InstagramContentStudio.exe").Path
+          $out = Join-Path $env:RUNNER_TEMP "selftest_update_ui.txt"
+          $p = Start-Process -FilePath $exe -ArgumentList "--selftest-update-ui", "`"$out`"" -PassThru
+          if (-not $p.WaitForExit(180000)) { $p | Stop-Process -Force; Write-Host "시간 초과" }
+          if (Test-Path $out) { Get-Content $out -Encoding UTF8 } else { Write-Host "결과 파일이 없습니다" }
+          Copy-Item $out selftest-update-ui.txt -ErrorAction SilentlyContinue
+          if (-not (Test-Path $out) -or -not (Select-String -Path $out -Pattern "RESULT: ALL PASSED" -Quiet)) { exit 1 }
+
       - name: exe 실행 스모크 (창이 뜨고 8초간 살아있는지 + 스크린샷)
         run: |
           $exe = (Resolve-Path "dist/InstagramContentStudio/InstagramContentStudio.exe").Path
@@ -218,6 +228,7 @@ jobs:
             pytest-windows.xml
             diag-color.log
             selftest-windows.txt
+            selftest-update-ui.txt
             smoke-screenshot.png
           if-no-files-found: ignore
 

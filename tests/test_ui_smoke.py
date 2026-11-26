@@ -1516,6 +1516,80 @@ def test_menu_items_run_after_the_menu_closes(qapp, win, monkeypatch):
     assert calls == ["update"]
 
 
+def test_clicking_a_tools_menu_item_with_the_mouse_runs_it(qapp, win, monkeypatch):
+    """실제 마우스로 ··· 메뉴 항목을 누르면 실행된다. 예전에는 상단바 '끌어서 창 이동' 이 메뉴의 누름까지 가로채
+    [업데이트…] 를 눌러도 아무 반응 없이 메뉴만 남았다."""
+    from PySide6.QtCore import QEvent, QPointF, QTimer
+    from PySide6.QtGui import QMouseEvent
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QMenu, QToolButton
+
+    from ics.ui import update_ui
+    from ics.ui.frameless import FramelessHelper
+
+    tb = [b for b in win._topbar_frame.findChildren(QToolButton) if b.accessibleName() == "도구"][0]
+    menu = tb.menu()
+    # 1) 창 끌기 필터가 메뉴의 누름을 가로채지 않는다 (어느 플랫폼에서나 확인)
+    helper = win.findChildren(FramelessHelper)[0]
+    press = QMouseEvent(
+        QEvent.Type.MouseButtonPress, QPointF(10, 10), QPointF(10, 10),
+        Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier,
+    )  # fmt: skip
+    assert helper.eventFilter(menu, press) is False
+    # 2) 실제 마우스 클릭 (오프스크린 플러그인은 메뉴 클릭을 흉내 내지 못해 실제 화면에서만)
+    if qapp.platformName() in ("offscreen", "minimal"):
+        return
+    calls = []
+    monkeypatch.setattr(update_ui, "check_and_prompt", lambda *a, **k: calls.append("update"))
+    act = [a for a in menu.actions() if a.text() == "업데이트…"][0]
+
+    def click_item():
+        if not menu.isVisible():
+            QTimer.singleShot(50, click_item)
+            return
+        QTest.mouseClick(menu, Qt.MouseButton.LeftButton, pos=menu.actionGeometry(act).center())
+
+    QTimer.singleShot(100, click_item)
+    QTimer.singleShot(3000, menu.close)  # 실패해도 테스트가 멈추지 않게
+    QTest.mouseClick(tb, Qt.MouseButton.LeftButton)
+    pump(qapp, 100)
+    assert not menu.isVisible()
+    assert calls == ["update"]
+    assert not any(isinstance(w, QMenu) and w.isVisible() for w in qapp.topLevelWidgets())
+
+
+def test_update_check_window_can_be_cancelled(qapp, monkeypatch):
+    """확인 중 창에는 [취소] 가 있어, 서버가 답하지 않아도 갇히지 않는다."""
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QMessageBox
+
+    from ics import updater
+    from ics.ui import update_ui
+
+    gate = __import__("threading").Event()
+    monkeypatch.setattr(updater, "check", lambda *a, **k: gate.wait(5) and None)
+    shown = []
+
+    def cancel():
+        boxes = [w for w in qapp.topLevelWidgets() if isinstance(w, QMessageBox) and w.isVisible()]
+        if not boxes:
+            QTimer.singleShot(50, cancel)
+            return
+        shown.append(boxes[0].text())
+        boxes[0].button(QMessageBox.StandardButton.Cancel).click()
+
+    class S(dict):
+        def set(self, k, v):
+            self[k] = v
+
+    s = S()
+    QTimer.singleShot(50, cancel)
+    update_ui.check_and_prompt(s, None)
+    gate.set()
+    assert shown and "확인" in shown[0]
+    assert "update_last_check" not in s  # 취소하면 결과를 기다리지 않고 끝
+
+
 def test_about_dialog_shows_version_and_developer(qapp, win, monkeypatch):
     from PySide6.QtGui import QGuiApplication
     from PySide6.QtWidgets import QToolButton

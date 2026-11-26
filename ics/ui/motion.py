@@ -22,6 +22,7 @@ from PySide6.QtCore import (
     QPropertyAnimation,
     QRectF,
     Qt,
+    QTimer,
     QVariantAnimation,
 )
 from PySide6.QtGui import QColor, QPainter, QPixmap
@@ -255,6 +256,16 @@ def window_fade_in(win: QWidget, ms: int = FAST) -> None:
     a.setEasingCurve(EASE)
     _keep(win, a, "_motion_win")
     a.start()
+    # 애니메이션이 어떤 이유로든(타이머가 멈춘 중첩 루프 등) 끝나지 않아도 투명한 채로 남지 않게
+    QTimer.singleShot(ms + 400, lambda: _opaque(win))
+
+
+def _opaque(win: QWidget) -> None:
+    try:
+        if win.windowOpacity() < 1.0:
+            win.setWindowOpacity(1.0)
+    except RuntimeError:  # 이미 닫혀 지워진 창
+        pass
 
 
 # ------------------------------------------------------------------ 스크롤

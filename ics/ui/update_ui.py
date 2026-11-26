@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QMessageBox,
     QProgressBar,
     QPushButton,
@@ -22,6 +23,40 @@ from ..publisher.secrets import default_secret_store
 from .frameless import ChromeDialog
 
 TOKEN_KEY = "github_token"
+TRACE_MAX = 200_000  # 기록 파일이 이보다 커지면 앞부분을 버린다
+
+
+def trace(msg: str) -> None:
+    """업데이트 단계 기록 (logs/update.log). '눌렀는데 반응이 없다' 같은 문제를 어디서 멈췄는지로 찾는다."""
+    try:
+        f = paths.logs_dir() / "update.log"
+        if f.is_file() and f.stat().st_size > TRACE_MAX:
+            f.write_text(f.read_text(encoding="utf-8", errors="replace")[-TRACE_MAX // 2 :], encoding="utf-8")
+        with f.open("a", encoding="utf-8") as fh:
+            fh.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} [{updater.current_label()}] {msg}\n")
+    except Exception:  # noqa: BLE001 (기록 실패가 업데이트를 막으면 안 된다)
+        pass
+
+
+def _owner(parent):
+    """부모가 없으면 지금 활성 창(없으면 보이는 편집 창)을 부모로: 부모 없는 창은 편집 창 뒤로 숨어
+    모달인 채 보이지 않을 수 있다 (그러면 앱 전체가 눌러도 반응이 없는 것처럼 된다)."""
+    if parent is not None:
+        return parent
+    app = QApplication.instance()
+    if app is None:
+        return None
+    w = app.activeWindow()
+    if w is not None:
+        return w
+    vis = [x for x in app.topLevelWidgets() if x.isVisible() and not isinstance(x, QMenu)]
+    return vis[0] if vis else None
+
+
+def _front(w) -> None:
+    """창을 맨 앞으로 (설치 후 다시 열린 앱처럼 포커스가 없는 경우에도)."""
+    w.raise_()
+    w.activateWindow()
 
 
 def secret_store():
@@ -45,6 +80,7 @@ class CheckWorker(QObject):
             info, err = None, str(e)
         except Exception as e:  # noqa: BLE001 (업데이트 확인 실패가 앱 동작을 막으면 안 된다)
             info, err = None, f"업데이트 확인 실패: {type(e).__name__}"
+        trace(f"check result: {'new ' + info.build_id if info else 'none'}{' err=' + err if err else ''}")
         self.done.emit(info, err)
 
 
@@ -92,10 +128,20 @@ class UpdateDialog(ChromeDialog):
         v.addLayout(row)
         self._prog.connect(self._on_progress)
         self._finished.connect(self._on_finished)
+        self._last_pct = -1
+
+    def showEvent(self, e):  # noqa: N802
+        super().showEvent(e)
+        trace(f"dialog shown (new {self.info.build_id})")
+        QTimer.singleShot(0, lambda: _front(self))
 
     def _on_progress(self, p: float) -> None:
         """진행률을 숫자로도 보여 준다 (막대만 있으면 큰 파일을 받는 동안 멈춘 것처럼 보인다)."""
         self.bar.setValue(int(p * 1000))
+        pct = int(p * 4) * 25
+        if pct != self._last_pct:
+            self._last_pct = pct
+            trace(f"download {pct}%")
         total = self.info.size / 1e6 if self.info.size else 0
         if p >= 1.0:
             self.msg.setText("내려받기 완료 · 파일 확인 중…")
@@ -105,10 +151,12 @@ class UpdateDialog(ChromeDialog):
             self.msg.setText(f"내려받는 중… {p * 100:.0f}%")
 
     def _on_later(self) -> None:
+        trace("later")
         self._cancel.set()
         self.reject()
 
     def _start(self) -> None:
+        trace("go clicked")
         self.go.setEnabled(False)
         self.bar.show()
         self.msg.setText("내려받는 중…")
@@ -132,6 +180,7 @@ class UpdateDialog(ChromeDialog):
         threading.Thread(target=run, name="ics-update-download", daemon=True).start()
 
     def _on_finished(self, path: str, err: str) -> None:
+        trace(f"download finished{' err=' + err if err else ''}")
         if err:
             self.msg.setText(f"실패: {err}")
             self.go.setEnabled(True)
@@ -139,8 +188,10 @@ class UpdateDialog(ChromeDialog):
         from pathlib import Path
 
         try:
-            updater.launch_installer(Path(path))
+            pid = updater.launch_installer(Path(path))
+            trace(f"launcher started pid={pid}")
         except Exception as e:  # noqa: BLE001
+            trace(f"launch failed: {e!r}")
             self.msg.setText(f"설치 파일을 실행하지 못했습니다: {e}\n파일: {path}")
             self.go.setEnabled(True)
             return
@@ -154,6 +205,7 @@ def shutdown_for_update() -> None:
     (프로세스가 남아 있으면 설치 파일이 실행 파일을 바꾸지 못해 업데이트 후 다시 열리지 않는다.)"""
     import os
 
+    trace("shutdown for update")
     app = QApplication.instance()
     for w in list(app.topLevelWidgets()) if app else []:
         if w.isVisible() and not isinstance(w, QDialog):
@@ -172,7 +224,8 @@ def report_last_update(parent=None) -> None:
     if res is None:
         return
     state, detail = res
-    box = QMessageBox(parent)
+    trace(f"last update result: {state}")
+    box = QMessageBox(_owner(parent))
     box.setWindowTitle("업데이트")
     if state == "ok":
         box.setIcon(QMessageBox.Icon.Information)
@@ -190,22 +243,30 @@ def report_last_update(parent=None) -> None:
 
 def check_and_prompt(settings, parent=None) -> None:
     """[업데이트…] 메뉴: 버전을 확인하고, 새 버전이 있으면 설치할지만 묻는다. 입력할 값은 없다."""
+    trace("menu: check")
+    parent = _owner(parent)
     box = QMessageBox(parent)
     box.setWindowTitle("업데이트")
     box.setText("새 버전을 확인하는 중…")
-    box.setStandardButtons(QMessageBox.StandardButton.NoButton)
+    # 취소 단추: 서버가 늦거나 결과가 오지 않아도 이 창에 갇히지 않는다 (예전: 단추 없는 창이 남아 멈춘 것처럼 보임)
+    box.setStandardButtons(QMessageBox.StandardButton.Cancel)
+    box.button(QMessageBox.StandardButton.Cancel).setText("취소")
     box.setModal(True)
     worker = CheckWorker(*current_args(settings))
     result: dict = {}
 
     def done(info, err):
         result["v"] = (info, err)
-        box.accept()
+        box.done(0)
 
     worker.done.connect(done)
     worker.start()
+    QTimer.singleShot(0, lambda: _front(box))
     box.exec()
-    info, err = result.get("v", (None, "확인하지 못했습니다."))
+    if "v" not in result:
+        trace("check cancelled")
+        return
+    info, err = result["v"]
     settings.set("update_last_check", time.time())
     if err:
         QMessageBox.warning(parent, "업데이트", err)
@@ -240,6 +301,7 @@ class AutoUpdate(QObject):
             return
         if not updater.due(float(self.settings.get("update_last_check", 0))):
             return
+        trace("auto: check")
         self._worker = CheckWorker(*current_args(self.settings))
         self._worker.done.connect(self._done)
         self._worker.start()
@@ -248,4 +310,4 @@ class AutoUpdate(QObject):
         if not err:
             self.settings.set("update_last_check", time.time())
         if info is not None:
-            UpdateDialog(info, updater.default_token(secret_store().get(TOKEN_KEY))).exec()
+            UpdateDialog(info, updater.default_token(secret_store().get(TOKEN_KEY)), _owner(None)).exec()

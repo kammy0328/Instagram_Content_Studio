@@ -8,7 +8,17 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QEvent, QObject, QPoint, QSize, Qt
-from PySide6.QtWidgets import QAbstractButton, QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QWidget
+from PySide6.QtWidgets import (
+    QAbstractButton,
+    QDialog,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMenu,
+    QPushButton,
+    QWidget,
+)
 
 from . import icons, motion, theme
 
@@ -79,8 +89,8 @@ class FramelessHelper(QObject):
         root.setMouseTracking(True)
         root.installEventFilter(self)
         bar.installEventFilter(self)
-        for w in bar.findChildren(QWidget):  # 상단바 안의 글자/빈 칸도 끌기 영역 (버튼/입력칸 제외)
-            if not isinstance(w, (QAbstractButton, QLineEdit)):
+        for w in bar.findChildren(QWidget):  # 상단바 안의 글자/빈 칸도 끌기 영역 (버튼/입력칸/메뉴 제외)
+            if not isinstance(w, (QAbstractButton, QLineEdit, QMenu)) and not w.isWindow():
                 w.installEventFilter(self)
         win.installEventFilter(self)
         self._apply_margins()
@@ -134,6 +144,10 @@ class FramelessHelper(QObject):
         if obj is self.win:
             if t == QEvent.Type.WindowStateChange:
                 self._apply_margins()
+            return False
+        # 상단바 안 단추에 딸린 메뉴(··· 메뉴 등)는 따로 뜨는 창이다. 여기서 누름을 '창 끌기' 로 가로채면
+        # 메뉴 항목을 눌러도 실행되지 않고 메뉴만 남는다 (예전: [업데이트…] 를 눌러도 반응 없음)
+        if isinstance(obj, QWidget) and obj.window() is not self.win:
             return False
         if obj is self.root:
             if t == QEvent.Type.MouseMove and not ev.buttons():

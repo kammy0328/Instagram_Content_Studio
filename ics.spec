@@ -41,7 +41,7 @@ a = Analysis(
     pathex=[root],
     binaries=[],
     datas=datas,
-    hiddenimports=sorted(set(hidden)) + ["regex", "cv2", "PySide6.QtSvg"],
+    hiddenimports=sorted(set(hidden)) + ["regex", "cv2", "PySide6.QtSvg", "PySide6.QtTest"],
     excludes=["tkinter", "PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets", "PySide6.Qt3DCore",
               "PySide6.QtQuick", "PySide6.QtQml", "PySide6.QtCharts", "PySide6.QtDataVisualization"],
     noarchive=False,
