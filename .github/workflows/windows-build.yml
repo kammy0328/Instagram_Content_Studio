@@ -80,7 +80,8 @@ jobs:
           $id = "${{ github.sha }}".Substring(0, 7)
           $tok = "$env:UPDATE_READ_TOKEN".Trim()
           $date = [System.TimeZoneInfo]::ConvertTimeBySystemTimeZoneId([DateTime]::UtcNow, "Korea Standard Time").ToString("yyyy-MM-dd HH:mm")
-          Set-Content -Path ics/_build.py -Value "BUILD_ID = `"$id`"`nBUILD_CHANNEL = `"$slug`"`nBUILD_TOKEN = `"$tok`"`nBUILD_DATE = `"$date`"`n" -Encoding utf8
+          $num = "${{ github.run_number }}"
+          Set-Content -Path ics/_build.py -Value "BUILD_ID = `"$id`"`nBUILD_CHANNEL = `"$slug`"`nBUILD_TOKEN = `"$tok`"`nBUILD_DATE = `"$date`"`nBUILD_NUMBER = $num`n" -Encoding utf8
 
       - name: 의존성 설치
         run: |
@@ -157,7 +158,8 @@ jobs:
               try { Invoke-WebRequest -Uri $u -OutFile installer/Korean.isl -UseBasicParsing; Write-Host "Korean.isl: $u"; break } catch { Write-Host "skip $u" }
             }
           }
-          & $iscc installer/ics_installer.iss
+          $base = (Select-String -Path ics/__init__.py -Pattern 'APP_VERSION_BASE = "(.+)"').Matches[0].Groups[1].Value
+          & $iscc "/DMyAppVersion=$base.${{ github.run_number }}" installer/ics_installer.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC 실패" }
           Get-ChildItem installer/Output | Select-Object Name, @{n="MB";e={[math]::Round($_.Length/1MB,1)}}
 
@@ -234,7 +236,8 @@ jobs:
         run: |
           $slug = ("${{ github.ref_name }}" -replace '[^A-Za-z0-9._-]', '-')
           $setup = Get-Item release/InstagramContentStudio_Setup.exe
-          $ver = (Select-String -Path ics/__init__.py -Pattern '__version__ = "(.+)"').Matches[0].Groups[1].Value
+          $base = (Select-String -Path ics/__init__.py -Pattern 'APP_VERSION_BASE = "(.+)"').Matches[0].Groups[1].Value
+          $ver = "$base.${{ github.run_number }}"
           $meta = [ordered]@{
             build_id = "${{ github.sha }}".Substring(0, 7)
             version = $ver

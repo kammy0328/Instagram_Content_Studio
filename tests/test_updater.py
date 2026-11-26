@@ -236,3 +236,22 @@ def test_update_dialog_shows_download_percent():
     assert "25%" in d.msg.text() and "50 / 200MB" in d.msg.text() and d.bar.value() == 250
     d._on_progress(1.0)
     assert "완료" in d.msg.text()
+
+
+def test_version_gets_a_build_number_and_update_dialog_shows_the_new_version():
+    """버전 마지막 자리는 CI 빌드 번호 (업데이트해도 1.2.0 그대로 보이던 문제). 업데이트 창에는 새 버전 번호를 보여 준다."""
+    from pathlib import Path
+
+    from PySide6.QtWidgets import QApplication, QLabel
+
+    import ics
+    from ics.ui.update_ui import UpdateDialog
+
+    assert ics.__version__.startswith(ics.APP_VERSION_BASE + ".")
+    root = Path(__file__).resolve().parent.parent
+    wf = (root / ".github" / "workflows" / "windows-build.yml").read_text(encoding="utf-8")
+    assert "BUILD_NUMBER = $num" in wf and "/DMyAppVersion=$base.${{ github.run_number }}" in wf
+    assert '$ver = "$base.${{ github.run_number }}"' in wf
+    QApplication.instance() or QApplication([])
+    d = UpdateDialog(updater.UpdateInfo("abc1234", "1.3.77", "n", "u", "s.exe", 1000, "0" * 64), "")
+    assert any("새 버전 v1.3.77 (abc1234)" in lb.text() for lb in d.findChildren(QLabel))
