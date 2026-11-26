@@ -265,7 +265,7 @@ class EditorWindow(QMainWindow):
         more = menu_button("ellipsis", "도구", 32)
         menu = QMenu(more)
         menu.addAction(
-            icons.icon("info", theme.MUTED, 14),
+            icons.icon("film", theme.MUTED, 14),
             "영상 정보",
             later(lambda: MediaReportDialog(self.project.media, self).exec()),
         )
@@ -273,6 +273,8 @@ class EditorWindow(QMainWindow):
         menu.addSeparator()
         menu.addAction(icons.icon("check", theme.MUTED, 14), "업로드 준비", later(self.open_ready))
         menu.addAction(icons.icon("download", theme.MUTED, 14), "업데이트…", later(self.open_update))
+        menu.addSeparator()
+        menu.addAction(icons.icon("info", theme.MUTED, 14), "프로그램 정보", later(self.open_about))
         more.setMenu(menu)
         right.addWidget(more)
         right.addSpacing(6)
@@ -1546,6 +1548,11 @@ class EditorWindow(QMainWindow):
 
     def open_ready(self) -> None:
         ReadyDialog(self.project, self, self.toast).exec()
+
+    def open_about(self) -> None:
+        from .about import AboutDialog
+
+        AboutDialog(self).exec()
 
     def open_update(self) -> None:
         from .update_ui import check_and_prompt

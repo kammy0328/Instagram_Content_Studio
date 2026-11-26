@@ -1514,3 +1514,70 @@ def test_menu_items_run_after_the_menu_closes(qapp, win, monkeypatch):
     assert calls == []  # 메뉴 안에서 바로 실행하지 않는다
     pump(qapp, 50)
     assert calls == ["update"]
+
+
+def test_about_dialog_shows_version_and_developer(qapp, win, monkeypatch):
+    from PySide6.QtGui import QGuiApplication
+    from PySide6.QtWidgets import QToolButton
+
+    from ics import __version__
+    from ics.ui import about
+
+    tb = [b for b in win._topbar_frame.findChildren(QToolButton) if b.accessibleName() == "도구"][0]
+    assert "프로그램 정보" in [a.text() for a in tb.menu().actions()]
+    d = about.AboutDialog(win)
+    d.show()
+    pump(qapp, 50)
+    assert f"v{__version__}" in d.version_lbl.text()
+    d.copy_info()
+    text = QGuiApplication.clipboard().text()
+    assert about.DEVELOPER in text and f"v{__version__}" in text and "FFmpeg" in text
+    d.close()
+
+
+def test_click_every_button_menu_and_shortcut_without_errors(qapp, win, monkeypatch):
+    """모든 탭에서 보이는 단추, 메뉴 항목, 단축키 동작을 눌러 보고 예외가 하나도 없어야 한다 (막는 창은 바로 닫는다)."""
+    import sys
+
+    from PySide6.QtWidgets import QAbstractButton, QDialog, QFileDialog, QInputDialog, QMenu, QMessageBox, QToolButton
+
+    errors: list[str] = []
+    monkeypatch.setattr(sys, "excepthook", lambda t, v, tb: errors.append(f"{t.__name__}: {v}"))
+
+    def fake_exec(self):
+        self.show()
+        pump(qapp, 30)
+        self.reject()
+        return 0
+
+    monkeypatch.setattr(QDialog, "exec", fake_exec)
+    monkeypatch.setattr(QMessageBox, "exec", fake_exec)
+    for n in ("question", "warning", "information", "critical"):
+        monkeypatch.setattr(QMessageBox, n, staticmethod(lambda *a, **k: QMessageBox.StandardButton.No))
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", staticmethod(lambda *a, **k: ("", "")))
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", staticmethod(lambda *a, **k: ("", "")))
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", staticmethod(lambda *a, **k: ""))
+    monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *a, **k: ("", False)))
+    monkeypatch.setattr(QMenu, "exec", lambda self, *a, **k: None)
+    from PySide6.QtGui import QDesktopServices
+
+    monkeypatch.setattr(QDesktopServices, "openUrl", staticmethod(lambda *a: True))
+    skip = ("닫기", "최소화", "최대화", "이전 크기로", "프로젝트 목록으로 돌아가기")
+    for tab in ("story", "reels", "feed", "credits"):
+        win.set_tab(tab)
+        pump(qapp, 100)
+        for b in list(win.findChildren(QAbstractButton)):
+            if not b.isVisible() or not b.isEnabled() or any(s in (b.accessibleName() or b.toolTip()) for s in skip):
+                continue
+            if isinstance(b, QToolButton) and b.menu():
+                for a in b.menu().actions():
+                    if not a.isSeparator() and a.isEnabled():
+                        a.trigger()
+                        pump(qapp, 20)
+                continue
+            b.click()
+            pump(qapp, 10)
+    for a in list(win.actions.values()):
+        a.trigger()
+        pump(qapp, 10)
+    assert errors == []
