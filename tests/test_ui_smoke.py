@@ -1581,3 +1581,41 @@ def test_click_every_button_menu_and_shortcut_without_errors(qapp, win, monkeypa
         a.trigger()
         pump(qapp, 10)
     assert errors == []
+
+
+def test_topbar_buttons_keep_their_size_in_a_narrow_window(qapp, win):
+    """좁은 창에서도 '게시' / '내보내기' 글자가 잘리지 않는다 (제목 쪽이 먼저 줄어든다)."""
+    from PySide6.QtWidgets import QPushButton
+
+    win.resize(1100, 700)
+    pump(qapp, 150)
+    for text in ("게시", "내보내기"):
+        b = [x for x in win._topbar_frame.findChildren(QPushButton) if x.text() == text][0]
+        assert b.width() >= b.sizeHint().width(), (text, b.width(), b.sizeHint().width())
+    assert win.nav_btns["feed"].count in ("", str(len(win.project.feed_included())))
+
+
+def test_shortcuts_still_reach_the_editor_after_clicking_icon_buttons(qapp, win):
+    """아이콘 단추(반복/안전 영역/보기/소리/탭)를 누른 뒤에도 Space 는 재생, → 는 1프레임 이동이어야 한다
+    (단추가 키를 가져가 토글되면 안 됨)."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    tr = win.transport
+    for b in (tr.loop, tr.safe, tr.view_btn, tr.mute_btn, win.nav_btns["reels"]):
+        win.playback.pause()
+        win.goto(30)
+        pump(qapp, 30)
+        QTest.mouseClick(b, Qt.MouseButton.LeftButton)
+        if b.isCheckable() and b is not win.nav_btns["reels"]:
+            QTest.mouseClick(b, Qt.MouseButton.LeftButton)
+        pump(qapp, 30)
+        state = b.isChecked()
+        f0 = win.playhead
+        QTest.keyClick(qapp.focusWidget() or win, Qt.Key.Key_Right)
+        pump(qapp, 30)
+        assert win.playhead == f0 + 1
+        QTest.keyClick(qapp.focusWidget() or win, Qt.Key.Key_Space)
+        pump(qapp, 30)
+        assert win.playback.playing and b.isChecked() == state
+        win.playback.pause()
