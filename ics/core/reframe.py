@@ -98,9 +98,7 @@ FACE_WEIGHT = 1.6  # 얼굴이 몸보다 중요하다 (몸이 잘려도 얼굴�
 SCORE_TOLERANCE = 0.97  # 최고 점수의 이 비율 안이면 같은 노출로 보고, 그중 인물 무리 가운데에 가장 가까운 위치
 FACE_CUT_PENALTY = 0.6  # 창 가장자리에 얼굴이 반쯤 걸리면 감점 (얼굴은 다 넣거나 아예 빼는 편이 낫다)
 NUDGE = 0.15  # 평균 위치에서 얼굴이 잘리지 않게 옮겨 볼 수 있는 범위 (창 폭 대비)
-LEAD_ROOM = (
-    0.12  # 옆을 보는 얼굴: 보는 쪽에 여백을 두도록 창 가운데를 그쪽으로 옮기는 양 (창 폭 대비, 완전 옆얼굴 기준)
-)
+HEAD_SHIFT = 0.25  # 옆을 보는 얼굴: 기준을 코에서 뒤통수 쪽으로 옮기는 양 (얼굴 폭 대비, 완전 옆얼굴 기준)
 
 
 def yaw_from_landmarks(eye_a_x: float, eye_b_x: float, nose_x: float, face_w: float) -> float:
@@ -111,21 +109,24 @@ def yaw_from_landmarks(eye_a_x: float, eye_b_x: float, nose_x: float, face_w: fl
     return float(max(-1.0, min(1.0, (nose_x - mid) / span / 0.9)))
 
 
-def _lead_offset(dets: Sequence[Det], center: float, win_w: float) -> float:
-    """창 가운데(center) 둘레에 보이는 얼굴들이 보는 방향의 가중 평균 × LEAD_ROOM × 창 폭.
-    살짝 돌린 얼굴(|yaw| < 0.25)은 무시한다 (정면 컷이 흔들리지 않게)."""
-    lo, hi = center - win_w / 2, center + win_w / 2
-    num = den = 0.0
-    for d in dets:
-        if not d.face or d.x2 <= d.x1:
-            continue
-        c = (d.x1 + d.x2) / 2
-        if not (lo <= c <= hi):
-            continue
-        y = d.yaw if abs(d.yaw) >= 0.25 else 0.0
-        num += d.weight * y
-        den += d.weight
-    return LEAD_ROOM * win_w * (num / den) if den > 0 else 0.0
+def face_anchor_x(x1: float, x2: float, yaw: float) -> float:
+    """얼굴을 맞출 가로 기준. 정면이면 코(상자 가운데), 옆을 보면 보는 반대쪽(뒤통수 쪽)으로 옮긴다.
+    옆얼굴의 코는 머리 앞쪽 끝이라, 코에 맞추면 얼굴 앞에 빈 곳이 생기고 뒷머리가 잘린다."""
+    return (x1 + x2) / 2 - yaw * HEAD_SHIFT * (x2 - x1)
+
+
+def _head_frames(frames: Sequence[Sequence[Det]]) -> list[list[Det]]:
+    """얼굴 상자를 face_anchor_x 가 가운데가 되도록 옮긴 사본 (노출/잘림 계산도 머리 전체 기준으로)."""
+    out = []
+    for fr in frames:
+        row = []
+        for d in fr:
+            if d.face and d.yaw:
+                s = face_anchor_x(d.x1, d.x2, d.yaw) - (d.x1 + d.x2) / 2
+                d = replace(d, x1=d.x1 + s, x2=d.x2 + s)
+            row.append(d)
+        out.append(row)
+    return out
 
 
 def _cover(dets: Sequence[Det], xs: np.ndarray, win_w: float):
@@ -208,6 +209,7 @@ def best_window_x(frames: Sequence[Sequence[Det]], lo: float, hi: float, win_w: 
        한쪽에 오래 있다 잠깐 움직이면 오래 있던 쪽, 컷 내내 고르게 움직이면 경로의 가운데.
     인물이 하나도 없으면 None (위치를 바꾸지 않음). 반환: 0..1 위치 (pos_x)."""
     span = hi - lo - win_w
+    frames = _head_frames(frames)
     allp = [d for fr in frames for d in fr if d.x2 > d.x1]
     if not allp:
         return None
@@ -228,7 +230,7 @@ def best_window_x(frames: Sequence[Sequence[Det]], lo: float, hi: float, win_w: 
         cs = _subject_centers(fr, xs, win_w)
         if cs:
             c0 = min((c[0] for c in cs), key=lambda c: abs(c - g))
-            centers.append(c0 + _lead_offset(fr, c0, win_w))  # 옆을 보면 보는 쪽에 여백
+            centers.append(c0)
     center = _dwell_center(centers, lo, span, win_w) if centers else g
     # 3) 그 위치를 창 가운데로
     x = min(max(center - win_w / 2, lo), lo + span)

@@ -346,22 +346,39 @@ def test_yaw_from_landmarks_sign_and_range():
     assert yaw_from_landmarks(50, 52, 90, 50) == 1.0  # 완전 옆얼굴은 1 로 자른다
 
 
-def test_profile_face_gets_room_on_the_side_it_looks_at():
-    from ics.core.reframe import LEAD_ROOM, Det, best_window_x
+def test_profile_face_keeps_the_back_of_the_head_in_frame():
+    # 옆얼굴의 코는 머리 앞쪽 끝: 기준을 뒤통수 쪽으로 옮겨 뒷머리가 잘리지 않게 (IZNA 10번 컷 수동 값과 맞춘 양)
+    from ics.core.reframe import HEAD_SHIFT, Det, best_window_x, face_anchor_x
 
     lo, hi, win = 0.0, 1920.0, 608.0
     span = hi - lo - win
 
     def frames(yaw):
-        return [[Det(940, 300, 1000, 380, 1.0, True, yaw)] for _ in range(5)]
+        return [[Det(900, 300, 1100, 520, 1.0, True, yaw)] for _ in range(5)]
 
     front = best_window_x(frames(0.0), lo, hi, win)
-    right = best_window_x(frames(0.9), lo, hi, win)
+    right = best_window_x(frames(0.9), lo, hi, win)  # 오른쪽을 봄 -> 창은 왼쪽(뒤통수 쪽)으로
     left = best_window_x(frames(-0.9), lo, hi, win)
-    shift = LEAD_ROOM * win * 0.9 / span
-    assert abs((right - front) - shift) < 0.02 and abs((front - left) - shift) < 0.02
-    # 살짝 돌린 얼굴은 정면처럼 (흔들리지 않게)
-    assert abs(best_window_x(frames(0.2), lo, hi, win) - front) < 1e-6
+    shift = HEAD_SHIFT * 200 * 0.9 / span
+    assert abs((front - right) - shift) < 0.02 and abs((left - front) - shift) < 0.02
+    assert face_anchor_x(900, 1100, 0.0) == 1000 and face_anchor_x(900, 1100, -1.0) == 1000 + HEAD_SHIFT * 200
+
+
+def test_real_cut_with_turning_profile_matches_the_hand_set_position():
+    # IZNA_IWALY_PV 10번 컷 (3840x2160, 9:16 창 1215): 왼쪽을 보며 고개를 돌려 오른쪽으로 자리 잡는 얼굴.
+    # 사용자가 손으로 맞춘 값 0.3429 (예전 자동 0.279: 코 기준이라 뒷머리가 잘림)
+    from ics.core.reframe import Det, best_window_x
+
+    rows = [
+        (1364, 2033, 0.661, 736, 1464, 1.197), (1325, 2006, 0.664, 735, 1452, 1.18),
+        (1366, 2034, 0.659, 827, 1521, 1.15), (1498, 2175, 0.655, 1006, 1680, 1.024),
+        (1675, 2318, 0.63, 1198, 1903, 1.073), (1636, 2268, 0.634, 1215, 1918, 0.973),
+        (1580, 2189, 0.624, 1138, 1882, 1.056), (1576, 2169, 0.612, 1139, 1910, 1.06),
+    ]  # fmt: skip
+    win = 2160 * 9 / 16
+    frames = [[Det(h1, 0, h2, 400, hw), Det(f1, 200, f2, 900, fw, True, -0.95)] for h1, h2, hw, f1, f2, fw in rows]
+    px = best_window_x(frames, 0, 3840, win)
+    assert abs(px - 0.3429) * (3840 - win) < 40  # 40px 안 (창 폭의 3%)
 
 
 def test_cache_keeps_face_direction(tmp_path):

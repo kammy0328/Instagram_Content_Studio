@@ -7,6 +7,7 @@ from PySide6.QtGui import QColor, QImage, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
 from ..core.layout import Geometry, LayoutParams, compute_geometry, profile_grid_window, source_bounds
+from ..core.reframe import face_anchor_x
 from . import theme
 
 
@@ -147,9 +148,9 @@ class PreviewWidget(QWidget):
                 p.drawRect(box)
                 p.setPen(Qt.PenStyle.NoPen)
                 p.setBrush(face_c)
-                c = box.center()
-                p.drawEllipse(QPointF(c.x(), c.y()), 2.2, 2.2)
-                if abs(yaw) >= 0.25:  # 보는 방향 (여백을 두는 쪽)
+                c = QPointF(r.x() + face_anchor_x(x1, x2, yaw) * k, box.center().y())  # 옆얼굴은 뒤통수 쪽
+                p.drawEllipse(c, 2.2, 2.2)
+                if abs(yaw) >= 0.25:  # 보는 방향
                     tip = QPointF(c.x() + yaw * box.width() * 0.9, c.y())
                     p.setPen(QPen(face_c, 1.6))
                     p.drawLine(c, tip)
