@@ -599,6 +599,9 @@ class AudioPlayer:
         self.volume = 1.0  # 미리보기 음량 0~1 (렌더링 결과와 무관)
         self._sink = None
         self._file = None
+        self._dev = None  # 지금 싱크가 열린 출력 장치
+        self._paused_at: float | None = None  # 일시정지한 소리 위치(초)
+        self._start_sec = 0.0
         self._offset = 0
         self._path = wav_path
         if not wav_path:
@@ -633,35 +636,69 @@ class AudioPlayer:
                     return pos + 8
                 pos += 8 + sz + (sz & 1)
 
+    BUFFER_SEC = 0.1  # 출력 버퍼 (작을수록 재생/정지 반응이 빠르다. 너무 작으면 끊김)
+    RESUME_TOL = 0.08  # 멈춘 자리에서 이만큼 안이면 이어서 재생 (장치를 다시 열지 않음)
+
+    def _dev_key(self, dev) -> str:
+        try:
+            return bytes(dev.id()).hex()
+        except Exception:  # noqa: BLE001
+            return str(dev.description())
+
     def play(self, seconds: float) -> None:
-        """seconds 위치부터 재생. 실패하면 error 에 사유를 남기고 소리 없이 계속한다."""
+        """seconds 위치부터 재생. 실패하면 error 에 사유를 남기고 소리 없이 계속한다.
+
+        재생/정지가 즉시 반응하도록 출력(싱크)을 매번 새로 만들지 않는다:
+        - 멈춘 자리에서 다시 재생하면 일시정지를 풀기만 한다 (resume, 바로 소리남)
+        - 다른 자리면 같은 싱크에서 파일 위치만 옮겨 다시 시작한다
+        - 기본 출력 장치가 바뀌었을 때만 새로 만든다 (헤드셋 연결 등)"""
         if not self.ok:
             return
-        self.stop()
         self.error = ""
         try:
             from PySide6.QtCore import QFile, QIODevice
 
             dev = default_audio_output()
             if dev is None:
+                self.close()
                 self.error = "소리를 낼 출력 장치(스피커/헤드폰)를 찾지 못했습니다. Windows 소리 설정에서 출력 장치를 확인하세요."
                 return
             from PySide6.QtMultimedia import QAudio, QAudioFormat, QAudioSink
 
-            fmt = QAudioFormat()
-            fmt.setSampleRate(self.RATE)
-            fmt.setChannelCount(self.CHANNELS)
-            fmt.setSampleFormat(QAudioFormat.SampleFormat.Int16)
-            f = QFile(self._path)
-            if not f.open(QIODevice.OpenModeFlag.ReadOnly):
-                self.error = "소리 파일을 열 수 없습니다."
-                return
-            frame_bytes = self.CHANNELS * self.SAMPLE_BYTES
-            f.seek(self._offset + int(max(0.0, seconds) * self.RATE) * frame_bytes)
-            sink = QAudioSink(dev, fmt)
-            sink.setVolume(self.volume)
-            sink.start(f)
-            self._sink, self._file = sink, f
+            seconds = max(0.0, float(seconds))
+            key = self._dev_key(dev)
+            sink = self._sink if getattr(self, "_dev", None) == key else None
+            if sink is not None and self._paused_at is not None and abs(seconds - self._paused_at) <= self.RESUME_TOL:
+                sink.setVolume(self.volume)
+                sink.resume()
+                self._paused_at = None
+            else:
+                if sink is None:
+                    self.close()
+                    fmt = QAudioFormat()
+                    fmt.setSampleRate(self.RATE)
+                    fmt.setChannelCount(self.CHANNELS)
+                    fmt.setSampleFormat(QAudioFormat.SampleFormat.Int16)
+                    sink = QAudioSink(dev, fmt)
+                    try:
+                        sink.setBufferSize(int(self.RATE * self.BUFFER_SEC) * self.CHANNELS * self.SAMPLE_BYTES)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    self._sink, self._dev = sink, key
+                else:
+                    sink.stop()
+                if self._file is None:
+                    f = QFile(self._path)
+                    if not f.open(QIODevice.OpenModeFlag.ReadOnly):
+                        self.error = "소리 파일을 열 수 없습니다."
+                        return
+                    self._file = f
+                frame_bytes = self.CHANNELS * self.SAMPLE_BYTES
+                self._file.seek(self._offset + int(seconds * self.RATE) * frame_bytes)
+                sink.setVolume(self.volume)
+                sink.start(self._file)
+                self._start_sec = seconds
+                self._paused_at = None
             error = sink.error()
             # Qt 버전에 따라 QtAudio.Error와 QAudio.Error가 다른 Python Enum이 될 수 있다.
             if error.value != QAudio.Error.NoError.value:
@@ -675,15 +712,32 @@ class AudioPlayer:
             self._sink.setVolume(self.volume)
 
     def stop(self) -> None:
+        """소리를 바로 멈춘다 (일시정지: 장치는 열어 둬 다음 재생이 즉시 시작된다)."""
+        try:
+            sink = self._sink
+            if sink is not None and self._paused_at is None:
+                played = 0.0
+                try:
+                    played = float(sink.processedUSecs()) / 1e6
+                except Exception:  # noqa: BLE001
+                    pass
+                sink.suspend()
+                self._paused_at = getattr(self, "_start_sec", 0.0) + played
+        except Exception:  # noqa: BLE001
+            self.close()
+
+    def close(self) -> None:
+        """장치와 파일을 완전히 놓는다 (소리 파일 교체, 창 닫기, 장치 변경)."""
         try:
             if self._sink is not None:
                 self._sink.stop()
-                self._sink = None
             if self._file is not None:
                 self._file.close()
-                self._file = None
         except Exception:  # noqa: BLE001
             pass
+        self._sink = self._file = None
+        self._dev = None
+        self._paused_at = None
 
 
 class PlaybackEngine(QObject):
@@ -722,7 +776,7 @@ class PlaybackEngine(QObject):
 
     def set_audio(self, wav: str | None) -> None:
         """소리 파일을 (다시) 연결한다. 이미 재생 중이면 현재 위치부터 소리를 바로 이어 붙인다."""
-        self.audio.stop()
+        getattr(self.audio, "close", self.audio.stop)()
         vol = self.audio.volume
         self.audio = AudioPlayer(wav)
         self.audio.volume = vol
@@ -750,16 +804,15 @@ class PlaybackEngine(QObject):
         self._base_wall = time.perf_counter()
         self._base_time = self.index.time_of(self.current)
         self.playing = True
+        # 소리를 먼저 (영상 디코더 프로세스를 띄우는 시간만큼 소리가 늦게 나지 않게)
+        if rate == 1.0 and self.audio_enabled:
+            self.audio.play(float(self._base_time))
+        else:
+            self.audio.stop()
         if rate > 0:
             w, h = self.decoder.size
             self._pipe = FramePipe(self.decoder, self.current, w, h)
             self._pipe.start()
-            if rate == 1.0 and self.audio_enabled:
-                self.audio.play(float(self._base_time))
-            else:
-                self.audio.stop()
-        else:
-            self.audio.stop()
         self._timer.start()
         self.stateChanged.emit(True)
 
@@ -773,9 +826,9 @@ class PlaybackEngine(QObject):
         if not self.playing:
             return
         self.playing = False
+        self.audio.stop()  # 소리를 먼저 멈춘다 (영상 디코더 정리를 기다리는 동안 소리가 계속 나지 않게)
         self._timer.stop()
         self.stop_pipe()
-        self.audio.stop()
         self.stateChanged.emit(False)
 
     def toggle(self, start: int, loop=None) -> None:
@@ -839,3 +892,4 @@ class PlaybackEngine(QObject):
 
     def shutdown(self) -> None:
         self.pause()
+        getattr(self.audio, "close", self.audio.stop)()
