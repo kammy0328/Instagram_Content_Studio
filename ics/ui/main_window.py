@@ -645,7 +645,7 @@ class EditorWindow(QMainWindow):
             c = next((c for c in self.project.state.cuts if c.start <= n < c.end), None)
             a, b = (c.start, c.end) if c else (0, self.project.count)  # 컷 정보가 없으면 영상 전체가 한 조각
             k, dets = self.reframer.dets_near(n, a, b)
-        new = (k, [(d.x1, d.y1, d.x2, d.y2, d.face) for d in dets])
+        new = (k, [(d.x1, d.y1, d.x2, d.y2, d.face, getattr(d, "yaw", 0.0)) for d in dets])
         if getattr(pv, "debug_dets", None) != new:
             pv.debug_dets = new
             pv.update()

@@ -322,7 +322,7 @@ def test_face_center_follows_the_nose_and_sharp_faces_weigh_more(monkeypatch):
     a, b = dets
     assert a.face and abs((a.x1 + a.x2) / 2 - 115.0) < 1e-6 and abs(a.x2 - a.x1 - 60) < 1e-6  # 가운데 = 코
     assert a.weight > b.weight * 1.5  # 흐린(무늬 없는) 얼굴은 가중치가 낮다
-    assert reframe.ANALYSIS_WIDTH == 1280 and reframe.CACHE_VERSION == 2
+    assert reframe.ANALYSIS_WIDTH == 1280 and reframe.CACHE_VERSION == 3
 
 
 def test_bundled_scrfd_model_loads_and_finds_nothing_in_noise():
@@ -334,3 +334,40 @@ def test_bundled_scrfd_model_loads_and_finds_nothing_in_noise():
     assert d.face_model == "scrfd"
     rng = np.random.default_rng(0)
     assert d.faces(rng.integers(0, 40, (720, 1280, 3), dtype=np.uint8), []) == []
+
+
+# ---------------------------------------------------------------- 옆얼굴: 보는 쪽에 여백 (lead room)
+def test_yaw_from_landmarks_sign_and_range():
+    from ics.core.reframe import yaw_from_landmarks
+
+    assert abs(yaw_from_landmarks(40, 60, 50, 50)) < 1e-9  # 정면: 코가 두 눈 가운데
+    assert yaw_from_landmarks(40, 50, 58, 50) > 0.5  # 코가 오른쪽으로: 화면 오른쪽을 봄
+    assert yaw_from_landmarks(50, 60, 42, 50) < -0.5
+    assert yaw_from_landmarks(50, 52, 90, 50) == 1.0  # 완전 옆얼굴은 1 로 자른다
+
+
+def test_profile_face_gets_room_on_the_side_it_looks_at():
+    from ics.core.reframe import LEAD_ROOM, Det, best_window_x
+
+    lo, hi, win = 0.0, 1920.0, 608.0
+    span = hi - lo - win
+
+    def frames(yaw):
+        return [[Det(940, 300, 1000, 380, 1.0, True, yaw)] for _ in range(5)]
+
+    front = best_window_x(frames(0.0), lo, hi, win)
+    right = best_window_x(frames(0.9), lo, hi, win)
+    left = best_window_x(frames(-0.9), lo, hi, win)
+    shift = LEAD_ROOM * win * 0.9 / span
+    assert abs((right - front) - shift) < 0.02 and abs((front - left) - shift) < 0.02
+    # 살짝 돌린 얼굴은 정면처럼 (흔들리지 않게)
+    assert abs(best_window_x(frames(0.2), lo, hi, win) - front) < 1e-6
+
+
+def test_cache_keeps_face_direction(tmp_path):
+    from ics.core import reframe
+
+    p = tmp_path / "c.json"
+    reframe.save_cache(p, {12: [reframe.Det(1, 2, 3, 4, 0.5, True, -0.734)]})
+    d = reframe.load_cache(p)[12][0]
+    assert d.face and abs(d.yaw + 0.734) < 1e-3
