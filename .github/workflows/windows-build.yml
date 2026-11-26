@@ -79,7 +79,8 @@ jobs:
           $slug = ("${{ github.ref_name }}" -replace '[^A-Za-z0-9._-]', '-')
           $id = "${{ github.sha }}".Substring(0, 7)
           $tok = "$env:UPDATE_READ_TOKEN".Trim()
-          Set-Content -Path ics/_build.py -Value "BUILD_ID = `"$id`"`nBUILD_CHANNEL = `"$slug`"`nBUILD_TOKEN = `"$tok`"`n" -Encoding utf8
+          $date = [System.TimeZoneInfo]::ConvertTimeBySystemTimeZoneId([DateTime]::UtcNow, "Korea Standard Time").ToString("yyyy-MM-dd HH:mm")
+          Set-Content -Path ics/_build.py -Value "BUILD_ID = `"$id`"`nBUILD_CHANNEL = `"$slug`"`nBUILD_TOKEN = `"$tok`"`nBUILD_DATE = `"$date`"`n" -Encoding utf8
 
       - name: 의존성 설치
         run: |
