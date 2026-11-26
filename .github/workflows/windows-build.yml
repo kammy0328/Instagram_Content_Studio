@@ -198,12 +198,16 @@ jobs:
             if ((Test-Path $seen) -and -not (Test-Path $log)) { $log = $seen }
             if ((Test-Path $log) -and (Select-String -Path $log -Pattern " done" -Quiet)) { $done = $true; break }
           }
+          # 다시 열린 앱이 기록을 읽고 이름을 바꾸므로, 내용은 그 시점의 파일에서 한 번만 읽어 둔다
+          $seen = Join-Path $upd "launcher.seen.log"
+          $text = ""
+          foreach ($f in @($log, (Join-Path $upd "launcher.log"), $seen)) { if (Test-Path $f) { $text = Get-Content $f -Raw; break } }
           Write-Host "---- ics_update"; Get-ChildItem $upd | Select-Object Name, Length | Format-Table | Out-String | Write-Host
           Write-Host "---- selftest_update.txt"; Get-Content (Join-Path $upd "selftest_update.txt") -ErrorAction SilentlyContinue
-          Write-Host "---- launcher.log"; Get-Content $log -ErrorAction SilentlyContinue
+          Write-Host "---- launcher.log"; Write-Host $text
           Write-Host "---- install.log (마지막 15줄)"; Get-Content (Join-Path $upd "install.log") -Tail 15 -ErrorAction SilentlyContinue
           if (-not $done) { throw "업데이트 실행기가 끝나지 않았습니다 (앱 종료와 함께 죽었거나 멈춤)" }
-          if (-not (Select-String -Path $log -Pattern "setup exit=0" -Quiet)) { throw "업데이트 설치 실패" }
+          if ($text -notmatch "setup exit=0") { throw "업데이트 설치 실패" }
           Start-Sleep -Seconds 5
           $proc = Get-Process -Name InstagramContentStudio -ErrorAction SilentlyContinue
           if (-not $proc) { throw "업데이트 후 앱이 다시 열리지 않았습니다" }
