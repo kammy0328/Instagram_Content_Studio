@@ -1498,3 +1498,19 @@ def test_dialog_title_bar_ignores_events_while_being_torn_down(qapp):
     d.resize(300, 200)
     pump(qapp, 50)
     d.close()
+
+
+def test_menu_items_run_after_the_menu_closes(qapp, win, monkeypatch):
+    """도구(···) 메뉴 항목은 메뉴가 닫힌 뒤 실행된다. 메뉴 안에서 바로 창을 열면 메뉴가 화면에 남아 멈춘 것처럼 보였다."""
+    from PySide6.QtWidgets import QToolButton
+
+    from ics.ui import update_ui
+
+    calls = []
+    monkeypatch.setattr(update_ui, "check_and_prompt", lambda *a, **k: calls.append("update"))
+    tb = [b for b in win._topbar_frame.findChildren(QToolButton) if b.accessibleName() == "도구"][0]
+    act = [a for a in tb.menu().actions() if a.text() == "업데이트…"][0]
+    act.trigger()
+    assert calls == []  # 메뉴 안에서 바로 실행하지 않는다
+    pump(qapp, 50)
+    assert calls == ["update"]

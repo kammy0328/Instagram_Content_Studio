@@ -73,6 +73,15 @@ class FixedToolButton(QToolButton):
         return self._sz
 
 
+def later(fn):
+    """메뉴 항목의 동작을 메뉴가 닫힌 다음에 실행한다.
+
+    메뉴 안에서 바로 대화상자(exec)를 열면 메뉴가 닫히지 못하고 화면에 남아, 아무 반응이 없는 것처럼 보인다."""
+    from PySide6.QtCore import QTimer
+
+    return lambda *_a: QTimer.singleShot(0, fn)
+
+
 def menu_button(icon_name: str, tip: str, size: int = 30) -> QToolButton:
     """··· 같은 아이콘 메뉴 단추 (누르면 바로 메뉴)."""
     b = FixedToolButton(size)
