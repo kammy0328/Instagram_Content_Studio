@@ -21,6 +21,7 @@ class OutputBundle:
     comments: list[str] = field(default_factory=list)
     credits: str = ""
     output_version: str = ""
+    problems: list[str] = field(default_factory=list)  # 읽지 못한 파일 (사용 중/권한 없음 등)
 
     def available(self) -> dict[Kind, bool]:
         return {Kind.STORY: self.story is not None, Kind.REELS: self.reels is not None, Kind.FEED: bool(self.feed)}
@@ -38,29 +39,50 @@ def read_output(root: str | Path) -> OutputBundle:
     b = OutputBundle(root)
 
     def first(d: str, pattern: str) -> Path | None:
-        files = sorted((root / d).glob(pattern)) if (root / d).is_dir() else []
+        try:
+            files = sorted((root / d).glob(pattern)) if (root / d).is_dir() else []
+        except OSError as e:
+            b.problems.append(f"{d}: 폴더를 읽을 수 없음 ({e.strerror or e})")
+            return None
         return files[0] if files else None
 
-    s = first("STORY", "*.mp4")
-    if s:
-        b.story = MediaAsset.from_file(s, "video")
-    r = first("REELS", "*REELS*.mp4") or first("REELS", "*.mp4")
-    if r:
-        b.reels = MediaAsset.from_file(r, "video")
-    c = first("REELS", "*_COVER.jpg")
-    if c:
-        b.reels_cover = MediaAsset.from_file(c, "cover")
+    def asset(p: Path | None, role: str, order: int = 0) -> MediaAsset | None:
+        """파일을 못 읽으면(다른 프로그램이 사용 중, 권한 없음, 네트워크 끊김) 그 항목만 빼고 이유를 남긴다."""
+        if p is None:
+            return None
+        try:
+            return MediaAsset.from_file(p, role, order=order)
+        except OSError as e:
+            why = (
+                "다른 프로그램이 사용 중이거나 접근 권한이 없습니다"
+                if isinstance(e, PermissionError)
+                else (e.strerror or str(e))
+            )
+            b.problems.append(f"{p.parent.name}/{p.name}: 읽을 수 없음 ({why})")
+            return None
+
+    b.story = asset(first("STORY", "*.mp4"), "video")
+    b.reels = asset(first("REELS", "*REELS*.mp4") or first("REELS", "*.mp4"), "video")
+    b.reels_cover = asset(first("REELS", "*_COVER.jpg"), "cover")
     items = []
-    if (root / "FEED").is_dir():
-        for p in sorted((root / "FEED").iterdir()):
-            m = re.match(r"^(\d+)_(VIDEO|STILL)\.(mp4|jpg)$", p.name, re.I)
-            if m:
-                items.append((int(m.group(1)), p, "video" if m.group(2).upper() == "VIDEO" else "image"))
-    for n, (_num, p, role) in enumerate(sorted(items, key=lambda t: t[0])):
-        b.feed.append(MediaAsset.from_file(p, role, order=n))
+    try:
+        feed_files = sorted((root / "FEED").iterdir()) if (root / "FEED").is_dir() else []
+    except OSError as e:
+        feed_files = []
+        b.problems.append(f"FEED: 폴더를 읽을 수 없음 ({e.strerror or e})")
+    for p in feed_files:
+        m = re.match(r"^(\d+)_(VIDEO|STILL)\.(mp4|jpg)$", p.name, re.I)
+        if m:
+            items.append((int(m.group(1)), p, "video" if m.group(2).upper() == "VIDEO" else "image"))
+    feed = [asset(p, role, n) for n, (_num, p, role) in enumerate(sorted(items, key=lambda t: t[0]))]
+    # 한 장이라도 못 읽으면 FEED 전체를 빼 둔다 (빠진 채로 캐러셀이 올라가지 않게)
+    b.feed = [a for a in feed if a is not None] if all(a is not None for a in feed) else []
     cd = root / "CAPTION"
     b.caption = _text(cd / "CAPTION.txt")
-    b.comments = [_text(p) for p in sorted(cd.glob("COMMENT_*.txt"))] if cd.is_dir() else []
+    try:
+        b.comments = [_text(p) for p in sorted(cd.glob("COMMENT_*.txt"))] if cd.is_dir() else []
+    except OSError:
+        b.comments = []
     b.credits = _text(cd / "CREDITS_ORIGINAL.txt")
     h = hashlib.sha256()
     for a in [b.story, b.reels, b.reels_cover, *b.feed]:

@@ -155,16 +155,20 @@ class PublisherDialog(ChromeDialog):
         return w
 
     def _refresh_outputs(self) -> None:
+        import html
+
         b = self.svc.load_output(self.root)
         av = b.available()
         miss = [KIND_LABEL[k] for k in ALL_KINDS if not av[k]]
+        probs = getattr(b, "problems", [])
         self.out_lbl.setText(
-            f"<b>{self.project.rec.name}</b> · 출력 폴더: {self.root}"
+            f"<b>{html.escape(self.project.rec.name)}</b> · 출력 폴더: {html.escape(str(self.root))}"
             + (
                 f"<br><span style='color:#e0a000'>출력물이 없는 유형: {', '.join(miss)} (먼저 렌더링하세요)</span>"
                 if miss
                 else ""
             )
+            + "".join(f"<br><span style='color:#ff5d6c'>{html.escape(x)}</span>" for x in probs[:5])
         )
         for k in ALL_KINDS:
             self.chk[k].setEnabled(av[k])

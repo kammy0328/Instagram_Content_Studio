@@ -1562,7 +1562,12 @@ class EditorWindow(QMainWindow):
             d = paths.app_data_dir() / "publisher"
             d.mkdir(parents=True, exist_ok=True)
             self._pub_service = PublisherService(d, self.settings, default_secret_store(d / "secrets.json"))
-        PublisherDialog(self.project, self._pub_service, self, self.toast).exec()
+        try:
+            dlg = PublisherDialog(self.project, self._pub_service, self, self.toast)
+        except Exception as e:  # noqa: BLE001 (출력 폴더 문제 등으로 창을 못 열어도 앱 오류 창 대신 이유를 알린다)
+            QMessageBox.warning(self, "게시", f"게시 창을 열지 못했습니다.\n{type(e).__name__}: {e}")
+            return
+        dlg.exec()
 
     # ================================================================ Undo/Redo
     def do_undo(self) -> None:
