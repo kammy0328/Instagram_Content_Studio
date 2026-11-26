@@ -138,7 +138,8 @@ class PreviewWidget(QWidget):
         p.save()
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         face_c, head_c = QColor("#4cd08b"), QColor(255, 255, 255, 150)
-        for x1, y1, x2, y2, face in dets:
+        for x1, y1, x2, y2, face, *rest in dets:
+            yaw = float(rest[0]) if rest else 0.0
             box = QRectF(r.x() + x1 * k, r.y() + y1 * k, (x2 - x1) * k, (y2 - y1) * k)
             if face:
                 p.setPen(QPen(face_c, 1.6))
@@ -146,7 +147,15 @@ class PreviewWidget(QWidget):
                 p.drawRect(box)
                 p.setPen(Qt.PenStyle.NoPen)
                 p.setBrush(face_c)
-                p.drawEllipse(QPointF(box.center().x(), box.center().y()), 2.2, 2.2)
+                c = box.center()
+                p.drawEllipse(QPointF(c.x(), c.y()), 2.2, 2.2)
+                if abs(yaw) >= 0.25:  # 보는 방향 (여백을 두는 쪽)
+                    tip = QPointF(c.x() + yaw * box.width() * 0.9, c.y())
+                    p.setPen(QPen(face_c, 1.6))
+                    p.drawLine(c, tip)
+                    s_ = 4 if yaw > 0 else -4
+                    p.drawLine(tip, QPointF(tip.x() - s_, tip.y() - 3))
+                    p.drawLine(tip, QPointF(tip.x() - s_, tip.y() + 3))
             else:
                 pen = QPen(head_c, 1.2, Qt.PenStyle.DashLine)
                 p.setPen(pen)
@@ -155,7 +164,9 @@ class PreviewWidget(QWidget):
         f = p.font()
         f.setPixelSize(theme.FS_SMALL)
         p.setFont(f)
-        text = f"초록: 얼굴 (점 = 맞춘 기준) · 점선: 얼굴을 못 찾은 사람의 머리 자리 · 분석 표본 f{frame}"
+        text = (
+            f"초록: 얼굴 (점 = 기준, 화살표 = 보는 방향) · 점선: 얼굴을 못 찾은 사람의 머리 자리 · 분석 표본 f{frame}"
+        )
         fm = p.fontMetrics()
         tr = QRectF(r.x() + 8, r.bottom() - fm.height() - 12, fm.horizontalAdvance(text) + 16, fm.height() + 6)
         p.setPen(Qt.PenStyle.NoPen)

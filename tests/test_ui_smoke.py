@@ -1063,11 +1063,11 @@ def test_auto_reframe_sets_per_cut_positions_and_preview_follows(qapp, win, monk
     assert _wait(qapp, lambda: win.project.state.story.cut_x == {0: 0.0, 50: 1.0}, 10)
     assert win.project.state.story.layout.mode == "fill"  # 자동 맞춤은 Fill 9:16 에서 동작
     win.goto(10)
-    pump(qapp, 300)
-    assert win.preview.layout.pos_x == 0.0
+    assert _wait(
+        qapp, lambda: win.preview.layout.pos_x == 0.0, 5
+    )  # 프레임이 표시되면 따라온다 (부하에 따라 늦을 수 있음)
     win.goto(60)
-    pump(qapp, 300)
-    assert win.preview.layout.pos_x == 1.0
+    assert _wait(qapp, lambda: win.preview.layout.pos_x == 1.0, 5)
     win.do_undo()  # 실행 취소로 되돌린다
     assert win.project.state.story.cut_x == {}
 
@@ -1685,7 +1685,7 @@ def test_source_view_overlays_detections_of_the_current_cut(qapp, win):
     win.transport.view_btn.setChecked(False)
     pump(qapp, 300)
     k, boxes = win.preview.debug_dets
-    assert k == near and boxes == [(60, 10, 90, 40, False)]  # 가장 가까운 표본
+    assert k == near and boxes == [(60, 10, 90, 40, False, 0.0)]  # 가장 가까운 표본
     win.transport.view_btn.setChecked(True)
     pump(qapp, 300)
     assert win.preview.debug_dets[1] == []  # 출력 보기에서는 숨김

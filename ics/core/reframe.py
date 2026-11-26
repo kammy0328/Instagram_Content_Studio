@@ -91,12 +91,41 @@ class Det:
     y2: float
     weight: float  # 검출 신뢰도 × 크기 (얼굴은 가중)
     face: bool = False
+    yaw: float = 0.0  # 얼굴이 돌아간 정도와 방향 (-1 왼쪽을 봄 .. 0 정면 .. +1 오른쪽을 봄, 화면 기준)
 
 
 FACE_WEIGHT = 1.6  # 얼굴이 몸보다 중요하다 (몸이 잘려도 얼굴이 보이는 편이 낫다)
 SCORE_TOLERANCE = 0.97  # 최고 점수의 이 비율 안이면 같은 노출로 보고, 그중 인물 무리 가운데에 가장 가까운 위치
 FACE_CUT_PENALTY = 0.6  # 창 가장자리에 얼굴이 반쯤 걸리면 감점 (얼굴은 다 넣거나 아예 빼는 편이 낫다)
 NUDGE = 0.15  # 평균 위치에서 얼굴이 잘리지 않게 옮겨 볼 수 있는 범위 (창 폭 대비)
+LEAD_ROOM = (
+    0.12  # 옆을 보는 얼굴: 보는 쪽에 여백을 두도록 창 가운데를 그쪽으로 옮기는 양 (창 폭 대비, 완전 옆얼굴 기준)
+)
+
+
+def yaw_from_landmarks(eye_a_x: float, eye_b_x: float, nose_x: float, face_w: float) -> float:
+    """눈 두 점과 코의 가로 위치로 얼굴이 돌아간 방향. 정면이면 코가 두 눈 가운데, 옆을 보면 코가 보는 쪽으로 치우친다.
+    반환 -1..1 (+: 화면 오른쪽을 봄)."""
+    mid = (eye_a_x + eye_b_x) / 2
+    span = max(abs(eye_a_x - eye_b_x), 0.25 * max(face_w, 1e-6))
+    return float(max(-1.0, min(1.0, (nose_x - mid) / span / 0.9)))
+
+
+def _lead_offset(dets: Sequence[Det], center: float, win_w: float) -> float:
+    """창 가운데(center) 둘레에 보이는 얼굴들이 보는 방향의 가중 평균 × LEAD_ROOM × 창 폭.
+    살짝 돌린 얼굴(|yaw| < 0.25)은 무시한다 (정면 컷이 흔들리지 않게)."""
+    lo, hi = center - win_w / 2, center + win_w / 2
+    num = den = 0.0
+    for d in dets:
+        if not d.face or d.x2 <= d.x1:
+            continue
+        c = (d.x1 + d.x2) / 2
+        if not (lo <= c <= hi):
+            continue
+        y = d.yaw if abs(d.yaw) >= 0.25 else 0.0
+        num += d.weight * y
+        den += d.weight
+    return LEAD_ROOM * win_w * (num / den) if den > 0 else 0.0
 
 
 def _cover(dets: Sequence[Det], xs: np.ndarray, win_w: float):
@@ -198,7 +227,8 @@ def best_window_x(frames: Sequence[Sequence[Det]], lo: float, hi: float, win_w: 
             continue
         cs = _subject_centers(fr, xs, win_w)
         if cs:
-            centers.append(min((c[0] for c in cs), key=lambda c: abs(c - g)))
+            c0 = min((c[0] for c in cs), key=lambda c: abs(c - g))
+            centers.append(c0 + _lead_offset(fr, c0, win_w))  # 옆을 보면 보는 쪽에 여백
     center = _dwell_center(centers, lo, span, win_w) if centers else g
     # 3) 그 위치를 창 가운데로
     x = min(max(center - win_w / 2, lo), lo + span)
@@ -272,17 +302,21 @@ class FaceSCRFD:
                 np.column_stack([cc[:, 0] - d[:, 0], cc[:, 1] - d[:, 1], cc[:, 0] + d[:, 2], cc[:, 1] + d[:, 3]])
             )
             scores.append(s_[m, 0])
-            noses.append(cc[:, 0] + k_[m, 4] * st)  # 다섯 점 중 셋째(코)의 x
+            noses.append(
+                np.column_stack([cc[:, 0] + k_[m, 0] * st, cc[:, 0] + k_[m, 2] * st, cc[:, 0] + k_[m, 4] * st])
+            )
+            # 다섯 점(눈, 눈, 코, 입, 입) 중 눈 두 점과 코의 x
         if not boxes:
             return []
-        B, S, N = np.concatenate(boxes) / s, np.concatenate(scores), np.concatenate(noses) / s
+        B, S, K = np.concatenate(boxes) / s, np.concatenate(scores), np.concatenate(noses) / s
         keep = cv2.dnn.NMSBoxes(np.column_stack([B[:, :2], B[:, 2:] - B[:, :2]]).tolist(), S.tolist(), self.TH, 0.4)
         out = []
         for i in np.array(keep).ravel():
             x1, y1, x2, y2 = (float(v) for v in B[int(i)])
-            nx = float(N[int(i)])
+            ea, eb, nx = (float(v) for v in K[int(i)])
+            yaw = yaw_from_landmarks(ea, eb, nx, x2 - x1)
             out.append((max(0.0, x1), max(0.0, y1), min(float(w), x2), min(float(h), y2), float(S[int(i)]),
-                        nx if x1 <= nx <= x2 else None))  # fmt: skip
+                        nx if x1 <= nx <= x2 else None, yaw))  # fmt: skip
         return out
 
 
@@ -410,9 +444,12 @@ class PersonDetector:
         _, f = self.face.detect(np.ascontiguousarray(rgb[:, :, ::-1]))
         if f is None:
             return []
+        # YuNet 랜드마크: 4,5 눈 / 6,7 눈 / 8,9 코
         return [
-            (float(r[0]), float(r[1]), float(r[0] + r[2]), float(r[1] + r[3]), float(r[14]), float(r[8])) for r in f
-        ]
+            (float(r[0]), float(r[1]), float(r[0] + r[2]), float(r[1] + r[3]), float(r[14]), float(r[8]),
+             yaw_from_landmarks(float(r[4]), float(r[6]), float(r[8]), float(r[2])))
+            for r in f
+        ]  # fmt: skip
 
     def faces(self, rgb: np.ndarray, persons: Sequence | None = None) -> list[Face]:
         """1차: 640 폭. 사람은 있는데 그 머리 자리에 얼굴이 없거나 얼굴이 아주 작으면 2차: 좌우 반쪽을 원본 해상도로."""
@@ -437,7 +474,7 @@ class PersonDetector:
         for x0 in (0, w - half):
             tile = rgb[:, x0 : x0 + half]
             for f in self.scrfd.detect(tile, tile.shape[1]):
-                more.append((f[0] + x0, f[1], f[2] + x0, f[3], f[4], None if f[5] is None else f[5] + x0))
+                more.append((f[0] + x0, f[1], f[2] + x0, f[3], f[4], None if f[5] is None else f[5] + x0, *f[6:7]))
         return _nms_faces(first + more)
 
     def _sharpness(self, rgb: np.ndarray, f: Face) -> float:
@@ -464,13 +501,14 @@ class PersonDetector:
         sharp = [self._sharpness(rgb, f) for f in faces]
         top = max(sharp) if sharp else 0.0
         for f, sh in zip(faces, sharp):
-            x1, y1, x2, y2, c, nose = f
+            x1, y1, x2, y2, c, nose = f[:6]
+            yaw = float(f[6]) if len(f) > 6 else 0.0
             if nose is not None:  # 상자 가운데 대신 코 위치를 가운데로 (옆얼굴 보정, 너비는 그대로)
                 half = (x2 - x1) / 2
                 x1, x2 = nose - half, nose + half
             sf = 0.45 + 0.55 * min(1.0, sh / top) if top > 1e-6 else 1.0
             wgt = FACE_WEIGHT * c * math.sqrt(max(0.0, (x2 - x1) * (y2 - y1)) / area) * 3.0 * sf
-            out.append(Det(x1, y1, x2, y2, wgt, True))
+            out.append(Det(x1, y1, x2, y2, wgt, True, yaw))
         return out
 
 
@@ -550,7 +588,7 @@ def analyze(
     done = 0
     with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
         for (i, dets), (_i, f) in zip(ex.map(work, jobs), jobs):
-            fr = [Det(d.x1 / k, d.y1 / k, d.x2 / k, d.y2 / k, d.weight, d.face) for d in dets]
+            fr = [Det(d.x1 / k, d.y1 / k, d.x2 / k, d.y2 / k, d.weight, d.face, d.yaw) for d in dets]
             cache[f] = fr
             per_seg[i].append(fr)
             done += 1
@@ -567,7 +605,7 @@ def analyze(
 
 
 # ====================================================================== 검출 결과 저장 (프로젝트 캐시 폴더)
-CACHE_VERSION = 2  # 2: SCRFD 얼굴 + 머리 상자 + 1280 분석 (예전 검출 결과는 다시 분석)
+CACHE_VERSION = 3  # 2: SCRFD 얼굴 + 머리 상자 + 1280 분석, 3: 얼굴 방향(yaw) (예전 검출 결과는 다시 분석)
 
 
 def load_cache(path: Path) -> dict[int, list[Det]]:
@@ -577,7 +615,10 @@ def load_cache(path: Path) -> dict[int, list[Det]]:
         d = json.loads(Path(path).read_text(encoding="utf-8"))
         if d.get("v") != CACHE_VERSION or d.get("w") != ANALYSIS_WIDTH:
             return {}
-        return {int(k): [Det(*r[:5], bool(r[5])) for r in v] for k, v in d.get("frames", {}).items()}
+        return {
+            int(k): [Det(*r[:5], bool(r[5]), float(r[6]) if len(r) > 6 else 0.0) for r in v]
+            for k, v in d.get("frames", {}).items()
+        }
     except (OSError, ValueError, TypeError, KeyError):
         return {}
 
@@ -589,7 +630,8 @@ def save_cache(path: Path, cache: dict[int, list[Det]]) -> None:
         "v": CACHE_VERSION,
         "w": ANALYSIS_WIDTH,
         "frames": {
-            str(k): [[round(d.x1, 1), round(d.y1, 1), round(d.x2, 1), round(d.y2, 1), round(d.weight, 5), int(d.face)]
+            str(k): [[round(d.x1, 1), round(d.y1, 1), round(d.x2, 1), round(d.y2, 1), round(d.weight, 5), int(d.face),
+                 round(d.yaw, 3)]
                      for d in v]
             for k, v in cache.items()
         },
