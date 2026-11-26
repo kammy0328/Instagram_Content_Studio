@@ -222,3 +222,17 @@ def test_spawn_never_uses_detached_process(monkeypatch):
     monkeypatch.setattr(subprocess, "Popen", P)
     assert updater._spawn_detached(["powershell.exe"]) == 77
     assert len(seen) == 2 and all(f & 0x08000000 and not f & 0x8 for f in seen)
+
+
+def test_update_dialog_shows_download_percent():
+    from PySide6.QtWidgets import QApplication
+
+    from ics.ui.update_ui import UpdateDialog
+
+    QApplication.instance() or QApplication([])
+    info = updater.UpdateInfo("abc1234", "1.2.0", "n", "u", "s.exe", 200_000_000, "0" * 64)
+    d = UpdateDialog(info, "")
+    d._on_progress(0.25)
+    assert "25%" in d.msg.text() and "50 / 200MB" in d.msg.text() and d.bar.value() == 250
+    d._on_progress(1.0)
+    assert "완료" in d.msg.text()

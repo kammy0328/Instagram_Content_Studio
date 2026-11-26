@@ -89,8 +89,19 @@ class UpdateDialog(ChromeDialog):
         row.addWidget(self.later)
         row.addWidget(self.go)
         v.addLayout(row)
-        self._prog.connect(lambda p: self.bar.setValue(int(p * 1000)))
+        self._prog.connect(self._on_progress)
         self._finished.connect(self._on_finished)
+
+    def _on_progress(self, p: float) -> None:
+        """진행률을 숫자로도 보여 준다 (막대만 있으면 큰 파일을 받는 동안 멈춘 것처럼 보인다)."""
+        self.bar.setValue(int(p * 1000))
+        total = self.info.size / 1e6 if self.info.size else 0
+        if p >= 1.0:
+            self.msg.setText("내려받기 완료 · 파일 확인 중…")
+        elif total:
+            self.msg.setText(f"내려받는 중… {p * 100:.0f}%  ({p * total:.0f} / {total:.0f}MB)")
+        else:
+            self.msg.setText(f"내려받는 중… {p * 100:.0f}%")
 
     def _on_later(self) -> None:
         self._cancel.set()
@@ -132,7 +143,7 @@ class UpdateDialog(ChromeDialog):
             self.msg.setText(f"설치 파일을 실행하지 못했습니다: {e}\n파일: {path}")
             self.go.setEnabled(True)
             return
-        self.msg.setText("설치를 시작합니다. 잠시 후 자동으로 다시 열립니다.")
+        self.msg.setText("설치를 시작합니다. 프로그램이 닫혔다가 1분 안에 자동으로 다시 열립니다.")
         QTimer.singleShot(300, shutdown_for_update)
 
 

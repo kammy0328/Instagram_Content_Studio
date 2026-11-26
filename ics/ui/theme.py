@@ -175,7 +175,7 @@ QSlider::handle:horizontal {{ background: {ACCENT}; width: 12px; height: 12px; m
 QSlider::handle:horizontal:hover {{ background: #ffffff; }}
 QSlider::handle:horizontal:disabled {{ background: {DIM}; }}
 QSlider::sub-page:horizontal:disabled {{ background: #333338; }}
-QProgressBar {{ background: #0d0d0f; border: 1px solid {BORDER}; border-radius: 4px; text-align: center; height: 8px;
+QProgressBar {{ background: #0d0d0f; border: 1px solid {BORDER}; border-radius: 4px; text-align: center; height: 10px;
     font-size: {FS_SMALL}px; color: transparent; }}
 QProgressBar::chunk {{ background: {ACCENT}; border-radius: 3px; }}
 QRadioButton, QCheckBox {{ spacing: 7px; }}
