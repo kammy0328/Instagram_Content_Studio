@@ -180,6 +180,9 @@ jobs:
           $done = $false
           for ($i = 0; $i -lt 90; $i++) {
             Start-Sleep -Seconds 2
+            # 다시 열린 앱이 결과를 알리고 나면 launcher.log 를 launcher.seen.log 로 바꾼다 (그것도 성공 신호)
+            $seen = Join-Path $upd "launcher.seen.log"
+            if ((Test-Path $seen) -and -not (Test-Path $log)) { $log = $seen }
             if ((Test-Path $log) -and (Select-String -Path $log -Pattern " done" -Quiet)) { $done = $true; break }
           }
           Write-Host "---- ics_update"; Get-ChildItem $upd | Select-Object Name, Length | Format-Table | Out-String | Write-Host
