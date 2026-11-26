@@ -1545,8 +1545,8 @@ def test_click_every_button_menu_and_shortcut_without_errors(qapp, win, monkeypa
     monkeypatch.setattr(sys, "excepthook", lambda t, v, tb: errors.append(f"{t.__name__}: {v}"))
 
     def fake_exec(self):
+        # 단추 처리 도중(중첩)에 이벤트를 돌리지 않는다: Windows 에서 재진입으로 접근 위반이 나던 테스트 자체의 문제
         self.show()
-        pump(qapp, 30)
         self.reject()
         return 0
 
