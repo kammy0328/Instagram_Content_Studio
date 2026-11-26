@@ -94,6 +94,27 @@ def test_adapter_reads_without_touching_files(out):
     assert sorted(p.name for p in out.rglob("*") if p.is_file()).count("p_STORY.mp4") == 1
 
 
+def test_adapter_skips_files_it_cannot_read(out, monkeypatch):
+    """사용 중이거나 권한이 없는 출력 파일(네트워크 드라이브 등) 때문에 게시 창이 오류로 멈추지 않는다.
+    못 읽은 항목만 빠지고 이유가 남는다. FEED 는 한 장이라도 못 읽으면 통째로 빠진다 (불완전한 캐러셀 방지)."""
+    from pathlib import Path
+
+    real_open = Path.open
+
+    def guarded(self, *a, **k):
+        if self.name.endswith("_STORY.mp4") or self.name.startswith("02_"):
+            raise PermissionError(13, "Permission denied", str(self))
+        return real_open(self, *a, **k)
+
+    monkeypatch.setattr(Path, "open", guarded)
+    b = adapter.read_output(out)
+    assert b.story is None and b.reels is not None and b.feed == []
+    assert any("STORY" in x and "사용 중" in x for x in b.problems)
+    assert any(x.startswith("FEED/02_") for x in b.problems)
+    av = b.available()
+    assert not av[Kind.STORY] and av[Kind.REELS] and not av[Kind.FEED]
+
+
 def test_story_never_gets_caption_or_comment(out):
     specs = adapter.build_specs(adapter.read_output(out), "p", first_comment=True)
     assert specs[Kind.STORY].caption == "" and specs[Kind.STORY].first_comment == ""
