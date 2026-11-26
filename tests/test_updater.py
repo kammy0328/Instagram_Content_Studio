@@ -87,7 +87,8 @@ def test_download_verifies_sha256_and_cleans_part(tmp_path):
 
 def test_installer_command_and_due(tmp_path):
     cmd = updater.installer_command(tmp_path / "s.exe", True)
-    assert "/VERYSILENT" in cmd and "/LAUNCH=1" in cmd and "/CLOSEAPPLICATIONS" in cmd
+    assert "/VERYSILENT" in cmd and "/CLOSEAPPLICATIONS" in cmd
+    assert "/LAUNCH=1" not in cmd  # 다시 실행은 실행기가 맡는다 (설치가 실패해도 열리게)
     assert updater.installer_command(tmp_path / "s.exe", False) == [
         str(tmp_path / "s.exe"),
         f"/LOG={updater.install_log_path()}",
@@ -105,15 +106,37 @@ def test_redirect_handler_drops_authorization():
     assert new is not None and "Authorization" not in {k.title() for k in new.headers}
 
 
-def test_installer_waits_for_the_app_process_to_exit(tmp_path):
-    """설치는 앱 프로세스가 끝난 뒤에 시작해야 실행 파일을 바꿀 수 있다 (업데이트 후 다시 안 열리던 문제)."""
+def test_launcher_waits_installs_then_always_relaunches(tmp_path, monkeypatch):
+    """업데이트 실행기: 앱 종료 대기 → 설치(그 프로세스만 대기) → 앱이 안 떠 있으면 다시 실행, 모든 단계 기록."""
+    monkeypatch.setattr(updater, "update_dir", lambda: tmp_path / "u")
     setup = tmp_path / "it's setup.exe"  # 작은따옴표와 공백이 있어도 안전하게 전달
-    cmd = updater.launcher_command(setup, True, 4321)
-    assert cmd[0] == "powershell.exe" and "-Command" in cmd
-    script = cmd[-1]
-    assert script.index("Wait-Process -Id 4321") < script.index("Start-Process")
-    assert "'" + str(setup).replace("'", "''") + "'" in script
-    assert "'/LAUNCH=1'" in script and "'/VERYSILENT'" in script and "/LOG=" in script
+    app = tmp_path / "App Dir" / "InstagramContentStudio.exe"
+    script = updater.launcher_script(setup, True, 4321, app, "abc1234")
+    order = ["Wait-Process -Id 4321", "Start-Process -FilePath " + updater._ps_quote(setup), "WaitForExit()",
+             "setup exit=", "Get-Process -Name 'InstagramContentStudio'", "Start-Process -FilePath " + updater._ps_quote(app)]  # fmt: skip
+    pos = [script.index(x) for x in order]
+    assert pos == sorted(pos)
+    assert "-Wait " not in script  # Start-Process -Wait 는 자식(다시 연 앱)까지 기다려 멈출 수 있다
+    assert "'/VERYSILENT'" in script and "/LOG=" in script and "/LAUNCH=1" not in script
+    assert updater._ps_quote(updater.launcher_log_path()) in script
+    cmd = updater.launcher_command(setup, True, 4321, app, "abc1234")
+    assert cmd[0] == "powershell.exe" and cmd[-2] == "-File"
+    f = tmp_path / "u" / "run_update.ps1"
+    assert cmd[-1] == str(f) and f.read_bytes().startswith(b"\xef\xbb\xbf")  # PowerShell 5.1 용 BOM
+
+
+def test_last_update_result_reports_once(tmp_path, monkeypatch):
+    monkeypatch.setattr(updater, "update_dir", lambda: tmp_path)
+    assert updater.last_update_result() is None
+    updater.launcher_log_path().write_text("10:00 start\n10:01 setup exit=0\n10:01 relaunch ok\n", encoding="utf-8")
+    assert updater.last_update_result()[0] == "ok"
+    assert updater.last_update_result() is None  # 한 번만 알린다
+    updater.launcher_log_path().write_text("10:00 start\n10:01 setup exit=5\n", encoding="utf-8")
+    updater.install_log_path().write_text("line1\n설치 실패 이유\n", encoding="utf-8")
+    state, detail = updater.last_update_result()
+    assert state == "failed" and "setup exit=5" in detail and "설치 실패 이유" in detail
+    updater.launcher_log_path().write_text("10:00 start\n", encoding="utf-8")
+    assert updater.last_update_result() is None  # 아직 진행 중
 
 
 def test_shutdown_for_update_closes_editor_windows_then_exits(monkeypatch):

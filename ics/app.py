@@ -21,7 +21,7 @@ from .ui.dialogs import MediaReportDialog, NewProjectDialog, ProjectListDialog
 from .ui.loading import LoadingDialog, run_in_thread
 from .ui.main_window import EditorWindow
 from .ui.settings import Settings
-from .ui.update_ui import AutoUpdate
+from .ui.update_ui import AutoUpdate, report_last_update
 from .ui.widgets import studio_icon
 
 
@@ -62,6 +62,7 @@ class App:
             QMessageBox.critical(None, "FFmpeg 없음", str(e))
             return 2
         QTimer.singleShot(0, self.show_projects)
+        QTimer.singleShot(1200, report_last_update)  # 지난 업데이트가 성공/실패했는지 한 번 알려 준다
         self._auto_update = AutoUpdate(self.settings)
         QTimer.singleShot(3000, self._auto_update.start)
         return self.qt.exec()
@@ -213,4 +214,14 @@ def main(argv: list[str] | None = None) -> int:
         from .selftest import run_selftest
 
         return run_selftest(args[1] if len(args) > 1 else None)
+    if (
+        args and args[0] == "--selftest-update" and len(args) > 1
+    ):  # CI: 실제 업데이트 경로(실행기 → 설치 → 다시 실행) 점검
+        import os
+        from pathlib import Path
+
+        from . import updater
+
+        updater.launch_installer(Path(args[1]))
+        os._exit(0)
     return App().run()

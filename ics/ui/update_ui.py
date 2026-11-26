@@ -151,6 +151,31 @@ def shutdown_for_update() -> None:
     os._exit(0)
 
 
+def report_last_update(parent=None) -> None:
+    """지난 업데이트 결과를 한 번 알려 준다 (실패하면 이유와 기록 위치까지). 기록이 없으면 아무것도 하지 않는다."""
+    try:
+        res = updater.last_update_result()
+    except Exception:  # noqa: BLE001
+        return
+    if res is None:
+        return
+    state, detail = res
+    box = QMessageBox(parent)
+    box.setWindowTitle("업데이트")
+    if state == "ok":
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setText(f"업데이트를 마쳤습니다. (현재 {updater.current_label()})")
+    else:
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setText(
+            "지난 업데이트 설치가 끝나지 않았습니다. 예전 버전으로 다시 열었습니다.\n"
+            "[자세히] 의 기록을 알려 주시면 원인을 찾을 수 있습니다.\n"
+            f"기록 위치: {updater.update_dir()}"
+        )
+        box.setDetailedText(detail)
+    box.exec()
+
+
 def check_and_prompt(settings, parent=None) -> None:
     """[업데이트…] 메뉴: 버전을 확인하고, 새 버전이 있으면 설치할지만 묻는다. 입력할 값은 없다."""
     box = QMessageBox(parent)
