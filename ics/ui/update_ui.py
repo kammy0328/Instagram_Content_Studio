@@ -65,7 +65,8 @@ class UpdateDialog(ChromeDialog):
         h.setObjectName("h1")
         v.addWidget(h)
         mb = f" · {info.size / 1e6:.0f}MB" if info.size else ""
-        v.addWidget(QLabel(f"현재 {updater.current_label()}  →  새 빌드 {info.build_id}{mb}"))
+        newv = f"v{info.version} ({info.build_id})" if info.version else f"빌드 {info.build_id}"
+        v.addWidget(QLabel(f"현재 {updater.current_label()}  →  새 버전 {newv}{mb}"))
         if info.notes:
             n = QLabel(info.notes)
             n.setWordWrap(True)

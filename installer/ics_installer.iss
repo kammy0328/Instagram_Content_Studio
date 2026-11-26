@@ -1,6 +1,9 @@
 ; Inno Setup 6 스크립트 - PyInstaller 결과물(dist\InstagramContentStudio)을 설치 파일로 묶는다.
 #define MyAppName "Instagram Content Studio"
-#define MyAppVersion "1.2.0"
+// CI 가 /DMyAppVersion=1.3.<빌드 번호> 로 넘긴다. 손으로 만들 때만 아래 기본값
+#ifndef MyAppVersion
+  #define MyAppVersion "1.3.0"
+#endif
 #define MyAppExe "InstagramContentStudio.exe"
 
 [Setup]
