@@ -249,3 +249,88 @@ def test_frames_where_the_face_stays_longest():
     moved = [[R.Det(760, 0, 840, 400, 0.5), R.Det(780, 20, 820, 60, 0.7, True)]] * 2
     x = R.best_window_x(stay + moved, 0, 1000, 300) * 700
     assert abs((x + 150) - 300) < 10
+
+
+# ---------------------------------------------------------------- 얼굴 정확도 개선 (SCRFD, 머리 상자, 코 위치, 2차 검출)
+def test_head_box_is_top_center_of_person():
+    from ics.core.reframe import head_box
+
+    x1, y1, x2, y2 = head_box(100, 50, 300, 450)  # 팔을 벌린 넓은 몸 상자
+    assert abs((x1 + x2) / 2 - 200) < 1e-6 and y1 == 50 and y2 == 50 + 0.22 * 400
+    assert (x2 - x1) < 200 * 0.5  # 몸 폭보다 훨씬 좁다
+
+
+def test_nms_faces_merges_duplicates_from_tiles():
+    from ics.core.reframe import _nms_faces
+
+    a = (10, 10, 30, 30, 0.9, 20.0)
+    b = (11, 10, 31, 30, 0.8, None)  # 겹치는 타일에서 같은 얼굴
+    c = (100, 10, 120, 30, 0.7, None)
+    assert _nms_faces([b, a, c]) == [a, c]
+
+
+class _FakeSCRFD:
+    def __init__(self, first, tiles):
+        self.first, self.tiles, self.calls = first, tiles, []
+
+    def detect(self, rgb, width=640):
+        self.calls.append((rgb.shape[1], width))
+        return self.first if len(self.calls) == 1 else self.tiles.pop(0) if self.tiles else []
+
+
+def _detector_with(fake):
+    from ics.core.reframe import PersonDetector
+
+    d = PersonDetector.__new__(PersonDetector)
+    d.scrfd = fake
+    import cv2
+
+    d.cv2 = cv2
+    return d
+
+
+def test_second_pass_runs_only_when_a_person_has_no_face():
+    import numpy as np
+
+    img = np.zeros((720, 1280, 3), np.uint8)
+    person = [(600.0, 100.0, 700.0, 600.0, 0.9)]
+    # 머리 자리에 얼굴이 있으면 2차 검출 없음
+    fake = _FakeSCRFD([(630.0, 100.0, 670.0, 150.0, 0.9, 650.0)], [])
+    d = _detector_with(fake)
+    assert len(d.faces(img, person)) == 1 and len(fake.calls) == 1
+    # 사람은 있는데 얼굴이 없으면 좌우 반쪽을 원본 해상도로 다시 (타일 좌표는 전체 좌표로 되돌린다)
+    fake = _FakeSCRFD([], [[], [(10.0, 20.0, 30.0, 40.0, 0.8, 20.0)]])
+    d = _detector_with(fake)
+    got = d.faces(img, person)
+    assert len(fake.calls) == 3 and fake.calls[1][0] == int(1280 * 0.55)
+    x0 = 1280 - int(1280 * 0.55)
+    assert got == [(10.0 + x0, 20.0, 30.0 + x0, 40.0, 0.8, 20.0 + x0)]
+
+
+def test_face_center_follows_the_nose_and_sharp_faces_weigh_more(monkeypatch):
+    import numpy as np
+
+    from ics.core import reframe
+
+    d = _detector_with(None)
+    monkeypatch.setattr(d, "persons", lambda rgb: [], raising=False)
+    faces = [(100.0, 100.0, 160.0, 160.0, 0.9, 115.0), (400.0, 100.0, 460.0, 160.0, 0.9, None)]
+    monkeypatch.setattr(d, "faces", lambda rgb, persons=None: faces, raising=False)
+    img = np.zeros((720, 1280, 3), np.uint8)
+    img[100:160, 100:160] = (np.indices((60, 60)).sum(0) % 2 * 255)[..., None]  # 첫 얼굴만 선명(체크무늬)
+    dets = d.detect(img)
+    a, b = dets
+    assert a.face and abs((a.x1 + a.x2) / 2 - 115.0) < 1e-6 and abs(a.x2 - a.x1 - 60) < 1e-6  # 가운데 = 코
+    assert a.weight > b.weight * 1.5  # 흐린(무늬 없는) 얼굴은 가중치가 낮다
+    assert reframe.ANALYSIS_WIDTH == 1280 and reframe.CACHE_VERSION == 2
+
+
+def test_bundled_scrfd_model_loads_and_finds_nothing_in_noise():
+    import numpy as np
+
+    from ics.core import reframe
+
+    d = reframe.PersonDetector()
+    assert d.face_model == "scrfd"
+    rng = np.random.default_rng(0)
+    assert d.faces(rng.integers(0, 40, (720, 1280, 3), dtype=np.uint8), []) == []
