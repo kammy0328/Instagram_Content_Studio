@@ -332,7 +332,11 @@ def _check_reframe(work: Path) -> str:
     from .render import engine
 
     det = reframe.PersonDetector()
-    if det.detect(np.zeros((360, 640, 3), np.uint8)):
+    if det.face_model != "scrfd":
+        raise RuntimeError(
+            "SCRFD 얼굴 모델을 읽지 못했습니다 (assets/models 누락 또는 OpenCV 호환 문제). YuNet 으로 동작합니다."
+        )
+    if det.detect(np.zeros((720, 1280, 3), np.uint8)):
         raise RuntimeError("빈 화면에서 인물이 검출되었습니다.")
     src = work / "reframe.mp4"
     p = ffbin.run([

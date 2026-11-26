@@ -629,6 +629,26 @@ class EditorWindow(QMainWindow):
         px = self.project.pos_x_at(self.tab, n)
         if abs(self.preview.layout.pos_x - px) > 1e-9:
             self.preview.layout = replace(self.preview.layout, pos_x=px)
+        self._sync_dets(n)
+
+    def _sync_dets(self, n: int) -> None:
+        """원본 보기에서 이 컷의 얼굴/사람 검출 결과를 겹쳐 보여 준다 (자동 맞춤이 왜 그 위치를 골랐는지 확인용)."""
+        pv = self.preview
+        show = (
+            not self.cover_mode
+            and self.tab in ("story", "reels")
+            and not self.transport.view_btn.isChecked()
+            and (self.project.state.story if self.tab == "story" else self.project.state.reels).layout.mode == "fill"
+        )
+        dets, k = [], None
+        if show:
+            c = next((c for c in self.project.state.cuts if c.start <= n < c.end), None)
+            a, b = (c.start, c.end) if c else (0, self.project.count)  # 컷 정보가 없으면 영상 전체가 한 조각
+            k, dets = self.reframer.dets_near(n, a, b)
+        new = (k, [(d.x1, d.y1, d.x2, d.y2, d.face) for d in dets])
+        if getattr(pv, "debug_dets", None) != new:
+            pv.debug_dets = new
+            pv.update()
 
     def _cut_reframe_info(self, start: int, end: int):
         """컷 스트립 표시용: STORY/REELS Fill 구간과 겹치는 컷의 9:16 창 위치와 맞춤 출처."""
@@ -1482,6 +1502,7 @@ class EditorWindow(QMainWindow):
         if not (view_out or self.cover_mode):
             self.preview.label = "원본 보기"
         self.preview.set_output(view_out or self.cover_mode, kind, lp)
+        self._sync_dets(self.playhead)
 
     # ================================================================ 렌더링 / 업로드 준비
     def open_render(self, sections: set[str] | None = None) -> None:

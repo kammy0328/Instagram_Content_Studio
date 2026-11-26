@@ -27,6 +27,7 @@ class PreviewWidget(QWidget):
         self.kind = "916"  # 출력 캔버스 종류
         self.layout = LayoutParams()
         self.disp = (1920, 1080)  # 소스 표시 크기(SAR 반영)
+        self.debug_dets: tuple = (None, [])  # 원본 보기용 검출 결과: (표본 프레임, [(x1, y1, x2, y2, 얼굴?)]) 표시 좌표
         self.safe_zone = False
         self.cover_grid: tuple[str, float] | None = None  # (비율 '3:4', 세로 위치)
         self.label = ""
@@ -127,6 +128,42 @@ class PreviewWidget(QWidget):
         p.fillRect(QRectF(win.right(), win.y(), r.right() - win.right(), win.height()), dim)
         p.setPen(QPen(QColor(255, 255, 255, 220), 1.5))
         p.drawRect(win)
+        self._paint_dets(p, r, k)
+
+    def _paint_dets(self, p: QPainter, r: QRectF, k: float) -> None:
+        """자동 맞춤이 본 것: 얼굴은 초록 실선(가운데 점 = 맞춘 기준), 얼굴을 못 찾은 사람은 머리 자리 점선."""
+        frame, dets = self.debug_dets if self.debug_dets else (None, [])
+        if not dets:
+            return
+        p.save()
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        face_c, head_c = QColor("#4cd08b"), QColor(255, 255, 255, 150)
+        for x1, y1, x2, y2, face in dets:
+            box = QRectF(r.x() + x1 * k, r.y() + y1 * k, (x2 - x1) * k, (y2 - y1) * k)
+            if face:
+                p.setPen(QPen(face_c, 1.6))
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.drawRect(box)
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(face_c)
+                p.drawEllipse(QPointF(box.center().x(), box.center().y()), 2.2, 2.2)
+            else:
+                pen = QPen(head_c, 1.2, Qt.PenStyle.DashLine)
+                p.setPen(pen)
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.drawRect(box)
+        f = p.font()
+        f.setPixelSize(theme.FS_SMALL)
+        p.setFont(f)
+        text = f"초록: 얼굴 (점 = 맞춘 기준) · 점선: 얼굴을 못 찾은 사람의 머리 자리 · 분석 표본 f{frame}"
+        fm = p.fontMetrics()
+        tr = QRectF(r.x() + 8, r.bottom() - fm.height() - 12, fm.horizontalAdvance(text) + 16, fm.height() + 6)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(0, 0, 0, 170))
+        p.drawRoundedRect(tr, 6, 6)
+        p.setPen(QColor(theme.TEXT))
+        p.drawText(tr, Qt.AlignmentFlag.AlignCenter, text)
+        p.restore()
 
     def _paint_blur_bg(self, p: QPainter, cr: QRectF) -> None:
         """영상을 캔버스에 가득 차게 잘라 아주 작게 줄였다 키워(=흐림) 그리고, 최종 렌더링처럼 어둡게 한다."""

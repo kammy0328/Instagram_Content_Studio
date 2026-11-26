@@ -5,8 +5,16 @@
   가로 위치를 고른다. 인물이 나왔다 사라지는 컷도 평균으로 처리되며, 인물이 없는 컷은 위치를 바꾸지 않는다.
 - 수동: 미리보기를 좌우로 끌어 지금 컷의 위치만 바꾼다.
 
-이 모듈은 Qt 에 의존하지 않는다. 인물 검출에는 OpenCV DNN 과 함께 배포하는 ONNX 모델 두 개를 쓴다
-(NanoDet-Plus 인물 검출 Apache-2.0, YuNet 얼굴 검출 MIT; LICENSES/THIRD_PARTY_NOTICES.md).
+이 모듈은 Qt 에 의존하지 않는다. 검출에는 OpenCV DNN 과 함께 배포하는 ONNX 모델을 쓴다
+(얼굴: SCRFD-10G InsightFace 비상업 연구용 라이선스, 없으면 YuNet MIT / 인물: NanoDet-Plus Apache-2.0;
+LICENSES/THIRD_PARTY_NOTICES.md).
+
+얼굴 검출 정확도를 위한 처리
+- SCRFD 로 640 폭에서 1차 검출 (10px 안팎의 작은 얼굴도 잡음)
+- 사람은 있는데 얼굴을 못 찾았거나 얼굴이 아주 작으면, 1280 폭 원본을 좌우 반씩 나눠 2차 검출 (와이드 샷)
+- 얼굴 가운데는 상자 가운데가 아니라 코 위치 (옆얼굴에서 상자가 뒤통수 쪽으로 넓어지는 것 보정)
+- 크고 선명한 얼굴(앞에 있는 주인공)일수록 가중치를 높게, 흐린 배경 인물은 낮게
+- 얼굴을 못 찾은 사람(뒷모습 등)은 몸 상자 대신 머리 위치(몸 상자 위쪽 가운데)로
 """
 
 from __future__ import annotations
@@ -215,16 +223,106 @@ def models_dir() -> Path:
 
 NANODET_FILE = "object_detection_nanodet_2022nov.onnx"
 YUNET_FILE = "face_detection_yunet_2023mar.onnx"
+SCRFD_FILE = "face_detection_scrfd_10g.onnx"
+
+# 얼굴 한 개: (x1, y1, x2, y2, 신뢰도, 코 x 또는 None)
+Face = tuple
+
+
+class FaceSCRFD:
+    """SCRFD-10G (InsightFace) 얼굴 검출. 입력 RGB uint8. 폭을 맞춰 줄이고 32 배수로 채워 넣는다 (정사각형 아님: 빠름)."""
+
+    STRIDES = (8, 16, 32)
+    TH = 0.5
+
+    def __init__(self, path: Path):
+        import cv2
+
+        self.cv2 = cv2
+        self.net = cv2.dnn.readNetFromONNX(str(path))
+        self.names = self.net.getUnconnectedOutLayersNames()
+
+    def detect(self, rgb: np.ndarray, width: int = 640) -> list[Face]:
+        cv2 = self.cv2
+        h, w = rgb.shape[:2]
+        s = min(1.0, width / w) if w > width else width / w
+        nw, nh = max(32, int(round(w * s))), max(32, int(round(h * s)))
+        W, H = (nw + 31) // 32 * 32, (nh + 31) // 32 * 32
+        canvas = np.zeros((H, W, 3), np.uint8)
+        canvas[:nh, :nw] = cv2.resize(rgb, (nw, nh), interpolation=cv2.INTER_AREA if s < 1 else cv2.INTER_LINEAR)
+        blob = cv2.dnn.blobFromImage(canvas, 1 / 128.0, (W, H), (127.5, 127.5, 127.5), swapRB=False)
+        self.net.setInput(blob)
+        outs = [o.reshape(-1, o.shape[-1]) for o in self.net.forward(self.names)]
+        # 출력 순서는 버전마다 다를 수 있어 모양(열 수)과 크기로 나눈다
+        sc = sorted([o for o in outs if o.shape[1] == 1], key=lambda o: -o.shape[0])
+        bb = sorted([o for o in outs if o.shape[1] == 4], key=lambda o: -o.shape[0])
+        kp = sorted([o for o in outs if o.shape[1] == 10], key=lambda o: -o.shape[0])
+        boxes, scores, noses = [], [], []
+        for st, s_, b_, k_ in zip(self.STRIDES, sc, bb, kp):
+            gh, gw = H // st, W // st
+            gy, gx = np.mgrid[:gh, :gw]
+            c = np.repeat(np.stack([gx, gy], -1).reshape(-1, 2).astype(np.float32) * st, 2, axis=0)
+            if c.shape[0] != s_.shape[0]:
+                continue
+            m = s_[:, 0] >= self.TH
+            if not m.any():
+                continue
+            d, cc = b_[m] * st, c[m]
+            boxes.append(
+                np.column_stack([cc[:, 0] - d[:, 0], cc[:, 1] - d[:, 1], cc[:, 0] + d[:, 2], cc[:, 1] + d[:, 3]])
+            )
+            scores.append(s_[m, 0])
+            noses.append(cc[:, 0] + k_[m, 4] * st)  # 다섯 점 중 셋째(코)의 x
+        if not boxes:
+            return []
+        B, S, N = np.concatenate(boxes) / s, np.concatenate(scores), np.concatenate(noses) / s
+        keep = cv2.dnn.NMSBoxes(np.column_stack([B[:, :2], B[:, 2:] - B[:, :2]]).tolist(), S.tolist(), self.TH, 0.4)
+        out = []
+        for i in np.array(keep).ravel():
+            x1, y1, x2, y2 = (float(v) for v in B[int(i)])
+            nx = float(N[int(i)])
+            out.append((max(0.0, x1), max(0.0, y1), min(float(w), x2), min(float(h), y2), float(S[int(i)]),
+                        nx if x1 <= nx <= x2 else None))  # fmt: skip
+        return out
+
+
+def _nms_faces(faces: list[Face], iou: float = 0.4) -> list[Face]:
+    faces = sorted(faces, key=lambda f: -f[4])
+    out: list[Face] = []
+    for f in faces:
+        ok = True
+        for g in out:
+            ix = max(0.0, min(f[2], g[2]) - max(f[0], g[0]))
+            iy = max(0.0, min(f[3], g[3]) - max(f[1], g[1]))
+            inter = ix * iy
+            u = (f[2] - f[0]) * (f[3] - f[1]) + (g[2] - g[0]) * (g[3] - g[1]) - inter
+            if u > 0 and inter / u > iou:
+                ok = False
+                break
+        if ok:
+            out.append(f)
+    return out
+
+
+def head_box(x1: float, y1: float, x2: float, y2: float) -> tuple[float, float, float, float]:
+    """사람 상자에서 머리가 있을 만한 곳 (위쪽 가운데). 팔을 벌리거나 기울어도 몸 상자 가운데보다 얼굴에 가깝다."""
+    bw, bh = x2 - x1, y2 - y1
+    hw = max(0.3 * bw, 0.12 * bh)
+    cx = (x1 + x2) / 2
+    return cx - hw / 2, y1, cx + hw / 2, y1 + 0.22 * bh
 
 
 class PersonDetector:
-    """NanoDet-Plus(COCO 'person') + YuNet(얼굴). 입력은 RGB uint8 HxWx3. 스레드마다 하나씩 만든다 (cv2.dnn 객체는 공유 불가)."""
+    """NanoDet-Plus(COCO 'person') + 얼굴(SCRFD, 없으면 YuNet). 입력은 RGB uint8 HxWx3.
+    스레드마다 하나씩 만든다 (cv2.dnn 객체는 공유 불가)."""
 
     SIZE = 416
     STRIDES = (8, 16, 32)
     REG_MAX = 7
     PERSON_TH = 0.35
     FACE_TH = 0.6
+    FACE_W1 = 640  # 1차 얼굴 검출 폭
+    SMALL_FACE = 18  # 1차에서 이보다 작은(px, 640 폭 기준) 얼굴만 있으면 2차 검출
 
     def __init__(self, model_dir: Path | None = None):
         import cv2
@@ -236,6 +334,12 @@ class PersonDetector:
         self.cv2 = cv2
         d = Path(model_dir or models_dir())
         self.net = cv2.dnn.readNet(str(d / NANODET_FILE))
+        self.scrfd: FaceSCRFD | None = None
+        if (d / SCRFD_FILE).is_file():
+            try:
+                self.scrfd = FaceSCRFD(d / SCRFD_FILE)
+            except Exception:  # noqa: BLE001  (이 OpenCV 에서 못 읽으면 YuNet 으로)
+                self.scrfd = None
         self.face = cv2.FaceDetectorYN.create(str(d / YUNET_FILE), "", (320, 320), self.FACE_TH, 0.3, 50)
         self.mean = np.array([103.53, 116.28, 123.675], np.float32)
         self.std = np.array([57.375, 57.12, 58.395], np.float32)
@@ -244,6 +348,10 @@ class PersonDetector:
             n = self.SIZE // st
             gx, gy = np.meshgrid(np.arange(n) * st, np.arange(n) * st)
             self.anchors.append(np.column_stack([gx.ravel() + 0.5 * (st - 1), gy.ravel() + 0.5 * (st - 1)]))
+
+    @property
+    def face_model(self) -> str:
+        return "scrfd" if self.scrfd is not None else "yunet"
 
     def persons(self, rgb: np.ndarray) -> list[tuple[float, float, float, float, float]]:
         cv2 = self.cv2
@@ -296,31 +404,78 @@ class PersonDetector:
             )
         return out
 
-    def faces(self, rgb: np.ndarray) -> list[tuple[float, float, float, float, float]]:
+    def _yunet(self, rgb: np.ndarray) -> list[Face]:
         h, w = rgb.shape[:2]
         self.face.setInputSize((w, h))
         _, f = self.face.detect(np.ascontiguousarray(rgb[:, :, ::-1]))
         if f is None:
             return []
-        return [(float(r[0]), float(r[1]), float(r[0] + r[2]), float(r[1] + r[3]), float(r[14])) for r in f]
+        return [
+            (float(r[0]), float(r[1]), float(r[0] + r[2]), float(r[1] + r[3]), float(r[14]), float(r[8])) for r in f
+        ]
+
+    def faces(self, rgb: np.ndarray, persons: Sequence | None = None) -> list[Face]:
+        """1차: 640 폭. 사람은 있는데 그 머리 자리에 얼굴이 없거나 얼굴이 아주 작으면 2차: 좌우 반쪽을 원본 해상도로."""
+        h, w = rgb.shape[:2]
+        if self.scrfd is None:
+            return self._yunet(rgb)
+        first = self.scrfd.detect(rgb, self.FACE_W1)
+        k = self.FACE_W1 / w
+        need = False
+        if persons:
+            for px1, py1, px2, py2, _c in persons:
+                hx1, hy1, hx2, hy2 = head_box(px1, py1, px2, py2)
+                if not any(hx1 - 0.5 * (hx2 - hx1) <= (f[0] + f[2]) / 2 <= hx2 + 0.5 * (hx2 - hx1) for f in first):
+                    need = True
+                    break
+        if first and min((f[2] - f[0]) * k for f in first) < self.SMALL_FACE:
+            need = True
+        if not need or w <= self.FACE_W1 * 1.2:
+            return first
+        more: list[Face] = []
+        half = int(w * 0.55)
+        for x0 in (0, w - half):
+            tile = rgb[:, x0 : x0 + half]
+            for f in self.scrfd.detect(tile, tile.shape[1]):
+                more.append((f[0] + x0, f[1], f[2] + x0, f[3], f[4], None if f[5] is None else f[5] + x0))
+        return _nms_faces(first + more)
+
+    def _sharpness(self, rgb: np.ndarray, f: Face) -> float:
+        x1, y1, x2, y2 = (int(round(v)) for v in f[:4])
+        crop = rgb[max(0, y1) : max(0, y2), max(0, x1) : max(0, x2)]
+        if crop.size < 16:
+            return 0.0
+        g = self.cv2.cvtColor(np.ascontiguousarray(crop), self.cv2.COLOR_RGB2GRAY)
+        if g.shape[0] > 64:  # 크기와 무관하게 비교되도록 맞춘다
+            g = self.cv2.resize(g, (64, max(8, int(64 * g.shape[0] / max(1, g.shape[1])))))
+        return float(self.cv2.Laplacian(g, self.cv2.CV_32F).var())
 
     def detect(self, rgb: np.ndarray) -> list[Det]:
-        """프레임 크기로 정규화한 가중치: 신뢰도 × sqrt(면적 비율). 큰(가까운) 인물이 주인공이 된다."""
+        """프레임 크기로 정규화한 가중치: 신뢰도 × sqrt(면적 비율). 큰(가까운) 인물이 주인공이 된다.
+        얼굴은 선명할수록(초점이 맞은 주인공) 가중치가 크고, 가운데는 코 위치. 사람은 머리 자리 상자로."""
         h, w = rgb.shape[:2]
         area = float(w * h)
-        out = [
-            Det(x1, y1, x2, y2, c * math.sqrt(max(0.0, (x2 - x1) * (y2 - y1)) / area))
-            for x1, y1, x2, y2, c in self.persons(rgb)
-        ]
-        out += [
-            Det(x1, y1, x2, y2, FACE_WEIGHT * c * math.sqrt(max(0.0, (x2 - x1) * (y2 - y1)) / area) * 3.0, True)
-            for x1, y1, x2, y2, c in self.faces(rgb)
-        ]
+        persons = self.persons(rgb)
+        out = []
+        for x1, y1, x2, y2, c in persons:
+            hx1, hy1, hx2, hy2 = head_box(x1, y1, x2, y2)
+            out.append(Det(hx1, hy1, hx2, hy2, c * math.sqrt(max(0.0, (x2 - x1) * (y2 - y1)) / area)))
+        faces = self.faces(rgb, persons)
+        sharp = [self._sharpness(rgb, f) for f in faces]
+        top = max(sharp) if sharp else 0.0
+        for f, sh in zip(faces, sharp):
+            x1, y1, x2, y2, c, nose = f
+            if nose is not None:  # 상자 가운데 대신 코 위치를 가운데로 (옆얼굴 보정, 너비는 그대로)
+                half = (x2 - x1) / 2
+                x1, x2 = nose - half, nose + half
+            sf = 0.45 + 0.55 * min(1.0, sh / top) if top > 1e-6 else 1.0
+            wgt = FACE_WEIGHT * c * math.sqrt(max(0.0, (x2 - x1) * (y2 - y1)) / area) * 3.0 * sf
+            out.append(Det(x1, y1, x2, y2, wgt, True))
         return out
 
 
 # ====================================================================== 분석 (원본 디코딩 + 검출)
-ANALYSIS_WIDTH = 640  # 검출용 축소 폭 (얼굴이 작아도 잡히고, 디코딩이 빠른 크기)
+ANALYSIS_WIDTH = 1280  # 검출용 축소 폭. 1차 검출은 640 으로 줄여서, 작은 얼굴 2차 검출은 이 해상도로
 SAMPLES_PER_SEC = 3.0
 MIN_SAMPLES, MAX_SAMPLES = 3, 8  # 컷 하나당 표본 수 (인물 이동을 평균하려면 고르게 여러 장)
 MAX_TOTAL_SAMPLES = 320
@@ -412,7 +567,7 @@ def analyze(
 
 
 # ====================================================================== 검출 결과 저장 (프로젝트 캐시 폴더)
-CACHE_VERSION = 1
+CACHE_VERSION = 2  # 2: SCRFD 얼굴 + 머리 상자 + 1280 분석 (예전 검출 결과는 다시 분석)
 
 
 def load_cache(path: Path) -> dict[int, list[Det]]:

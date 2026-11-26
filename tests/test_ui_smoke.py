@@ -1665,3 +1665,27 @@ def test_project_list_search_open_and_row_actions(qapp, tmp_path, monkeypatch):
     d._open()
     assert d.chosen is not None and d.chosen.name == "LNGSHOT_BANANAS"
     assert relative_time(1000, now=1030) == "방금" and relative_time(0, now=7200) == "2시간 전"
+
+
+def test_source_view_overlays_detections_of_the_current_cut(qapp, win):
+    """원본 보기(STORY/REELS Fill)에서 지금 컷의 가장 가까운 분석 표본 검출 결과를 겹쳐 보여 준다."""
+    from dataclasses import replace
+
+    from ics.core.reframe import Det
+
+    p = win.project
+    p.state.story.layout = replace(p.state.story.layout, mode="fill")
+    win.set_tab("story")
+    c = next((c for c in p.state.cuts if c.end - c.start >= 6), None)
+    a, b = (c.start, c.end) if c else (8, 9)
+    far, near = a, b - 1
+    win.reframer._cache = {far: [Det(10, 10, 50, 50, 1.0, True)], near: [Det(60, 10, 90, 40, 0.5, False)]}
+    win.goto(b - 2)
+    pump(qapp, 100)
+    win.transport.view_btn.setChecked(False)
+    pump(qapp, 300)
+    k, boxes = win.preview.debug_dets
+    assert k == near and boxes == [(60, 10, 90, 40, False)]  # 가장 가까운 표본
+    win.transport.view_btn.setChecked(True)
+    pump(qapp, 300)
+    assert win.preview.debug_dets[1] == []  # 출력 보기에서는 숨김

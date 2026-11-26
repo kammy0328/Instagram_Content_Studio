@@ -14,6 +14,7 @@ Instagram Content Studio 는 아래 소프트웨어를 사용합니다. 배포 �
 | OpenCV (opencv-python-headless) | 인물/얼굴 검출 실행 (DNN) | Apache 2.0 |
 | NanoDet-Plus 모델 (OpenCV Zoo `object_detection_nanodet_2022nov.onnx`) | STORY/REELS 인물 기준 자동 맞춤: 인물 검출 | Apache 2.0 |
 | YuNet 모델 (OpenCV Zoo `face_detection_yunet_2023mar.onnx`) | STORY/REELS 인물 기준 자동 맞춤: 얼굴 검출 | MIT (Copyright (c) 2020 Shiqi Yu) |
+| SCRFD-10G 얼굴 검출 모델 (InsightFace `buffalo_l/det_10g.onnx`, `assets/models/face_detection_scrfd_10g.onnx`) | STORY/REELS 자동 맞춤: 얼굴 검출 (작은 얼굴, 코 위치) | InsightFace 사전 학습 모델: **비상업 연구 목적 한정** (https://github.com/deepinsight/insightface#license). 이 프로그램은 비상업 용도로만 배포·사용한다. 모델이 없거나 읽지 못하면 YuNet(MIT)으로 동작 |
 | Lucide 아이콘 (lucide-static 0.460.0, `assets/icons`) | 화면의 선 아이콘 | ISC (전문: `assets/icons/LUCIDE_LICENSE.txt`) |
 | Pretendard (Regular/Medium/SemiBold/Bold, `assets/fonts`) | 화면 글꼴, STORY 글자 | SIL OFL 1.1 (`assets/fonts/Pretendard_LICENSE_OFL.txt`) |
 

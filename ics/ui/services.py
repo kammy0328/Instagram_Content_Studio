@@ -122,6 +122,23 @@ class ReframeService(QObject):
                 pass
         return decode_frame_rgb(self.info, self.index, n, w, h)[0]
 
+    def dets_near(self, frame: int, start: int, end: int):
+        """[start, end) 안에서 frame 에 가장 가까운 분석 표본의 검출 결과 (표시 좌표). 없으면 (None, [])."""
+        from ..core import reframe
+
+        with self._lock:
+            if self._cache is None:
+                self._cache = reframe.load_cache(self.cache_path) if self.cache_path else {}
+            cache = self._cache
+        try:
+            keys = [k for k in list(cache) if start <= k < end]  # 분석 중에 늘어날 수 있다
+        except RuntimeError:
+            return None, []
+        if not keys:
+            return None, []
+        k = min(keys, key=lambda x: abs(x - frame))
+        return k, list(cache.get(k, []))
+
     def _run(self, which, layout, segs, keys) -> None:
         from ..core import reframe
 
