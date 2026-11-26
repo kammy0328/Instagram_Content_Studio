@@ -235,7 +235,7 @@ class EditorWindow(QMainWindow):
         titles.addLayout(status)
         left = QWidget()
         left.setLayout(titles)
-        left.setMinimumWidth(160)
+        left.setMinimumWidth(120)
         h.addWidget(left, 1, Qt.AlignmentFlag.AlignVCenter)
         # ---- 작업 탭 (가운데): 고른 탭 표시가 미끄러져 옮겨 간다
         self.nav_tabs = NavTabs(
@@ -289,8 +289,9 @@ class EditorWindow(QMainWindow):
         br.clicked.connect(lambda _=False: self.open_render())
         right.addWidget(br)
         rw = QWidget()
-        rw.setLayout(right)
-        rw.setMinimumWidth(180)
+        rw.setLayout(
+            right
+        )  # 최소 너비는 단추들이 정한다 (고정 최소값을 주면 좁은 창에서 '게시/내보내기' 글자가 잘렸다)
         h.addWidget(rw, 1, Qt.AlignmentFlag.AlignVCenter)
         h.addSpacing(6)
         # Windows 제목 표시줄 대신: 최소화 / 최대화·복원 / 닫기 (상단바 빈 곳을 끌면 창 이동, 더블클릭 최대화)
@@ -1615,7 +1616,7 @@ class EditorWindow(QMainWindow):
         n = len(self.project.feed_included())
         self.nav_btns["story"].set_state(st.story.enabled)
         self.nav_btns["reels"].set_state(st.reels.enabled)
-        self.nav_btns["feed"].set_state(n > 0, str(n))
+        self.nav_btns["feed"].set_state(n > 0, str(n) if n else "")  # 0개면 숫자 대신 아무것도 표시하지 않음
         self.nav_btns["story"].setToolTip(
             "9:16 · 최대 60초 · " + ("구간 지정됨" if st.story.enabled else "구간 미지정")
         )
