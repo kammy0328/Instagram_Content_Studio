@@ -59,7 +59,7 @@ from .services import (
 )
 from .settings import DEFAULT_SHORTCUTS, Settings
 from .timeline import TimelineWidget
-from .widgets import ElidedLabel, NavTabs, icon_button, menu_button, studio_icon
+from .widgets import ElidedLabel, NavTabs, icon_button, later, menu_button, studio_icon
 
 
 class StillLoader(QObject):
@@ -265,12 +265,14 @@ class EditorWindow(QMainWindow):
         more = menu_button("ellipsis", "도구", 32)
         menu = QMenu(more)
         menu.addAction(
-            icons.icon("info", theme.MUTED, 14), "영상 정보", lambda: MediaReportDialog(self.project.media, self).exec()
+            icons.icon("info", theme.MUTED, 14),
+            "영상 정보",
+            later(lambda: MediaReportDialog(self.project.media, self).exec()),
         )
-        menu.addAction(icons.icon("keyboard", theme.MUTED, 14), "단축키 설정", self.open_shortcuts)
+        menu.addAction(icons.icon("keyboard", theme.MUTED, 14), "단축키 설정", later(self.open_shortcuts))
         menu.addSeparator()
-        menu.addAction(icons.icon("check", theme.MUTED, 14), "업로드 준비", self.open_ready)
-        menu.addAction(icons.icon("download", theme.MUTED, 14), "업데이트…", self.open_update)
+        menu.addAction(icons.icon("check", theme.MUTED, 14), "업로드 준비", later(self.open_ready))
+        menu.addAction(icons.icon("download", theme.MUTED, 14), "업데이트…", later(self.open_update))
         more.setMenu(menu)
         right.addWidget(more)
         right.addSpacing(6)
@@ -451,10 +453,10 @@ class EditorWindow(QMainWindow):
         )
         more = menu_button("ellipsis", "추가 작업 (병합 해제, 원래 컷 복원, XML 세부 설정…)")
         menu = QMenu(more)
-        menu.addAction("병합 해제", self.unmerge_selected)
-        menu.addAction(icons.icon("rotate-ccw", theme.MUTED, 14), "원래 컷 복원", self.restore_cuts)
+        menu.addAction("병합 해제", later(self.unmerge_selected))
+        menu.addAction(icons.icon("rotate-ccw", theme.MUTED, 14), "원래 컷 복원", later(self.restore_cuts))
         menu.addSeparator()
-        menu.addAction("XML 세부 설정으로 불러오기…", self.import_xml_advanced)
+        menu.addAction("XML 세부 설정으로 불러오기…", later(self.import_xml_advanced))
         act = menu.addAction("XML 불러온 뒤 인물 기준 자동 맞춤")
         act.setCheckable(True)
         act.setChecked(bool(self.settings.get("reframe_after_xml", False)))

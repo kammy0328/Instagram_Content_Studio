@@ -28,7 +28,7 @@ from ..core.model import StoryOverlay
 from ..overlay_presets import LogoPresets
 from ..render import overlay as ov_mod
 from .panels import ResetSlider
-from .widgets import Section, menu_button
+from .widgets import Section, later, menu_button
 
 
 def _shrinkable(c: QComboBox) -> None:
@@ -149,11 +149,11 @@ class OverlayEditor(QGroupBox):
         pr.addWidget(self.preset_combo, 1)
         more = menu_button("ellipsis", "로고 파일 / 프리셋 관리")
         m = QMenu(more)
-        m.addAction("로고 파일 선택…", self._pick_logo)
-        m.addAction("프리셋 다시 적용", self._apply_preset)
+        m.addAction("로고 파일 선택…", later(self._pick_logo))
+        m.addAction("프리셋 다시 적용", later(self._apply_preset))
         m.addSeparator()
-        m.addAction("지금 로고를 프리셋으로 저장…", self._save_preset)
-        m.addAction("선택한 프리셋 삭제", self._delete_preset)
+        m.addAction("지금 로고를 프리셋으로 저장…", later(self._save_preset))
+        m.addAction("선택한 프리셋 삭제", later(self._delete_preset))
         more.setMenu(m)
         pr.addWidget(more)
         v.addLayout(pr)
