@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QUrl, Signal
@@ -36,7 +35,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .. import paths
 from ..core import media as media_mod
 from ..core import xml_import as xmlmod
 from ..core.timecode import frame_to_tc, tc_to_frame
@@ -207,140 +205,8 @@ class NewProjectDialog(ChromeDialog):
 
 
 # ============================================================================ 프로젝트 목록
-class ProjectListDialog(ChromeDialog):
-    chrome_minimize = True  # 시작 창이므로 최소화 단추도
-
-    def __init__(self, library, parent=None):
-        super().__init__(parent)
-        self.library = library
-        self.setWindowTitle("Instagram Content Studio - 프로젝트")
-        self.setWindowIcon(studio_icon())
-        self.resize(1000, 660)
-        self.chosen = None
-        v = QVBoxLayout(self)
-        v.setContentsMargins(30, 28, 30, 24)
-        v.setSpacing(16)
-        brand = QHBoxLayout()
-        mark = QLabel()
-        mark.setPixmap(studio_icon().pixmap(36, 36))
-        brand.addWidget(mark)
-        name = QLabel("INSTAGRAM CONTENT STUDIO")
-        name.setObjectName("eyebrow")
-        brand.addWidget(name)
-        brand.addStretch(1)
-        v.addLayout(brand)
-        heading = QLabel("마스터링의 다음 장면을 만들어 보세요.")
-        heading.setObjectName("hero")
-        v.addWidget(heading)
-        description = QLabel("하나의 원본에서 STORY, REELS, FEED까지. 프레임 단위로 선택하고 완성하세요.")
-        description.setObjectName("muted")
-        v.addWidget(description)
-        specs = QHBoxLayout()
-        for title, detail in (
-            ("STORY", "9:16 · 최대 60초"),
-            ("REELS", "세로 영상과 커버 이미지"),
-            ("FEED", "이미지와 영상을 캐러셀로"),
-        ):
-            card = QGroupBox(title)
-            layout = QVBoxLayout(card)
-            label = QLabel(detail)
-            label.setObjectName("muted")
-            layout.addWidget(label)
-            specs.addWidget(card)
-        v.addLayout(specs)
-        recent = QLabel("최근 프로젝트")
-        recent.setObjectName("eyebrow")
-        v.addWidget(recent)
-        self.table = QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels(["프로젝트명", "아티스트", "영상 제목", "마지막 수정", "마스터링 파일"])
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.setAlternatingRowColors(True)
-        self.table.verticalHeader().hide()
-        self.table.verticalHeader().setDefaultSectionSize(44)
-        self.table.doubleClicked.connect(self._open)
-        v.addWidget(self.table, 1)
-        self.empty = QLabel("아직 프로젝트가 없습니다.\n아래 ‘새 프로젝트’를 눌러 마스터링 영상을 불러오세요.")
-        self.empty.setObjectName("muted")
-        self.empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.empty.setMinimumHeight(90)
-        v.addWidget(self.empty, 1)
-        r = QHBoxLayout()
-        for text, fn, name in (
-            ("새 프로젝트", self._new, "primary"),
-            ("열기", self._open, ""),
-            ("출력 폴더 열기", self._open_output, ""),
-            ("삭제", self._delete, "danger"),
-        ):
-            b = QPushButton(text)
-            if name:
-                b.setObjectName(name)
-            b.clicked.connect(fn)
-            r.addWidget(b)
-        r.addStretch(1)
-        c = QPushButton("닫기")
-        c.clicked.connect(self.reject)
-        r.addWidget(c)
-        v.addLayout(r)
-        self.new_requested = False
-        self.refresh()
-
-    def refresh(self):
-        self.recs = self.library.list()
-        self.empty.setVisible(not self.recs)
-        self.table.setVisible(bool(self.recs))
-        self.table.setRowCount(len(self.recs))
-        for i, r in enumerate(self.recs):
-            ok = os.path.isfile(r.master_path)
-            vals = [
-                r.name,
-                r.artist,
-                r.title,
-                time.strftime("%Y-%m-%d %H:%M", time.localtime(r.updated)),
-                os.path.basename(r.master_path) + ("" if ok else "  ⚠ 연결 끊김"),
-            ]
-            for c, t in enumerate(vals):
-                it = QTableWidgetItem(t)
-                if c == 4 and not ok:
-                    it.setForeground(Qt.GlobalColor.yellow)
-                self.table.setItem(i, c, it)
-        if self.recs:
-            self.table.selectRow(0)
-
-    def _cur(self):
-        r = self.table.currentRow()
-        return self.recs[r] if 0 <= r < len(self.recs) else None
-
-    def _new(self):
-        self.new_requested = True
-        self.accept()
-
-    def _open(self):
-        rec = self._cur()
-        if rec:
-            self.chosen = rec
-            self.accept()
-
-    def _open_output(self):
-        rec = self._cur()
-        if rec:
-            root = Path(rec.output_dir) / paths.safe_filename(rec.name)
-            open_path(str(root if root.exists() else rec.output_dir))
-
-    def _delete(self):
-        rec = self._cur()
-        if not rec:
-            return
-        m = QMessageBox.question(
-            self,
-            "프로젝트 삭제",
-            f"'{rec.name}' 프로젝트 데이터(편집 상태·캐시)를 삭제합니다.\n"
-            "마스터링 원본과 출력 폴더의 결과물은 삭제되지 않습니다.\n\n계속할까요?",
-        )
-        if m == QMessageBox.StandardButton.Yes:
-            self.library.delete(rec.id)
-            self.refresh()
+# 프로젝트 관리(시작) 화면은 projects.py 로 옮겼다. 예전 이름으로도 쓸 수 있게 남겨 둔다.
+from .projects import ProjectListDialog  # noqa: E402,F401
 
 
 # ============================================================================ XML 불러오기

@@ -319,7 +319,7 @@ class EditorWindow(QMainWindow):
         self.transport.stepClicked.connect(lambda d: self.step(d))
         self.transport.gotoClicked.connect(lambda w: self.goto(0 if w == "start" else self.project.count - 1))
         self.transport.frameEntered.connect(self.goto)
-        self.transport.viewToggled.connect(lambda _v: self._update_preview_layout())
+        self.transport.viewToggled.connect(self._view_toggled)
         self.transport.safe.toggled.connect(self._safe_toggled)
         self.transport.muteToggled.connect(self.set_muted)
         self.transport.volumeChanged.connect(self.set_volume)
@@ -1444,6 +1444,12 @@ class EditorWindow(QMainWindow):
             self._ov_key = key
             self._ov_img = ov_mod.render(ov, g, rec.title or rec.name, rec.artist)[0]
         return self._ov_img
+
+    def _view_toggled(self, _on: bool) -> None:
+        """원본 보기 ↔ 출력 보기: 바뀌기 전 화면을 덮어 두고 새 화면과 겹쳐 바꾼다 (상태는 즉시)."""
+        tr = motion.Transition(self.preview)
+        self._update_preview_layout()
+        tr.play(ms=motion.NORMAL)
 
     def _update_preview_layout(self) -> None:
         st = self.project.state
