@@ -122,7 +122,15 @@ class FramelessHelper(QObject):
         return None
 
     def eventFilter(self, obj, ev):  # noqa: N802
+        try:
+            return self._filter(obj, ev)
+        except (AttributeError, RuntimeError):  # 창 정리 중 (속성이 이미 사라짐)
+            return False
+
+    def _filter(self, obj, ev):
         t = ev.type()
+        if "win" not in self.__dict__:
+            return False
         if obj is self.win:
             if t == QEvent.Type.WindowStateChange:
                 self._apply_margins()
@@ -235,8 +243,18 @@ class _DialogChrome(QObject):
         return e
 
     def eventFilter(self, obj, ev):  # noqa: N802
+        # 창이 정리(가비지 수집)되는 도중에도 이벤트가 올 수 있다: 이때는 속성이 이미 사라졌으므로 조용히 넘긴다
+        # (예전: "'_DialogChrome' object has no attribute 'dlg'" 오류 창)
+        try:
+            return self._filter(obj, ev)
+        except (AttributeError, RuntimeError):
+            return False
+
+    def _filter(self, obj, ev):
         t = ev.type()
-        d = self.dlg
+        d = self.__dict__.get("dlg")
+        if d is None:
+            return False
         if obj is d:
             if t in (QEvent.Type.Resize, QEvent.Type.Show):
                 self._place()

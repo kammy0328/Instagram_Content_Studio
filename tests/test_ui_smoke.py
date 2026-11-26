@@ -1476,3 +1476,25 @@ def test_dialogs_use_the_app_title_bar(qapp, win):
     d._chrome.close_btn.click()
     pump(qapp, 50)
     assert not d.isVisible()
+
+
+def test_dialog_title_bar_ignores_events_while_being_torn_down(qapp):
+    """대화상자가 정리되는 도중(파이썬 속성이 먼저 사라짐)에 이벤트가 와도 오류 창이 뜨지 않는다.
+    (자동 맞춤 중 가비지 수집 시점에 "'_DialogChrome' object has no attribute 'dlg'" 오류가 떴다)"""
+    from PySide6.QtCore import QEvent
+    from PySide6.QtWidgets import QVBoxLayout
+
+    from ics.ui.frameless import ChromeDialog
+
+    d = ChromeDialog()
+    QVBoxLayout(d)
+    d.show()
+    pump(qapp, 50)
+    ch = d._chrome
+    ch.__dict__.clear()  # 정리 도중 상태 흉내
+    for t in (QEvent.Type.Resize, QEvent.Type.Show, QEvent.Type.WindowTitleChange, QEvent.Type.Leave):
+        assert ch.eventFilter(d, QEvent(t)) is False
+    d.setWindowTitle("x")  # 실제 이벤트 전달도 오류 없이
+    d.resize(300, 200)
+    pump(qapp, 50)
+    d.close()
