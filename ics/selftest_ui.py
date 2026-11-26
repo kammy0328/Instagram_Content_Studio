@@ -90,7 +90,9 @@ def _run(work: Path, log, failed: list[str]) -> int:
     proj.open()
     proj.attach_media(info, idx)
     win = EditorWindow(proj, Settings(), IdDictionary(), paths.cache_dir(rec.id))
-    win.resize(1400, 860)
+    av = app.primaryScreen().availableGeometry()  # CI 화면(1024x768)에서도 단추가 화면 안에 오게
+    win.resize(min(1400, av.width() - 20), min(860, av.height() - 20))
+    win.move(av.x() + 10, av.y() + 10)
     win.show()
     win.raise_()
     win.activateWindow()
