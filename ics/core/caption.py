@@ -67,6 +67,19 @@ def _split_long_row(row: str, limit: int, mode: str) -> list[str]:
     return out
 
 
+_SPACER_RE = re.compile(r"^[_.\-–—ㅡ·•]{1,2}$")
+
+
+def _trim_spacers(rows: list[str]) -> list[str]:
+    """캡션/댓글이 묶음 구분 줄('_' 등)로 시작하거나 끝나지 않게 앞뒤의 구분 줄을 뺀다."""
+    a, b = 0, len(rows)
+    while a < b and _SPACER_RE.fullmatch(rows[a].strip()):
+        a += 1
+    while b > a and _SPACER_RE.fullmatch(rows[b - 1].strip()):
+        b -= 1
+    return rows[a:b]
+
+
 def split_caption(
     body: str, credit_lines: list[str], limit: int = DEFAULT_LIMIT, mode: str = "utf16", credits_position: str = "after"
 ) -> SplitResult:
@@ -110,17 +123,18 @@ def split_caption(
             caption_rows.append(rest.pop(0))
         else:
             break
-    caption = build(caption_rows)
+    caption = build(_trim_spacers(caption_rows))
 
     comments: list[str] = []
     cur: list[str] = []
-    for r in rest:
+    for r in _trim_spacers(rest):
         if cur and count_chars("\n".join(cur + [r]), mode) > limit:
-            comments.append("\n".join(cur))
+            comments.append("\n".join(_trim_spacers(cur)))
             cur = []
         cur.append(r)
     if cur:
-        comments.append("\n".join(cur))
+        comments.append("\n".join(_trim_spacers(cur)))
+    comments = [c for c in comments if c.strip()]
     tags = count_hashtags(caption)
     if tags > HASHTAG_LIMIT:
         warns.append(f"해시태그가 {tags}개입니다 (인스타그램 한도 {HASHTAG_LIMIT}개).")

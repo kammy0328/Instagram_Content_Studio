@@ -221,3 +221,39 @@ def test_letterbox_layout_survives_save_reopen_and_undo(env):
     p.redo()
     assert not p.state.story.layout.auto_crop
     p.close()
+
+
+def test_relinked_master_is_not_reverted_by_the_saved_snapshot(prores_2398, tmp_path):
+    """끊긴 원본을 다시 연결(또는 교체)하면 저장본에 남은 옛 경로로 되돌아가지 않는다."""
+    import shutil
+
+    lib = Library()
+    old = tmp_path / "old_master.mov"
+    shutil.copy(prores_2398, old)
+    rec = lib.create("RELINK", "A", "T", str(old), str(tmp_path / "out"))
+    p = Project(rec, lib)
+    p.open()
+    p.request_save()
+    p.close()
+    old.unlink()  # 원본이 옮겨짐
+    rec2 = lib.get(rec.id)
+    rec2.master_path = str(prores_2398)  # 앱이 새 위치로 다시 연결
+    lib.upsert(rec2)
+    p2 = Project(rec2, lib)
+    p2.open()
+    assert p2.rec.master_path == str(prores_2398)
+    p2.close()
+
+
+def test_compare_masters_explains_what_still_lines_up(prores_2398, h264_2997):
+    from ics.core.media import analyze, compare_masters
+
+    a = analyze(str(prores_2398))
+    lines, risky = compare_masters(a, analyze(str(prores_2398)))
+    assert not risky and "그대로 맞습니다" in lines[0]
+    lines, risky = compare_masters(a, analyze(str(h264_2997)))
+    assert risky and any("FPS" in s for s in lines)
+    b = analyze(str(prores_2398))
+    b.width, b.height, b.nb_frames = 1920, 1080, a.nb_frames - 30
+    lines, risky = compare_masters(a, b)
+    assert risky and any("짧습니다" in s for s in lines) and any("1920×1080" in s for s in lines)

@@ -400,3 +400,42 @@ def _collect_issues(info: MediaInfo, v: dict) -> None:
         add(Issue("error", "codec", "지원되지 않는 코덱입니다."))
     if info.duration <= 0:
         add(Issue("warn", "noduration", "길이 정보를 읽을 수 없습니다. 프레임 인덱스로 보정합니다."))
+
+
+def compare_masters(old: MediaInfo, new: MediaInfo) -> tuple[list[str], bool]:
+    """마스터링 영상을 바꿀 때 무엇이 그대로 맞고 무엇이 어긋나는지. 반환: (안내 줄, 컷이 어긋날 위험이 있는지).
+    컷/구간은 프레임 번호로, 가로 위치는 화면 비율(0~1)로 저장되어 있다."""
+    lines: list[str] = []
+    risky = False
+
+    def fps_text(f: str) -> str:
+        v = float(Fraction(f)) if f and f != "0/1" else 0.0
+        return f"{v:.3f}".rstrip("0").rstrip(".")
+
+    if Fraction(old.fps or "0/1") != Fraction(new.fps or "0/1"):
+        risky = True
+        lines.append(
+            f"FPS 가 다릅니다 ({fps_text(old.fps)} → {fps_text(new.fps)}). "
+            "컷과 구간은 프레임 번호로 저장되어 있어 시간이 어긋납니다."
+        )
+    of = old.nb_frames or round(old.duration * float(Fraction(old.fps or "0/1") or 0))
+    nf = new.nb_frames or round(new.duration * float(Fraction(new.fps or "0/1") or 0))
+    if of and nf and of != nf:
+        d = nf - of
+        risky = risky or abs(d) > 1
+        lines.append(
+            f"길이가 {abs(d)}프레임 {'깁니다' if d > 0 else '짧습니다'} ({old.duration:.2f}초 → {new.duration:.2f}초)."
+            + (" 영상 끝을 넘는 컷과 구간은 잘립니다." if d < 0 else "")
+        )
+    elif abs(old.duration - new.duration) > 0.05:
+        risky = True
+        lines.append(f"길이가 다릅니다 ({old.duration:.2f}초 → {new.duration:.2f}초).")
+    if (old.width, old.height) != (new.width, new.height):
+        lines.append(
+            f"해상도 {old.width}×{old.height} → {new.width}×{new.height}. "
+            "가로 위치는 화면 비율로 저장되어 있어 그대로 맞습니다."
+        )
+    if not risky:
+        lines.insert(0, "FPS 와 길이가 같아 컷, 구간, 위치가 그대로 맞습니다.")
+    lines.append("인물 자동 맞춤 분석은 새 영상으로 다시 합니다 (손으로 맞춘 위치는 그대로).")
+    return lines, risky

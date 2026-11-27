@@ -345,7 +345,8 @@ class _SectionHead(QAbstractButton):
             self._hover = t == QEvent.Type.HoverEnter
             self.update()
         elif t == QEvent.Type.ToolTip:
-            if self.help_text and self._help_rect().adjusted(-4, -4, 4, 4).contains(e.position()):
+            # 도움말 이벤트(QHelpEvent)에는 position() 이 없다 (pos() 만)
+            if self.help_text and self._help_rect().adjusted(-4, -4, 4, 4).contains(QPointF(e.pos())):
                 QToolTip.showText(e.globalPos(), self.help_text, self)
             else:
                 QToolTip.hideText()
@@ -485,3 +486,22 @@ def control_icon(widget, standard, color: str = theme.TEXT) -> QIcon:
     painter.fillRect(pixmap.rect(), QColor(color))
     painter.end()
     return QIcon(pixmap)
+
+
+_TEXT_INPUTS = None
+
+
+def is_text_input(w) -> bool:
+    """글자 입력칸(또는 그 안쪽 위젯)인가."""
+    global _TEXT_INPUTS
+    if _TEXT_INPUTS is None:
+        from PySide6.QtWidgets import QAbstractSpinBox, QLineEdit, QPlainTextEdit, QTextEdit
+
+        _TEXT_INPUTS = (QLineEdit, QTextEdit, QPlainTextEdit, QAbstractSpinBox)
+    while w is not None:
+        if isinstance(w, _TEXT_INPUTS):
+            return True
+        if w.isWindow():
+            return False
+        w = w.parentWidget()
+    return False

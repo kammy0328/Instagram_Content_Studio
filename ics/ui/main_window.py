@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMenu,
     QMessageBox,
@@ -59,7 +60,7 @@ from .services import (
 )
 from .settings import DEFAULT_SHORTCUTS, Settings
 from .timeline import TimelineWidget
-from .widgets import ElidedLabel, NavTabs, icon_button, later, menu_button, studio_icon
+from .widgets import ElidedLabel, NavTabs, icon_button, is_text_input, later, menu_button, studio_icon
 
 
 class StillLoader(QObject):
@@ -92,6 +93,7 @@ class StillZoomDialog(ChromeDialog):
 class EditorWindow(QMainWindow):
     saveStatus = Signal(str, str)
     requestProjects = Signal()
+    requestReopen = Signal()  # 마스터링 영상을 바꾼 뒤 새 영상으로 다시 열기
     jobSignal = Signal(object)
     queueFinished = Signal()
     closed = Signal()  # 창이 실제로 닫혔을 때 (렌더 중 취소한 경우는 발생하지 않음)
@@ -269,6 +271,7 @@ class EditorWindow(QMainWindow):
             "영상 정보",
             later(lambda: MediaReportDialog(self.project.media, self).exec()),
         )
+        menu.addAction(icons.icon("file-input", theme.MUTED, 14), "마스터링 영상 교체…", later(self.replace_master))
         menu.addAction(icons.icon("keyboard", theme.MUTED, 14), "단축키 설정", later(self.open_shortcuts))
         menu.addSeparator()
         menu.addAction(icons.icon("check", theme.MUTED, 14), "업로드 준비", later(self.open_ready))
@@ -526,6 +529,10 @@ class EditorWindow(QMainWindow):
             self.addAction(a)
             self.actions[name] = a
         self.apply_shortcuts()
+        # 입력칸 밖(미리보기, 타임라인, 빈 곳, 단추)을 누르면 포커스가 작업 영역으로 옮겨 가 입력칸에서 빠져나온다.
+        # Qt 는 누른 위젯이 포커스를 받지 않으면 부모 쪽으로 올라가며 ClickFocus 를 받는 위젯을 찾는다.
+        # 그래야 제목을 고친 뒤 다른 곳을 누르고 Space 를 누르면 글자 대신 재생이 된다.
+        self.centralWidget().setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         extra = QAction(self)
         extra.setShortcut(QKeySequence("Ctrl+Y"))
         extra.triggered.connect(self.do_redo)
@@ -1576,6 +1583,65 @@ class EditorWindow(QMainWindow):
 
     def open_ready(self) -> None:
         ReadyDialog(self.project, self, self.toast).exec()
+
+    def replace_master(self, path: str | None = None) -> None:
+        """마스터링 영상을 다른 파일(새 마스터, 재출력본)로 바꾼다. 컷/구간/위치/크레딧은 그대로 두고,
+        무엇이 그대로 맞는지(FPS/길이/해상도)를 보여 준 뒤 새 영상으로 프로젝트를 다시 연다."""
+        import os
+
+        from ..core.media import analyze, compare_masters
+        from .loading import LoadingDialog, run_in_thread
+
+        cur = self.project.rec.master_path
+        if path is None:
+            path, _ = QFileDialog.getOpenFileName(
+                self,
+                "마스터링 영상 교체",
+                os.path.dirname(cur) if cur else "",
+                "영상 (*.mp4 *.mov *.m4v *.mxf *.mkv);;모든 파일 (*)",
+            )
+        if not path:
+            return
+        if cur and os.path.normcase(os.path.abspath(path)) == os.path.normcase(os.path.abspath(cur)):
+            self.toast("지금 쓰는 마스터링 영상과 같은 파일입니다.")
+            return
+        prog = LoadingDialog("새 영상 분석 중", self)
+        prog.show()
+        try:
+            new = run_in_thread(analyze, path)
+        except Exception as e:  # noqa: BLE001
+            prog.close()
+            QMessageBox.warning(self, "마스터링 영상 교체", f"파일을 읽을 수 없습니다.\n{e}")
+            return
+        prog.close()
+        if new.errors:
+            MediaReportDialog(new, self).exec()
+            return
+        lines, risky = compare_masters(self.project.media, new)
+        box = QMessageBox(self)
+        box.setWindowTitle("마스터링 영상 교체")
+        box.setIcon(QMessageBox.Icon.Warning if risky else QMessageBox.Icon.Question)
+        box.setText(f"{os.path.basename(cur)}\n→ {os.path.basename(path)}")
+        box.setInformativeText("\n\n".join(lines) + "\n\n바꾼 뒤 프로젝트를 새 영상으로 다시 엽니다.")
+        go = box.addButton("교체", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("취소", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(go)
+        box.exec()
+        if box.clickedButton() is not go:
+            return
+        self.playback.pause()
+        self.project.update_info(master_path=path)
+        self.requestReopen.emit()
+
+    def keyPressEvent(self, e):  # noqa: N802
+        # 입력칸이 처리하지 않고 넘긴 Esc / Enter: 입력을 마치고 작업 영역으로 (그다음 Space 는 재생)
+        fw = self.focusWidget()
+        if e.key() in (Qt.Key.Key_Escape, Qt.Key.Key_Return, Qt.Key.Key_Enter) and fw is not None and is_text_input(fw):
+            if e.key() == Qt.Key.Key_Escape or isinstance(fw, QLineEdit):
+                self.centralWidget().setFocus(Qt.FocusReason.OtherFocusReason)
+                e.accept()
+                return
+        super().keyPressEvent(e)
 
     def open_about(self) -> None:
         from .about import AboutDialog
