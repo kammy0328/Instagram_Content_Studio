@@ -9,12 +9,12 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QImage, QKeySequence, QPixmap
 from PySide6.QtWidgets import (
-    QApplication,
     QDialog,
     QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMenu,
     QMessageBox,
@@ -60,7 +60,7 @@ from .services import (
 )
 from .settings import DEFAULT_SHORTCUTS, Settings
 from .timeline import TimelineWidget
-from .widgets import ElidedLabel, FocusGuard, NavTabs, icon_button, later, menu_button, studio_icon
+from .widgets import ElidedLabel, NavTabs, icon_button, is_text_input, later, menu_button, studio_icon
 
 
 class StillLoader(QObject):
@@ -529,9 +529,10 @@ class EditorWindow(QMainWindow):
             self.addAction(a)
             self.actions[name] = a
         self.apply_shortcuts()
-        # 입력칸 밖을 누르면 입력칸에서 빠져나와 Space 등 단축키가 다시 편집기로 가게
-        self._focus_guard = FocusGuard(self)
-        QApplication.instance().installEventFilter(self._focus_guard)
+        # 입력칸 밖(미리보기, 타임라인, 빈 곳, 단추)을 누르면 포커스가 작업 영역으로 옮겨 가 입력칸에서 빠져나온다.
+        # Qt 는 누른 위젯이 포커스를 받지 않으면 부모 쪽으로 올라가며 ClickFocus 를 받는 위젯을 찾는다.
+        # 그래야 제목을 고친 뒤 다른 곳을 누르고 Space 를 누르면 글자 대신 재생이 된다.
+        self.centralWidget().setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         extra = QAction(self)
         extra.setShortcut(QKeySequence("Ctrl+Y"))
         extra.triggered.connect(self.do_redo)
@@ -1631,6 +1632,16 @@ class EditorWindow(QMainWindow):
         self.playback.pause()
         self.project.update_info(master_path=path)
         self.requestReopen.emit()
+
+    def keyPressEvent(self, e):  # noqa: N802
+        # 입력칸이 처리하지 않고 넘긴 Esc / Enter: 입력을 마치고 작업 영역으로 (그다음 Space 는 재생)
+        fw = self.focusWidget()
+        if e.key() in (Qt.Key.Key_Escape, Qt.Key.Key_Return, Qt.Key.Key_Enter) and fw is not None and is_text_input(fw):
+            if e.key() == Qt.Key.Key_Escape or isinstance(fw, QLineEdit):
+                self.centralWidget().setFocus(Qt.FocusReason.OtherFocusReason)
+                e.accept()
+                return
+        super().keyPressEvent(e)
 
     def open_about(self) -> None:
         from .about import AboutDialog

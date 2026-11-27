@@ -1567,13 +1567,25 @@ def test_update_check_window_can_be_cancelled(qapp, monkeypatch):
     from ics.ui import update_ui
 
     gate = __import__("threading").Event()
-    monkeypatch.setattr(updater, "check", lambda *a, **k: gate.wait(5) and None)
+    monkeypatch.setattr(updater, "check", lambda *a, **k: gate.wait(30) and None)
+    # 결과 안내 창이 뜨더라도 테스트가 멈추지 않게
+    monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: 0))
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: 0))
     shown = []
+    tries = [0]
 
     def cancel():
-        boxes = [w for w in qapp.topLevelWidgets() if isinstance(w, QMessageBox) and w.isVisible()]
+        boxes = [
+            w
+            for w in qapp.topLevelWidgets()
+            if isinstance(w, QMessageBox) and w.isVisible() and "확인하는 중" in w.text()
+        ]
         if not boxes:
-            QTimer.singleShot(50, cancel)
+            tries[0] += 1
+            if tries[0] < 200:
+                QTimer.singleShot(50, cancel)
+            else:
+                gate.set()  # 창을 못 찾으면 확인을 끝내 테스트가 멈추지 않게
             return
         shown.append(boxes[0].text())
         boxes[0].button(QMessageBox.StandardButton.Cancel).click()

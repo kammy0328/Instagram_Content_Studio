@@ -180,6 +180,28 @@ def _run(work: Path, log, failed: list[str]) -> int:
                 w.close()
         QTimer.singleShot(200, app.quit)
 
+    def _focus_step(cls) -> None:
+        eds = win.findChildren(cls)
+        if not eds:
+            check(False, "제목 입력칸을 찾지 못함")
+            goto("focus_done")
+            return
+        ed = eds[0].text
+        win.raise_()
+        win.activateWindow()
+        ed.setFocus()
+        QTest.keyClicks(ed, "AB")
+        before = ed.text()
+        QTest.mouseClick(win.preview, Qt.MouseButton.LeftButton, pos=win.preview.rect().center())
+        app.processEvents()
+        check(not ed.hasFocus(), "미리보기를 누르면 제목 입력칸에서 빠져나옴")
+        QTest.keyClick(app.focusWidget() or win, Qt.Key.Key_Space)
+        app.processEvents()
+        check(ed.text() == before, "Space 가 제목에 글자로 들어가지 않음")
+        check(win.playback.playing, "Space 로 재생됨")
+        win.playback.pause()
+        goto("focus_done")
+
     def _tick() -> None:
         s = state["step"]
         if time.time() - state["t0"] > DEADLINE_S:
@@ -187,6 +209,13 @@ def _run(work: Path, log, failed: list[str]) -> int:
             finish()
             return
         if s == "start" and elapsed() > 1.5:
+            # 제목 입력칸을 고친 뒤 미리보기를 누르고 Space: 글자가 아니라 재생이어야 한다
+            from .ui.overlay_editor import OverlayEditor
+
+            win.set_tab("story")
+            goto("focus")
+            QTimer.singleShot(400, lambda: _focus_step(OverlayEditor))
+        elif s == "focus_done" and elapsed() > 0.3:
             tb = [b for b in win.findChildren(QToolButton) if b.accessibleName() == "도구"][0]
             check(on_top(tb), "편집 창의 ··· 단추가 화면 맨 앞에 보임")
             goto("menu")
