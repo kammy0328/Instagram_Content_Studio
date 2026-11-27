@@ -38,6 +38,25 @@ def representative_frame(start: int, end: int) -> int:
     return start + max(0, (end - start - 1) // 2)
 
 
+_paint_error_logged = False
+
+
+def _log_paint_error() -> None:
+    global _paint_error_logged
+    if _paint_error_logged:
+        return
+    _paint_error_logged = True
+    import traceback
+
+    try:
+        from .. import paths
+
+        with (paths.logs_dir() / "crash.log").open("a", encoding="utf-8") as f:
+            f.write("[컷 목록 그리기 오류]\n" + traceback.format_exc() + "\n")
+    except OSError:
+        pass
+
+
 class _TileDelegate(QStyledItemDelegate):
     def __init__(self, strip: "CutStrip"):
         super().__init__(strip)
@@ -52,6 +71,16 @@ class _TileDelegate(QStyledItemDelegate):
         return QSize(TILE_W, TILE_H)
 
     def paint(self, p: QPainter, option, index) -> None:
+        """그리다 오류가 나도 앱이 오류 창을 반복해 띄우며 멈추지 않게: 기록만 남기고 그 칸은 건너뛴다."""
+        p.save()
+        try:
+            self._paint(p, option, index)
+        except Exception:  # noqa: BLE001
+            _log_paint_error()
+        finally:
+            p.restore()
+
+    def _paint(self, p: QPainter, option, index) -> None:
         d = index.data(DATA)
         if not d:
             return
@@ -94,9 +123,9 @@ class _TileDelegate(QStyledItemDelegate):
                     y = ir.bottom() - 6
                     a, b = win.center().x(), end.center().x()
                     p.drawLine(QPointF(a, y), QPointF(b, y))
-                    d = 4 if b >= a else -4
-                    p.drawLine(QPointF(b, y), QPointF(b - d, y - 3))
-                    p.drawLine(QPointF(b, y), QPointF(b - d, y + 3))
+                    head = 4 if b >= a else -4  # (d 는 컷 데이터라 다른 이름)
+                    p.drawLine(QPointF(b, y), QPointF(b - head, y - 3))
+                    p.drawLine(QPointF(b, y), QPointF(b - head, y + 3))
                 else:
                     p.setPen(QPen(QColor(255, 255, 255, 200), 1))
                     p.drawRect(win.adjusted(0.5, 0.5, -0.5, -0.5))

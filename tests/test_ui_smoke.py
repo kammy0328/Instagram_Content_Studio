@@ -1989,3 +1989,30 @@ def test_reels_defaults_to_fill_and_story_auto_fit_survives_fit_fill_switches(qa
         abs(c.red() - ok.red()) < 30 and abs(c.green() - ok.green()) < 30 and abs(c.blue() - ok.blue()) < 30
         for c in near
     )
+
+
+def test_cut_strip_draws_panning_cuts_without_errors(qapp, win, monkeypatch):
+    """따라가기(패닝) 컷의 썸네일 그리기 오류: 화살표 방향 변수가 컷 데이터(d)를 덮어써 앱이 오류 창을 띄우며 멈췄다."""
+    import sys
+
+    from ics.ui import cutstrip
+
+    errs = []
+    monkeypatch.setattr(sys, "excepthook", lambda *a: errs.append(a))
+    monkeypatch.setattr(cutstrip, "_log_paint_error", lambda: errs.append("paint"))
+    from PySide6.QtGui import QImage
+
+    img = QImage(160, 90, QImage.Format.Format_RGB32)
+    img.fill(0x404040)
+    monkeypatch.setattr(win.cut_strip, "thumb", lambda _f: img)  # 썸네일이 있어야 창/화살표를 그린다
+    win.project.import_cuts([(0, 120, "a", {}), (120, 240, "b", {})], {"file": "x.xml"})
+    win.set_tab("story")
+    win._reframe_finished(
+        "story", ({0: 0.5, 120: 0.4}, {0: [[0, 0.1], [119, 0.9]], 120: [[0, 0.9], [119, 0.1]]}), "", None
+    )
+    pump(qapp, 50)
+    win.cut_strip.viewport().grab()  # 실제로 그린다
+    win.set_tab("reels")
+    pump(qapp, 50)
+    win.cut_strip.viewport().grab()
+    assert not errs
