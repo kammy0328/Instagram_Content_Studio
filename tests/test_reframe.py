@@ -486,3 +486,62 @@ def test_planner_turns_a_cut_path_into_smooth_render_steps(prores_2398, tmp_path
     g1 = compute_geometry(info.display_w, info.display_h, "916", LayoutParams("fill", pos_x=1.0))
     assert steps[0] == [0, 0]  # 앞 컷: 고정
     assert steps[1] == [20, 0, 1] and steps[2] == [30, g1.crop_x]  # 뒤 컷: 0 -> 끝까지 직선, 마지막 키에서 고정
+
+
+# ---- 릴스 커버 추천 ----
+def _texture(h, w, seed=0):
+    import cv2
+
+    rng = np.random.RandomState(seed)
+    base = cv2.GaussianBlur((rng.rand(h, w) * 255).astype(np.uint8), (0, 0), 6)
+    img = np.clip(base.astype(float) * 0.8 + 60 + rng.rand(h, w) * 40 - 20, 0, 255).astype(np.uint8)
+    return np.dstack([img] * 3)
+
+
+def test_cover_recommendation_skips_blurred_and_side_faces():
+    """초점이 나간(흐린) 얼굴, 옆얼굴, 작은 얼굴은 빼고 선명한 정면 얼굴을 고른다. 컷이 겹치지 않게."""
+    import cv2
+
+    from ics.core import cover
+
+    W, H = cover.COVER_WIDTH, 720
+    face = (500.0, 150.0, 780.0, 500.0)  # 화면 높이의 48%
+
+    class Cut:
+        def __init__(self, a, b):
+            self.start, self.end = a, b
+
+    cuts = [Cut(0, 100), Cut(100, 200), Cut(200, 300)]
+    kind = {}  # 프레임 -> 'sharp' | 'blur' | 'side' | 'small'
+    for f in range(300):
+        kind[f] = "blur" if 100 <= f < 200 else ("side" if f >= 250 else "sharp")
+    kind[30] = "small"
+
+    def decode(f, w, h):
+        img = _texture(h, w, seed=f % 7)
+        if kind[f] == "blur":
+            img = cv2.GaussianBlur(img, (0, 0), 3.0)
+        return img
+
+    class FakeDet:
+        def faces(self, rgb):
+            k = kind[self.f]
+            if k == "small":
+                return [(600.0, 300.0, 630.0, 330.0, 0.9, None, 0.0)]
+            return [(*face, 0.95, None, 0.9 if k == "side" else 0.05)]
+
+    det = FakeDet()
+    calls = []
+
+    def dec(f, w, h):
+        det.f = f
+        calls.append(f)
+        return decode(f, w, h)
+
+    picks = cover.recommend(300, 24.0, cuts, dec, W / H, detector_factory=lambda: det)
+    assert picks, "선명한 정면 얼굴을 못 찾음"
+    frames = [c.frame for c in picks]
+    assert all(kind[f] == "sharp" for f in frames)  # 흐린/옆/작은 얼굴은 없음
+    assert len({next(i for i, c in enumerate(cuts) if c.start <= f < c.end) for f in frames}) == len(frames)
+    assert all(not (98 <= f <= 102 or 198 <= f <= 202) for f in calls)  # 컷 경계 바로 옆은 보지 않음
+    assert "정면" in picks[0].reason()

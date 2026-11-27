@@ -49,6 +49,7 @@ from .frameless import ChromeDialog, FramelessHelper, window_buttons
 from .panels import FeedPanel, SelectionPanel, TransportBar
 from .preview import PreviewWidget
 from .services import (
+    CoverRecommender,
     Decoder,
     FrameService,
     LetterboxService,
@@ -120,6 +121,7 @@ class EditorWindow(QMainWindow):
         self.letterbox = LetterboxService(info, index, self)
         self.letterbox.finished.connect(self._letterbox_finished)
         self.reframer = ReframeService(info, index, self, cache_dir)
+        self.cover_finder = CoverRecommender(self.reframer, self)
         self._reframe_queue: list[str] = []
         self.reframer.progress.connect(self._reframe_progress)
         self.reframer.finished.connect(self._reframe_finished)
@@ -394,6 +396,9 @@ class EditorWindow(QMainWindow):
         self.story_panel.overlayChanged.connect(self.project.set_story_overlay)
         self.reels_panel.coverSet.connect(lambda: self.project.set_cover_frame(self.playhead))
         self.reels_panel.coverGoto.connect(self._goto_cover)
+        self.reels_panel.coverSuggest.connect(self.suggest_cover)
+        self.cover_finder.progress.connect(self._cover_progress)
+        self.cover_finder.finished.connect(self._cover_found)
         self.reels_panel.coverChanged.connect(lambda a, o: self.project.set_cover_grid(a, o))
         self.reels_panel.coverPreview.connect(self._cover_preview)
         self.reels_panel.coverRatioChanged.connect(self._set_cover_ratio)
@@ -1465,6 +1470,38 @@ class EditorWindow(QMainWindow):
         self._update_preview_layout()
         self._request_display_frame()
 
+    def suggest_cover(self) -> None:
+        """커버 추천: 다시 누르면 취소."""
+        if self.cover_finder.busy:
+            self.cover_finder.cancel()
+            return
+        m = self.project.media
+        if m is None:
+            return
+        aspect = m.display_w / max(1, m.display_h)
+        if self.cover_finder.start(self.project.count, float(self.project.fps), self.project.state.cuts, aspect):
+            self._cover_progress(0.0)
+
+    def _cover_progress(self, f: float) -> None:
+        b = self.reels_panel.cover_suggest_btn
+        b.setText(f"커버 찾는 중… {int(f * 100)}% (누르면 취소)")
+
+    def _cover_found(self, items, error: str) -> None:
+        from .cover_picker import CoverPickerDialog
+
+        self.reels_panel.cover_suggest_btn.setText("커버 추천")
+        if error:
+            self.toast(error)
+            return
+        if not items:
+            self.toast("초점이 맞은 정면 얼굴 프레임을 찾지 못했습니다")
+            return
+        dlg = CoverPickerDialog(items, self.project.tc, self)
+        if dlg.exec() and dlg.chosen is not None:
+            self.project.set_cover_frame(dlg.chosen)
+            self.goto(dlg.chosen)
+            self.toast("추천 프레임을 커버로 지정했습니다")
+
     def _goto_cover(self) -> None:
         f = self.project.state.cover.frame
         if f is not None:
@@ -1877,6 +1914,7 @@ class EditorWindow(QMainWindow):
             self.render_queue.wait(10)
         self._layout_commit()
         self.reframer.cancel()
+        self.cover_finder.cancel()
         self.credits.flush_pending()
         try:
             self.project.close()

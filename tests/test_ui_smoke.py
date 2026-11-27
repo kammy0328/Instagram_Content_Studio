@@ -1925,3 +1925,25 @@ def test_pan_option_is_shared_and_auto_fit_results_with_paths_are_applied(qapp, 
     assert abs(win.project.pos_x_at("story", 60) - 0.5) < 1e-9 and win.project.pos_x_at("story", 130) == 0.4
     info = win._cut_reframe_info(0, 120)
     assert len(info) == 4 and info[1] < info[3]  # 처음 창 -> 끝 창 (오른쪽으로)
+
+
+def test_cover_suggestion_shows_choices_and_sets_the_cover(qapp, win, monkeypatch):
+    from ics.core import cover
+    from ics.ui import cover_picker
+
+    c = cover.CoverCandidate(77, 0.9, 1.0, 0.02, 0.3, (0, 0, 10, 10))
+    monkeypatch.setattr(cover, "recommend", lambda *a, **k: [c])
+    shown = []
+
+    def fake_exec(dlg):
+        shown.append([b.text() for b in dlg.buttons])
+        dlg.buttons[0].click()
+        return 1
+
+    monkeypatch.setattr(cover_picker.CoverPickerDialog, "exec", fake_exec)
+    win.set_tab("reels")
+    win.reels_panel.cover_suggest_btn.click()
+    assert _wait(qapp, lambda: shown, 20)
+    assert "정면" in shown[0][0]
+    assert win.project.state.cover.frame == 77 and win.playhead == 77
+    assert win.reels_panel.cover_suggest_btn.text() == "커버 추천"

@@ -897,3 +897,56 @@ class PlaybackEngine(QObject):
     def shutdown(self) -> None:
         self.pause()
         getattr(self.audio, "close", self.audio.stop)()
+
+
+# ======================================================================= 릴스 커버 추천
+class CoverRecommender(QObject):
+    """영상 전체에서 정면에 가깝고 초점이 맞은 얼굴 프레임을 찾는다 (스레드). 프록시가 있으면 프록시로 디코딩."""
+
+    progress = Signal(float)
+    finished = Signal(object, str)  # ([(CoverCandidate, 작은 RGB 그림)], 오류)
+
+    def __init__(self, reframer: ReframeService, parent=None):
+        super().__init__(parent)
+        self.reframer = reframer
+        self.busy = False
+        self._cancel = threading.Event()
+
+    def start(self, count: int, fps: float, cuts, aspect: float) -> bool:
+        if self.busy:
+            return False
+        self.busy = True
+        self._cancel.clear()
+        threading.Thread(target=self._run, args=(count, fps, list(cuts), aspect), name="ics-cover", daemon=True).start()
+        return True
+
+    def cancel(self) -> None:
+        self._cancel.set()
+
+    def _run(self, count, fps, cuts, aspect) -> None:
+        from ..core import cover
+
+        res, error = [], ""
+        try:
+            cands = cover.recommend(
+                count,
+                fps,
+                cuts,
+                self.reframer._decode,
+                aspect,
+                cancel=self._cancel,
+                progress=lambda f: self.progress.emit(f * 0.95),
+            )
+            tw = 384
+            th = max(2, int(round(tw / max(aspect, 1e-6))) // 2 * 2)
+            for c in cands:  # 고르기 창에 보여 줄 작은 그림
+                if self._cancel.is_set():
+                    raise InterruptedError
+                res.append((c, self.reframer._decode(c.frame, tw, th)))
+            self.progress.emit(1.0)
+        except InterruptedError:
+            error = "취소했습니다."
+        except Exception as e:  # noqa: BLE001
+            error = f"커버 추천 실패: {e}"
+        self.busy = False
+        self.finished.emit(res, error)

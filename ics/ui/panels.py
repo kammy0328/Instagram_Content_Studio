@@ -500,6 +500,7 @@ class SelectionPanel(QWidget):
     layoutLive = Signal(object)
     layoutCommit = Signal(object)
     coverSet = Signal()
+    coverSuggest = Signal()  # 커버 추천 (정면 · 초점 맞은 얼굴)
     coverGoto = Signal()
     coverChanged = Signal(str, float)
     coverPreview = Signal(bool)
@@ -600,6 +601,14 @@ class SelectionPanel(QWidget):
         b2.clicked.connect(self.coverGoto.emit)
         r.addWidget(b2)
         gl.addLayout(r)
+        self.cover_suggest_btn = QPushButton("커버 추천")
+        self.cover_suggest_btn.setIcon(icons.icon("sparkles", theme.TEXT, 15))
+        self.cover_suggest_btn.setToolTip(
+            "영상 전체에서 얼굴이 정면에 가깝고 초점이 맞은 프레임을 골라 보여 줍니다.\n"
+            "초점이 나갔거나 움직여 번진 얼굴, 너무 어둡거나 작은 얼굴은 빼고, 컷이 겹치지 않게 최대 6장."
+        )
+        self.cover_suggest_btn.clicked.connect(self.coverSuggest.emit)
+        gl.addWidget(self.cover_suggest_btn)
         self.cover_lbl = QLabel("커버 프레임 미지정")
         self.cover_lbl.setObjectName("hint")
         self.cover_lbl.setWordWrap(True)
