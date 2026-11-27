@@ -214,7 +214,7 @@ class EditState:
     orig_cuts: list[dict] = field(default_factory=list)  # XML 에서 읽은 원본 컷(복원용)
     xml_meta: dict = field(default_factory=dict)
     story: Selection = field(default_factory=lambda: Selection(preset="60", layout=LayoutParams(mode="fill")))
-    reels: Selection = field(default_factory=lambda: Selection(preset="60"))
+    reels: Selection = field(default_factory=lambda: Selection(preset="60", layout=LayoutParams(mode="fill")))
     cover: Cover = field(default_factory=Cover)
     feed: list[FeedItem] = field(default_factory=list)
     credits_raw: str = ""
@@ -270,7 +270,11 @@ class EditState:
             if d.get("story")
             else Selection(preset="60", layout=LayoutParams(mode="fill"))
         )
-        s.reels = Selection.from_dict(d.get("reels")) if d.get("reels") else Selection(preset="max")
+        s.reels = (
+            Selection.from_dict(d.get("reels"))
+            if d.get("reels")
+            else Selection(preset="max", layout=LayoutParams(mode="fill"))
+        )
         s.cover = Cover.from_dict(d.get("cover"))
         s.feed = [FeedItem.from_dict(x) for x in d.get("feed", [])]
         s.credits_raw = d.get("credits_raw", "")
