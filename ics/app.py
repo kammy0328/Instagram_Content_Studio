@@ -270,4 +270,39 @@ def main(argv: list[str] | None = None) -> int:
 
             diag.write_text(traceback.format_exc(), encoding="utf-8")
         os._exit(0)
+    install_crash_logging()
     return App().run()
+
+
+_fatal_file = None
+
+
+def install_crash_logging() -> None:
+    """앱이 오류 창 없이 갑자기 꺼질 때 원인을 남긴다.
+    - 네이티브 충돌(접근 위반 등): faulthandler 가 모든 스레드의 위치를 logs/fatal.log 에
+    - 작업 스레드(렌더링, 분석)의 처리 못 한 예외: logs/crash.log 에 (창은 띄우지 않음)"""
+    import faulthandler
+    import threading
+    import time as _time
+
+    global _fatal_file
+    try:
+        ff = paths.logs_dir() / "fatal.log"
+        if ff.is_file() and ff.stat().st_size > 512_000:  # 너무 커지면 뒷부분만 남긴다
+            ff.write_text(ff.read_text(encoding="utf-8", errors="replace")[-128_000:], encoding="utf-8")
+        _fatal_file = ff.open("a", encoding="utf-8")
+        _fatal_file.write(f"\n==== 실행 {_time.strftime('%Y-%m-%d %H:%M:%S')} ====\n")
+        _fatal_file.flush()
+        faulthandler.enable(file=_fatal_file, all_threads=True)
+    except OSError:
+        pass
+
+    def thread_hook(args):
+        try:
+            text = "".join(traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback))
+            with (paths.logs_dir() / "crash.log").open("a", encoding="utf-8") as f:
+                f.write(f"[스레드 {getattr(args.thread, 'name', '?')}] {_time.strftime('%Y-%m-%d %H:%M:%S')}\n{text}\n")
+        except OSError:
+            pass
+
+    threading.excepthook = thread_hook
