@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import time
 
 import pytest
@@ -366,6 +367,9 @@ def _app_with_project(qapp, prores_2398, tmp_path, monkeypatch):
 
     monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: None))
     monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes))
+    # App 은 sys.excepthook 을 '오류 창(모달)' 으로 바꾼다. 테스트가 끝나면 되돌려, 이후 오류가 창에 막혀 멈추지 않게
+    monkeypatch.setattr(sys, "excepthook", sys.excepthook)
+    monkeypatch.setattr(QMessageBox, "critical", staticmethod(lambda *a, **k: None))
     app = App()
     calls = {"list": 0, "quit": 0}
     monkeypatch.setattr(app, "show_projects", lambda: calls.__setitem__("list", calls["list"] + 1))
@@ -1873,6 +1877,8 @@ def test_app_reopens_the_project_on_the_new_master(qapp, prores_2398, tmp_path, 
     from ics.app import App
 
     monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: 0))
+    monkeypatch.setattr(sys, "excepthook", sys.excepthook)  # App 이 바꾼 오류 창 훅을 테스트 뒤 되돌림
+    monkeypatch.setattr(QMessageBox, "critical", staticmethod(lambda *a, **k: None))
     app = App()
     rec = app.library.create("REPLACE", "A", "T", str(prores_2398), str(tmp_path / "out"))
     app.open_record(rec)

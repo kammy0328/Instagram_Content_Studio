@@ -89,6 +89,7 @@ jobs:
           pip install -r requirements-build.txt
 
       - name: pytest (Windows)
+        timeout-minutes: 20
         env:
           QT_QPA_PLATFORM: offscreen
           PYTHONUTF8: "1"
