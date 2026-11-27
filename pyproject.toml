@@ -29,4 +29,7 @@ known-first-party = ["ics", "tests"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+# 한 테스트가 멈추면(모달 창 등) 5분 뒤 모든 스레드의 위치를 출력하고 끝낸다 (CI 가 한 시간 동안 멈춰 있지 않게)
+timeout = 300
+timeout_method = "thread"
 filterwarnings = ["ignore::DeprecationWarning"]
