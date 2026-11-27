@@ -1,6 +1,7 @@
 """STORY / REELS 9:16 Fill 의 컷별 가로 위치(리프레이밍).
 
-- 컷마다 가로 위치(pos_x) 하나만 둔다. 키프레임(컷 안에서 움직이는 크롭)은 없다. 세로 위치와 확대는 바꾸지 않는다.
+- 컷마다 가로 위치(pos_x) 하나를 둔다. '컷 안에서 인물 따라가기' 를 켜면, 인물이 컷 안에서 크게 움직이는 컷만
+  부드러운 카메라 패닝 경로(cut_path)를 함께 둔다. 세로 위치와 확대는 바꾸지 않는다.
 - 자동: 컷 안에서 고르게 뽑은 프레임에서 인물(몸)과 얼굴을 찾고, 9:16 창 안에 인물이 평균적으로 가장 많이 보이는
   가로 위치를 고른다. 인물이 나왔다 사라지는 컷도 평균으로 처리되며, 인물이 없는 컷은 위치를 바꾸지 않는다.
 - 수동: 미리보기를 좌우로 끌어 지금 컷의 위치만 바꾼다.
@@ -56,30 +57,174 @@ def segments(sel_start: int, sel_end: int, cuts: Sequence) -> list[Segment]:
     return out
 
 
-def pos_for_frame(frame: int, cuts: Sequence, cut_x: dict[int, float], default: float) -> float:
-    """frame 이 속한 컷의 가로 위치 (지정 안 됐으면 default)."""
-    if not cut_x:
+def pos_for_frame(
+    frame: int, cuts: Sequence, cut_x: dict[int, float], default: float, cut_path: dict[int, list] | None = None
+) -> float:
+    """frame 이 속한 컷의 가로 위치 (지정 안 됐으면 default). 패닝 경로가 있는 컷은 그 프레임의 경로 위치."""
+    if not cut_x and not cut_path:
         return default
     for c in cuts:
         if c.start <= frame < c.end:
+            path = (cut_path or {}).get(int(c.start))
+            if path:
+                return path_pos(path, frame - c.start)
             return cut_x.get(int(c.start), default)
+    path = (cut_path or {}).get(-1)
+    if path:
+        return path_pos(path, frame)
     return cut_x.get(-1, default)
 
 
+def path_pos(path: Sequence[Sequence[float]], offset: float) -> float:
+    """패닝 경로 [(컷 시작 기준 프레임, pos_x), ...] 에서 offset 의 위치 (키 사이는 직선, 앞뒤는 끝값)."""
+    if offset <= path[0][0]:
+        return float(path[0][1])
+    for (a, pa), (b, pb) in zip(path, path[1:]):
+        if offset <= b:
+            return float(pa + (pb - pa) * (offset - a) / max(1e-9, b - a))
+    return float(path[-1][1])
+
+
 def crop_steps(
-    disp_w: int, disp_h: int, layout: LayoutParams, segs: Sequence[Segment], cut_x: dict[int, float]
+    disp_w: int,
+    disp_h: int,
+    layout: LayoutParams,
+    segs: Sequence[Segment],
+    cut_x: dict[int, float],
+    cut_path: dict[int, list] | None = None,
 ) -> list[tuple[int, int]]:
-    """렌더링용 [(선택 시작 기준 프레임 오프셋, 표시 좌표 crop_x)]. Fill 이 아니거나 컷별 위치가 없으면 빈 목록."""
-    if layout.mode != "fill" or not segs or not cut_x:
+    """렌더링용 [(선택 시작 기준 프레임 오프셋, 표시 좌표 crop_x)]. Fill 이 아니거나 컷별 위치가 없으면 빈 목록.
+    패닝 경로가 있는 컷은 경로의 키마다 한 단계씩 넣는다 (렌더는 단계 사이를 직선으로 이어 부드럽게 움직인다:
+    단계에 'lerp' 표시가 있는 구간만). 반환 형식은 [(n, x)] 또는 [(n, x, 1)] (다음 단계까지 직선으로 이어짐)."""
+    if layout.mode != "fill" or not segs or not (cut_x or cut_path):
         return []
+    cut_path = cut_path or {}
+
+    def xpos(px: float) -> int:
+        return compute_geometry(disp_w, disp_h, "916", replace(layout, pos_x=px)).crop_x
+
     base = segs[0].start
-    steps: list[tuple[int, int]] = []
+    steps: list[tuple] = []
     for s in segs:
-        px = cut_x.get(s.key, layout.pos_x)
-        x = compute_geometry(disp_w, disp_h, "916", replace(layout, pos_x=px)).crop_x
-        if not steps or steps[-1][1] != x:
+        path = cut_path.get(s.key)
+        if path and len(path) > 1:
+            for off, px in path:
+                n = s.start + int(off)
+                if n >= s.end:
+                    break
+                if n < s.start:
+                    continue
+                steps.append((n - base, xpos(px), 1))  # 다음 단계까지 직선으로
+            # 컷 끝까지 경로의 마지막 값 (다음 컷 첫 단계에서 끊긴다)
+            last = steps[-1]
+            steps[-1] = (last[0], last[1])
+            continue
+        x = xpos(cut_x.get(s.key, layout.pos_x))
+        if not steps or len(steps[-1]) == 3 or steps[-1][1] != x:
             steps.append((s.start - base, x))
     return steps
+
+
+# ====================================================================== 컷 안에서 인물 따라가기 (패닝)
+PAN_MIN_TRAVEL = 0.08  # 부드럽게 다듬은 경로가 창 폭의 이 비율보다 적게 움직이면 패닝하지 않는다 (흔들림 무시)
+PAN_SMOOTH_SEC = 0.45  # 경로를 다듬는 정도 (가우스 시그마, 초). 클수록 느긋한 카메라
+PAN_MAX_SPEED = 0.55  # 최대 속도 (창 폭/초)
+PAN_MAX_ACCEL = 0.9  # 최대 가속도 (창 폭/초²): 출발과 멈춤이 툭 끊기지 않게
+PAN_KEY_STEP = 2  # 경로 키 간격 (프레임)
+
+
+def _gauss(y: np.ndarray, sigma: float) -> np.ndarray:
+    """끝값을 이어 붙인 가우스 다듬기 (앞뒤 지연 없음)."""
+    if sigma <= 0.5 or len(y) < 3:
+        return y.copy()
+    r = int(math.ceil(3 * sigma))
+    k = np.exp(-0.5 * (np.arange(-r, r + 1) / sigma) ** 2)
+    k /= k.sum()
+    pad = np.concatenate([np.full(r, y[0]), y, np.full(r, y[-1])])
+    return np.convolve(pad, k, mode="valid")
+
+
+def _limit_motion(y: np.ndarray, vmax: float, amax: float) -> np.ndarray:
+    """프레임당 최대 속도/가속도 제한. 앞으로 한 번, 뒤로 한 번 따라가며 평균해 한쪽으로 밀리지 않게."""
+
+    def follow(seq: np.ndarray) -> np.ndarray:
+        out = np.empty_like(seq)
+        out[0], v = seq[0], 0.0
+        for i in range(1, len(seq)):
+            want = seq[i] - out[i - 1]
+            # 멈춰야 할 거리 안에 들어오면 미리 감속 (v²/2a)
+            stop = v * v / (2 * amax) if amax > 0 else 0.0
+            if abs(want) <= stop + 1e-12 and np.sign(want) == np.sign(v):
+                target_v = math.copysign(math.sqrt(max(0.0, 2 * amax * abs(want))), want)
+            else:
+                target_v = max(-vmax, min(vmax, want))
+            dv = max(-amax, min(amax, target_v - v))
+            v = max(-vmax, min(vmax, v + dv))
+            out[i] = out[i - 1] + v
+        return out
+
+    fwd = follow(y)
+    bwd = follow(y[::-1])[::-1]
+    return (fwd + bwd) / 2
+
+
+def pan_path(
+    samples: Sequence[tuple[int, Sequence[Det]]],
+    seg: Segment,
+    lo: float,
+    hi: float,
+    win_w: float,
+    fps: float,
+) -> list[list[float]] | None:
+    """컷 안 표본 [(프레임, 검출)] 로 부드러운 패닝 경로 [[컷 시작 기준 프레임, pos_x], ...].
+    인물이 거의 움직이지 않으면(다듬은 경로의 이동이 PAN_MIN_TRAVEL 미만) None (고정 위치가 낫다).
+
+    1) 표본마다 best_window_x 와 같은 기준(옆얼굴 보정, 여러 명이면 무리)으로 인물 가운데를 구한다.
+       컷 전체의 주인공 무리(g)에 가장 가까운 후보를 골라, 다른 사람에게 튀지 않게 한다.
+    2) 세 표본 중앙값으로 튀는 값을 지우고, 프레임마다 직선으로 이은 뒤 가우스로 다듬는다 (앞뒤 지연 없음).
+    3) 실제 카메라처럼 속도/가속도를 제한한다 (출발과 멈춤이 부드럽게)."""
+    span = hi - lo - win_w
+    n = seg.end - seg.start
+    if span <= 1 or n < max(8, int(fps * 0.6)) or len(samples) < 4:
+        return None
+    frames = _head_frames([d for _f, d in samples])
+    allp = [d for fr in frames for d in fr if d.x2 > d.x1]
+    if not allp:
+        return None
+    xs = lo + np.linspace(0.0, span, 97)
+    cands = _subject_centers(allp, xs, win_w)
+    if not cands:
+        return None
+    g = cands[int(np.argmax([c[1] for c in cands]))][0]
+    pts: list[tuple[int, float]] = []
+    for (f, _d), fr in zip(samples, frames):
+        fr = [d for d in fr if d.x2 > d.x1]
+        if not fr:
+            continue
+        cs = _subject_centers(fr, xs, win_w)
+        if cs:
+            c0 = min((c[0] for c in cs), key=lambda c: abs(c - g))
+            pts.append((int(f) - seg.start, min(max(c0 - win_w / 2, lo), lo + span)))
+    if len(pts) < 4:
+        return None
+    pts.sort()
+    t = np.array([p[0] for p in pts], dtype=float)
+    x = np.array([p[1] for p in pts], dtype=float)
+    if len(x) >= 3:  # 튀는 값 제거
+        x = np.array([np.median(x[max(0, i - 1) : i + 2]) for i in range(len(x))])
+    frames_t = np.arange(n, dtype=float)
+    y = np.interp(frames_t, t, x)  # 첫/끝 표본 밖은 끝값
+    y = _gauss(y, PAN_SMOOTH_SEC * fps)
+    y = _limit_motion(y, PAN_MAX_SPEED * win_w / fps, PAN_MAX_ACCEL * win_w / fps / fps)
+    y = _gauss(y, 0.12 * fps)  # 제한하며 생긴 작은 꺾임을 다시 다듬기
+    y = np.clip(y, lo, lo + span)
+    if float(y.max() - y.min()) < PAN_MIN_TRAVEL * win_w:
+        return None
+    pos = (y - lo) / span
+    keys = list(range(0, n, PAN_KEY_STEP))
+    if keys[-1] != n - 1:
+        keys.append(n - 1)
+    return [[int(k), round(float(pos[k]), 4)] for k in keys]
 
 
 # ====================================================================== 가로 위치 고르기
@@ -519,15 +664,18 @@ ANALYSIS_WIDTH = 1280  # 검출용 축소 폭. 1차 검출은 640 으로 줄여�
 SAMPLES_PER_SEC = 3.0
 MIN_SAMPLES, MAX_SAMPLES = 3, 8  # 컷 하나당 표본 수 (인물 이동을 평균하려면 고르게 여러 장)
 MAX_TOTAL_SAMPLES = 320
+# 패닝: 움직임을 따라가려면 더 촘촘히 (1초에 6장, 컷당 최대 36장, 전체 최대 1200장)
+PAN_SAMPLES_PER_SEC, PAN_MAX_SAMPLES, PAN_MAX_TOTAL = 6.0, 36, 1200
 
 
-def sample_frames(seg: Segment, fps: float, budget_scale: float = 1.0) -> list[int]:
+def sample_frames(seg: Segment, fps: float, budget_scale: float = 1.0, pan: bool = False) -> list[int]:
     """컷 안에서 고르게 뽑는다. 컷 경계 바로 옆 프레임(디졸브/플래시)은 피한다."""
     n = seg.end - seg.start
     if n <= 0:
         return []
-    k = int(round(n / max(1.0, fps) * SAMPLES_PER_SEC * budget_scale))
-    k = max(MIN_SAMPLES, min(MAX_SAMPLES, k))
+    per_sec, most = (PAN_SAMPLES_PER_SEC, PAN_MAX_SAMPLES) if pan else (SAMPLES_PER_SEC, MAX_SAMPLES)
+    k = int(round(n / max(1.0, fps) * per_sec * budget_scale))
+    k = max(MIN_SAMPLES, min(most, k))
     pad = min(2, (n - 1) // 4)
     a, b = seg.start + pad, seg.end - 1 - pad
     if b <= a:
@@ -546,11 +694,14 @@ def analyze(
     detector_factory: Callable[[], PersonDetector] | None = None,
     workers: int = 3,
     cache: dict[int, list[Det]] | None = None,
+    pan: bool = False,
+    paths_out: dict[int, list] | None = None,
 ) -> dict[int, float]:
     """컷마다 인물이 가장 많이 보이는 가로 위치. 반환 {컷 키: pos_x} (인물을 못 찾은 컷은 빠진다).
     decode(frame, w, h) -> RGB ndarray (표시 좌표 전체 프레임을 w×h 로 축소).
     cache: {원본 프레임 번호: 검출 목록(표시 좌표)}. 있는 프레임은 다시 디코딩/검출하지 않고, 새로 검출한 것은 채워 넣는다
-    (STORY 와 REELS, 다시 누르기, 컷 하나만 맞추기가 같은 검출 결과를 함께 쓴다)."""
+    (STORY 와 REELS, 다시 누르기, 컷 하나만 맞추기가 같은 검출 결과를 함께 쓴다).
+    pan: 컷 안에서 인물 따라가기. 표본을 촘촘히 뽑고, 인물이 크게 움직인 컷의 패닝 경로를 paths_out 에 채운다."""
     lp = replace(layout, mode="fill")
     dw, dh = info.display_w, info.display_h
     geo = compute_geometry(dw, dh, "916", lp)
@@ -558,16 +709,16 @@ def analyze(
     if bw - geo.crop_w <= 2:  # 가로로 움직일 여지가 없다 (세로 영상 등)
         return {}
     fps = float(index.fps) if getattr(index, "fps", None) else 24.0
-    total = sum(len(sample_frames(s, fps)) for s in segs)
-    scale = min(1.0, MAX_TOTAL_SAMPLES / max(1, total))
-    plan = [(s, sample_frames(s, fps, scale)) for s in segs]
+    total = sum(len(sample_frames(s, fps, pan=pan)) for s in segs)
+    scale = min(1.0, (PAN_MAX_TOTAL if pan else MAX_TOTAL_SAMPLES) / max(1, total))
+    plan = [(s, sample_frames(s, fps, scale, pan=pan)) for s in segs]
     cache = {} if cache is None else cache
-    per_seg: dict[int, list[list[Det]]] = {i: [] for i in range(len(plan))}
+    per_seg: dict[int, list[tuple[int, list[Det]]]] = {i: [] for i in range(len(plan))}
     jobs = []
     for i, (_s, fs) in enumerate(plan):
         for f in fs:
             if f in cache:
-                per_seg[i].append(cache[f])
+                per_seg[i].append((f, cache[f]))
             else:
                 jobs.append((i, f))
     aw = ANALYSIS_WIDTH
@@ -592,7 +743,7 @@ def analyze(
         for (i, dets), (_i, f) in zip(ex.map(work, jobs), jobs):
             fr = [Det(d.x1 / k, d.y1 / k, d.x2 / k, d.y2 / k, d.weight, d.face, d.yaw) for d in dets]
             cache[f] = fr
-            per_seg[i].append(fr)
+            per_seg[i].append((f, fr))
             done += 1
             if progress:
                 progress(done / max(1, len(jobs)))
@@ -600,9 +751,14 @@ def analyze(
         progress(1.0)
     out: dict[int, float] = {}
     for i, (s, _fs) in enumerate(plan):
-        px = best_window_x(per_seg[i], bx, bx + bw, geo.crop_w)
+        samples = sorted(per_seg[i], key=lambda x: x[0])
+        px = best_window_x([d for _f, d in samples], bx, bx + bw, geo.crop_w)
         if px is not None:
             out[s.key] = round(px, 4)
+            if pan and paths_out is not None:
+                path = pan_path(samples, s, bx, bx + bw, geo.crop_w, fps)
+                if path is not None:
+                    paths_out[s.key] = path
     return out
 
 

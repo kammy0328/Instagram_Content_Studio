@@ -388,3 +388,160 @@ def test_cache_keeps_face_direction(tmp_path):
     reframe.save_cache(p, {12: [reframe.Det(1, 2, 3, 4, 0.5, True, -0.734)]})
     d = reframe.load_cache(p)[12][0]
     assert d.face and abs(d.yaw + 0.734) < 1e-3
+
+
+# ---- 컷 안에서 인물 따라가기 (패닝) ----
+def _walk_samples(fn, start=1000, n=120, step=4):
+    return [(start + f, [R.Det(fn(f) - 60, 300, fn(f) + 60, 450, 1.0, True)]) for f in range(2, n - 2, step)]
+
+
+def test_pan_path_follows_a_walking_subject_smoothly():
+    fps, win = 24.0, 608.0
+    seg = R.Segment(1000, 1120, 1000)
+    samples = _walk_samples(lambda f: 500 + 800 * min(1.0, max(0.0, (f - 20) / 60)))
+    path = R.pan_path(samples, seg, 0, 1920, win, fps)
+    assert path is not None and path[0][0] == 0 and path[-1][0] == 119
+    span = 1920 - win
+    xs = np.array([R.path_pos(path, o) for o in range(120)]) * span + win / 2
+    assert abs(xs[0] - 500) < 25 and abs(xs[-1] - 1300) < 25  # 처음/끝은 인물 위치
+    v = np.diff(xs)
+    a = np.diff(v)
+    assert (v >= -0.5).all()  # 한 방향으로만 (되돌아가며 출렁이지 않음)
+    assert abs(v).max() <= R.PAN_MAX_SPEED * win / fps * 1.1
+    assert abs(a).max() <= R.PAN_MAX_ACCEL * win / fps / fps * 1.2  # 출발/멈춤이 툭 끊기지 않음
+
+
+def test_pan_path_ignores_jitter_and_small_moves():
+    seg = R.Segment(0, 120, 0)
+    jitter = _walk_samples(lambda f: 900 + np.random.RandomState(f).randn() * 25, start=0)
+    assert R.pan_path(jitter, seg, 0, 1920, 608, 24) is None
+    step = _walk_samples(lambda f: 900 + (40 if f > 60 else 0), start=0)
+    assert R.pan_path(step, seg, 0, 1920, 608, 24) is None
+
+
+def test_path_is_used_per_frame_and_dropped_when_moved_by_hand(prores_2398, tmp_path):
+    from ics import paths
+    from ics.core import frameindex, media
+    from ics.core.model import Selection
+    from ics.core.project import Project
+    from ics.core.store import Library
+
+    lib = Library()
+    rec = lib.create("PAN", "A", "T", str(prores_2398), str(tmp_path / "out"))
+    info = media.analyze(str(prores_2398))
+    p = Project(rec, lib)
+    p.open()
+    p.attach_media(info, frameindex.build_frame_index(info, paths.cache_dir(rec.id)))
+    p.import_cuts([(0, 40, "a", {}), (40, 240, "b", {})], {"file": "x.xml"})
+    path = [[0, 0.0], [100, 1.0], [199, 1.0]]
+    p.set_cut_x("story", {40: 0.5}, src="auto", paths={40: path})
+    assert p.pos_x_at("story", 40) == 0.0 and abs(p.pos_x_at("story", 90) - 0.5) < 1e-9
+    assert p.pos_x_at("reels", 140) == 1.0  # STORY/REELS 같이
+    sel = Selection.from_dict(p.state.story.to_dict())  # 저장/불러오기
+    assert sel.cut_path == {40: path}
+    p.set_cut_x("story", {40: 0.3}, src="manual")  # 손으로 옮기면 그 컷은 고정 위치
+    assert not p.state.story.cut_path and p.pos_x_at("story", 90) == 0.3
+    p.undo()
+    assert p.state.reels.cut_path == {40: path}
+
+
+def test_render_pans_smoothly_inside_a_cut(prores_2398, opener, tmp_path, monkeypatch):
+    """경로 단계 사이를 직선으로 잇는다: 앞은 왼쪽 끝, 끝은 오른쪽 끝, 가운데는 어느 끝도 아님.
+    단계가 많아 식이 길면 필터 파일로 넘기고, 끝나면 그 파일을 지운다."""
+    from ics.render import engine as E
+
+    monkeypatch.setattr(E, "FILTER_INLINE_MAX", 50)
+    info, idx = opener(prores_2398)
+    geo = compute_geometry(info.display_w, info.display_h, "916", LayoutParams("fill"))
+    right = info.display_w - geo.crop_w
+    steps = [(n, int(right * n / 20), 1) for n in range(0, 20, 2)] + [(20, right)]
+    out = tmp_path / "pan.mp4"
+    E.render_video(info, idx, engine.VideoSpec(30, 54, geo, x_steps=steps), str(out))
+    mid = read_frame_rgb(out, n=0).shape[0] // 2
+    a, m, b = (read_frame_rgb(out, n=k) for k in (0, 10, 22))
+    assert a[mid, 1:3].mean() > 200 and b[mid, -3:-1].mean() > 200
+    assert m[mid, 1:3].mean() < 200 and m[mid, -3:-1].mean() < 200
+    assert not list(tmp_path.glob("*.filter"))  # 필터 파일 정리
+
+
+def test_planner_turns_a_cut_path_into_smooth_render_steps(prores_2398, tmp_path):
+    from ics import paths
+    from ics.core import frameindex, media
+    from ics.core.project import Project
+    from ics.core.store import Library
+    from ics.render.planner import plan_render
+
+    lib = Library()
+    rec = lib.create("RFP", "A", "T", str(prores_2398), str(tmp_path / "out"))
+    info = media.analyze(str(prores_2398))
+    p = Project(rec, lib)
+    p.open()
+    p.attach_media(info, frameindex.build_frame_index(info, paths.cache_dir(rec.id)))
+    p.import_cuts([(0, 40, "a", {}), (40, 240, "b", {})], {"file": "x.xml"})
+    p.set_range("reels", 20, 80)
+    p.set_selection_layout("reels", LayoutParams("fill"))
+    p.set_cut_x("reels", {0: 0.0, 40: 0.5}, paths={40: [[0, 0.0], [10, 1.0], [199, 1.0]]})
+    job = next(j for j in plan_render(p, sections={"reels"}).jobs if j.kind == "reels")
+    steps = job.params["x_steps"]
+    g1 = compute_geometry(info.display_w, info.display_h, "916", LayoutParams("fill", pos_x=1.0))
+    assert steps[0] == [0, 0]  # 앞 컷: 고정
+    assert steps[1] == [20, 0, 1] and steps[2] == [30, g1.crop_x]  # 뒤 컷: 0 -> 끝까지 직선, 마지막 키에서 고정
+
+
+# ---- 릴스 커버 추천 ----
+def _texture(h, w, seed=0):
+    import cv2
+
+    rng = np.random.RandomState(seed)
+    base = cv2.GaussianBlur((rng.rand(h, w) * 255).astype(np.uint8), (0, 0), 6)
+    img = np.clip(base.astype(float) * 0.8 + 60 + rng.rand(h, w) * 40 - 20, 0, 255).astype(np.uint8)
+    return np.dstack([img] * 3)
+
+
+def test_cover_recommendation_skips_blurred_and_side_faces():
+    """초점이 나간(흐린) 얼굴, 옆얼굴, 작은 얼굴은 빼고 선명한 정면 얼굴을 고른다. 컷이 겹치지 않게."""
+    import cv2
+
+    from ics.core import cover
+
+    W, H = cover.COVER_WIDTH, 720
+    face = (500.0, 150.0, 780.0, 500.0)  # 화면 높이의 48%
+
+    class Cut:
+        def __init__(self, a, b):
+            self.start, self.end = a, b
+
+    cuts = [Cut(0, 100), Cut(100, 200), Cut(200, 300)]
+    kind = {}  # 프레임 -> 'sharp' | 'blur' | 'side' | 'small'
+    for f in range(300):
+        kind[f] = "blur" if 100 <= f < 200 else ("side" if f >= 250 else "sharp")
+    kind[30] = "small"
+
+    def decode(f, w, h):
+        img = _texture(h, w, seed=f % 7)
+        if kind[f] == "blur":
+            img = cv2.GaussianBlur(img, (0, 0), 3.0)
+        return img
+
+    class FakeDet:
+        def faces(self, rgb):
+            k = kind[self.f]
+            if k == "small":
+                return [(600.0, 300.0, 630.0, 330.0, 0.9, None, 0.0)]
+            return [(*face, 0.95, None, 0.9 if k == "side" else 0.05)]
+
+    det = FakeDet()
+    calls = []
+
+    def dec(f, w, h):
+        det.f = f
+        calls.append(f)
+        return decode(f, w, h)
+
+    picks = cover.recommend(300, 24.0, cuts, dec, W / H, detector_factory=lambda: det)
+    assert picks, "선명한 정면 얼굴을 못 찾음"
+    frames = [c.frame for c in picks]
+    assert all(kind[f] == "sharp" for f in frames)  # 흐린/옆/작은 얼굴은 없음
+    assert len({next(i for i, c in enumerate(cuts) if c.start <= f < c.end) for f in frames}) == len(frames)
+    assert all(not (98 <= f <= 102 or 198 <= f <= 202) for f in calls)  # 컷 경계 바로 옆은 보지 않음
+    assert "정면" in picks[0].reason()

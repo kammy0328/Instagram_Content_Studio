@@ -326,6 +326,12 @@ def last_update_result(max_age_s: float = 6 * 3600) -> tuple[str, str] | None:
         f.replace(f.with_suffix(".seen.log"))
     except OSError:
         pass
+    if ok:  # 설치가 끝났으니 받아 둔 설치 파일(200MB 넘음)은 필요 없다. 실패했으면 원인 확인용으로 남긴다
+        for p in list(update_dir().glob("*.exe")) + list(update_dir().glob("*.ps1")):
+            try:
+                p.unlink()
+            except OSError:
+                pass
     return ("ok" if ok else "failed"), detail
 
 

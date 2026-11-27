@@ -274,6 +274,7 @@ class LayoutEditor(QGroupBox):
     reframeSomeRequested = Signal()  # 선택한 컷(없으면 지금 컷)만 자동 맞춤
     reframeReset = Signal()
     reframeCancel = Signal()
+    panToggled = Signal(bool)  # 컷 안에서 인물 따라가기 (전체/개별 맞추기 모두에 적용)
 
     def __init__(self, title="화면 배치", reframe: bool = False):
         super().__init__("")
@@ -344,7 +345,8 @@ class LayoutEditor(QGroupBox):
         self.reframe_btn.setToolTip(
             "영상 전체의 모든 컷을 한 번에 분석해(구간 밖 포함), 컷마다 인물이 가장 잘 보이는 가로 위치로 맞춥니다.\n"
             "인물이 컷 안에서 움직이면 움직인 경로의 평균 위치를 가운데로 둡니다. 여러 명이면 여러 명이 모인 쪽.\n"
-            "컷 안에서 크롭이 움직이지는 않고(키프레임 없음), 세로 위치와 확대는 그대로입니다. 인물이 없는 컷은 바꾸지 않습니다."
+            "'컷 안에서 인물 따라가기' 를 켜면, 인물이 크게 움직이는 컷은 카메라처럼 부드럽게 따라갑니다.\n"
+            "세로 위치와 확대는 그대로입니다. 인물이 없는 컷은 바꾸지 않습니다."
         )
         self.reframe_btn.clicked.connect(self.reframeRequested.emit)
         rr.addWidget(self.reframe_btn, 1)
@@ -364,6 +366,14 @@ class LayoutEditor(QGroupBox):
         self.reframe_cancel.setVisible(False)
         rr.addWidget(self.reframe_cancel)
         rv.addLayout(rr)
+        self.pan_check = QCheckBox("컷 안에서 인물 따라가기 (부드러운 패닝)")
+        self.pan_check.setToolTip(
+            "켜면 전체 컷 / 지금 컷 자동 맞춤에서, 인물이 컷 안에서 크게 움직이는 컷만 카메라처럼 부드럽게 따라갑니다\n"
+            "(천천히 출발하고 천천히 멈춤, 작은 흔들림은 따라가지 않음). 끄면 컷마다 고정 위치 하나.\n"
+            "이미 맞춘 컷에는 다시 맞출 때 적용됩니다. 미리보기를 좌우로 끌어 옮긴 컷은 고정 위치가 됩니다."
+        )
+        self.pan_check.toggled.connect(self.panToggled.emit)
+        rv.addWidget(self.pan_check)
         self.reframe_info = QLabel("")
         self.reframe_info.setObjectName("hint")
         self.reframe_info.setWordWrap(True)
@@ -490,6 +500,7 @@ class SelectionPanel(QWidget):
     layoutLive = Signal(object)
     layoutCommit = Signal(object)
     coverSet = Signal()
+    coverSuggest = Signal()  # 커버 추천 (정면 · 초점 맞은 얼굴)
     coverGoto = Signal()
     coverChanged = Signal(str, float)
     coverPreview = Signal(bool)
@@ -590,6 +601,14 @@ class SelectionPanel(QWidget):
         b2.clicked.connect(self.coverGoto.emit)
         r.addWidget(b2)
         gl.addLayout(r)
+        self.cover_suggest_btn = QPushButton("커버 추천")
+        self.cover_suggest_btn.setIcon(icons.icon("sparkles", theme.TEXT, 15))
+        self.cover_suggest_btn.setToolTip(
+            "영상 전체에서 얼굴이 정면에 가깝고 초점이 맞은 프레임을 골라 보여 줍니다.\n"
+            "초점이 나갔거나 움직여 번진 얼굴, 너무 어둡거나 작은 얼굴은 빼고, 컷이 겹치지 않게 최대 6장."
+        )
+        self.cover_suggest_btn.clicked.connect(self.coverSuggest.emit)
+        gl.addWidget(self.cover_suggest_btn)
         self.cover_lbl = QLabel("커버 프레임 미지정")
         self.cover_lbl.setObjectName("hint")
         self.cover_lbl.setWordWrap(True)
@@ -658,6 +677,8 @@ class SelectionPanel(QWidget):
                 for k, name in (("auto", "자동"), ("manual", "수동"), ("none", "인물 없음"))
                 if src.count(k)
             ]
+            if sel.cut_path:
+                parts.append(f"따라가기 {len(sel.cut_path)}")
             self.layout_editor.set_reframe_status(("컷 " + " · ".join(parts)) if parts else "")
         if p.media:
             g = compute_geometry(p.media.display_w, p.media.display_h, "916", sel.layout)

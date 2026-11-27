@@ -80,6 +80,13 @@ def build_video_cmd(
         bg_dim=spec.bg_dim,
         x_steps=spec.x_steps,
     )
+    script = None
+    if len(vf) > FILTER_INLINE_MAX:  # 패닝 식이 길면 명령줄 대신 파일로 (Windows 명령줄은 32K 자 제한)
+        use_fc = True
+        if "[vout]" not in vf:
+            vf = "[0:v]" + vf + "[vout]"
+        script = out_path + ".filter"
+        Path(script).write_text(vf.replace("[0:v]", "[0:v]setpts=PTS-STARTPTS,", 1), encoding="utf-8")
     enc = filters.x264_params(spec.geo, fps_out)
     af, aargs = filters.audio_filter_and_args(info, a_off, dur)
     cmd = [
@@ -99,7 +106,10 @@ def build_video_cmd(
     if use_fc:
         if use_ov:
             cmd += ["-i", spec.overlay_png]
-        cmd += ["-filter_complex", vf.replace("[0:v]", "[0:v]setpts=PTS-STARTPTS,", 1)]
+        if script:
+            cmd += [_filter_script_opt(), script]
+        else:
+            cmd += ["-filter_complex", vf.replace("[0:v]", "[0:v]setpts=PTS-STARTPTS,", 1)]
         cmd += ["-map", "[vout]"]
     else:
         cmd += ["-map", "0:v:0"]
@@ -135,8 +145,21 @@ def build_video_cmd(
         "audio_offset": a_off,
         "overlay": bool(spec.overlay_png),
         "bg_blur": use_bg,
+        "filter_script": script,
     }
     return cmd, meta
+
+
+FILTER_INLINE_MAX = 6000
+
+
+def _filter_script_opt() -> str:
+    """필터 파일 옵션: FFmpeg 7 부터 '-/filter_complex 파일', 그 전에는 '-filter_complex_script'."""
+    import re
+
+    v = ffbin.versions().get("ffmpeg", "")
+    m = re.search(r"version n?(\d+)\.", v)
+    return "-/filter_complex" if (m and int(m.group(1)) >= 7) else "-filter_complex_script"
 
 
 def run_with_progress(
@@ -214,6 +237,9 @@ def render_video(
         except OSError:
             pass
         raise
+    finally:
+        if meta.get("filter_script"):
+            Path(meta["filter_script"]).unlink(missing_ok=True)
 
 
 def verify_video(path: str, expect_frames: int, expect_dur: float, expect_audio: bool, geo: Geometry) -> dict:

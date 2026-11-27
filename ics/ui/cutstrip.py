@@ -77,14 +77,29 @@ class _TileDelegate(QStyledItemDelegate):
             ir = QRectF(th.x() + (th.width() - w) / 2, th.y() + (th.height() - h) / 2, w, h)
             p.drawImage(ir, img)
             if rf is not None:  # STORY/REELS Fill: 9:16 로 잘릴 창을 썸네일 위에 보여 준다 (창 밖은 어둡게)
-                _src, xf, wf = rf
+                xf, wf = rf[1], rf[2]
+                xe = rf[3] if len(rf) > 3 else None  # 인물 따라가기: 끝 창 위치
                 win = QRectF(ir.x() + ir.width() * xf, ir.y(), ir.width() * wf, ir.height())
+                end = QRectF(ir.x() + ir.width() * xe, ir.y(), ir.width() * wf, ir.height()) if xe is not None else win
+                lo_x, hi_x = min(win.x(), end.x()), max(win.right(), end.right())
                 shade = QColor(0, 0, 0, 150)
-                p.fillRect(QRectF(ir.x(), ir.y(), win.x() - ir.x(), ir.height()), shade)
-                p.fillRect(QRectF(win.right(), ir.y(), ir.right() - win.right(), ir.height()), shade)
-                p.setPen(QPen(QColor(255, 255, 255, 200), 1))
+                p.fillRect(QRectF(ir.x(), ir.y(), lo_x - ir.x(), ir.height()), shade)
+                p.fillRect(QRectF(hi_x, ir.y(), ir.right() - hi_x, ir.height()), shade)
                 p.setBrush(Qt.BrushStyle.NoBrush)
-                p.drawRect(win.adjusted(0.5, 0.5, -0.5, -0.5))
+                if xe is not None:  # 처음 창은 점선, 끝 창은 실선 + 움직이는 방향 화살표
+                    p.setPen(QPen(QColor(255, 255, 255, 140), 1, Qt.PenStyle.DashLine))
+                    p.drawRect(win.adjusted(0.5, 0.5, -0.5, -0.5))
+                    p.setPen(QPen(QColor(255, 255, 255, 220), 1))
+                    p.drawRect(end.adjusted(0.5, 0.5, -0.5, -0.5))
+                    y = ir.bottom() - 6
+                    a, b = win.center().x(), end.center().x()
+                    p.drawLine(QPointF(a, y), QPointF(b, y))
+                    d = 4 if b >= a else -4
+                    p.drawLine(QPointF(b, y), QPointF(b - d, y - 3))
+                    p.drawLine(QPointF(b, y), QPointF(b - d, y + 3))
+                else:
+                    p.setPen(QPen(QColor(255, 255, 255, 200), 1))
+                    p.drawRect(win.adjusted(0.5, 0.5, -0.5, -0.5))
         # 번호 배지 (왼쪽 위)
         p.setFont(self._f_badge)
         label = f"{d['num']}"

@@ -352,45 +352,57 @@ class Project:
         label: str = "",
         src: str = "manual",
         analyzed: list[int] | None = None,
+        paths: dict[int, list] | None = None,
     ) -> None:
         """컷별 가로 위치 (Fill 9:16). replace_all 이면 기존 값을 모두 지우고 values 로 바꾼다.
-        analyzed: 자동 분석한 컷 키 목록 (values 에 없는 키는 '인물 없음' 으로 기록하고 위치는 그대로 둔다)."""
+        analyzed: 자동 분석한 컷 키 목록 (values 에 없는 키는 '인물 없음' 으로 기록하고 위치는 그대로 둔다).
+        paths: 컷 안에서 인물 따라가기 경로. 값을 새로 정한 컷은 경로가 있으면 경로로, 없으면 고정 위치로 바뀐다
+        (손으로 옮기면 그 컷의 패닝은 지워진다)."""
         sel = self._sel(which)
+        paths = paths or {}
         with self.edit(label or "컷 가로 위치", self.REFRAME_LINKED + ("state",)):
             new = {} if replace_all else dict(sel.cut_x)
             new_src = {} if replace_all else dict(sel.cut_x_src)
+            new_path = {} if replace_all else dict(sel.cut_path)
             for k, v in values.items():
                 new[int(k)] = min(1.0, max(0.0, float(v)))
                 new_src[int(k)] = src
+                if int(k) in paths:
+                    new_path[int(k)] = [list(p) for p in paths[int(k)]]
+                else:
+                    new_path.pop(int(k), None)
             for k in analyzed or []:
                 if int(k) not in values:
                     new_src[int(k)] = "none" if int(k) not in new else new_src.get(int(k), "manual")
-            self._put_cut_x(new, new_src)
+            self._put_cut_x(new, new_src, new_path)
 
     def clear_cut_x(self, which: str, keys: list[int] | None = None) -> None:
         """keys 가 없으면 모든 컷을 가운데로, 있으면 그 컷만. (STORY/REELS 함께)"""
         sel = self._sel(which)
         with self.edit("컷 가로 위치 초기화", self.REFRAME_LINKED + ("state",)):
             if keys is None:
-                self._put_cut_x({}, {})
+                self._put_cut_x({}, {}, {})
             else:
                 self._put_cut_x(
                     {k: v for k, v in sel.cut_x.items() if k not in keys},
                     {k: v for k, v in sel.cut_x_src.items() if k not in keys},
+                    {k: v for k, v in sel.cut_path.items() if k not in keys},
                 )
 
-    def _put_cut_x(self, cut_x: dict, src: dict) -> None:
+    def _put_cut_x(self, cut_x: dict, src: dict, paths: dict | None = None) -> None:
         for w in self.REFRAME_LINKED:
             sel = self._sel(w)
             sel.cut_x, sel.cut_x_src = dict(cut_x), dict(src)
+            if paths is not None:
+                sel.cut_path = {k: [list(p) for p in v] for k, v in paths.items()}
 
     def _link_cut_x(self) -> None:
         """예전 저장본: 한쪽에만 컷별 위치가 있으면 다른 쪽에도 복사한다 (둘 다 있으면 STORY 기준)."""
         st, rl = self.state.story, self.state.reels
-        if st.cut_x or st.cut_x_src:
-            self._put_cut_x(st.cut_x, st.cut_x_src)
-        elif rl.cut_x or rl.cut_x_src:
-            self._put_cut_x(rl.cut_x, rl.cut_x_src)
+        if st.cut_x or st.cut_x_src or st.cut_path:
+            self._put_cut_x(st.cut_x, st.cut_x_src, st.cut_path)
+        elif rl.cut_x or rl.cut_x_src or rl.cut_path:
+            self._put_cut_x(rl.cut_x, rl.cut_x_src, rl.cut_path)
 
     def reframe_segments(self, which: str, whole: bool = False):
         """컷 단위 조각. whole 이면 구간과 상관없이 영상 전체의 모든 컷 (자동 맞춤은 전체 컷에 미리 해 둔다:
@@ -407,7 +419,7 @@ class Project:
         from .reframe import pos_for_frame
 
         sel = self._sel(which)
-        return pos_for_frame(frame, self.state.cuts, sel.cut_x, sel.layout.pos_x)
+        return pos_for_frame(frame, self.state.cuts, sel.cut_x, sel.layout.pos_x, sel.cut_path)
 
     def clear_selection(self, which: str) -> None:
         sel = self._sel(which)

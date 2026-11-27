@@ -1908,3 +1908,42 @@ def test_app_reopens_the_project_on_the_new_master(qapp, prores_2398, tmp_path, 
     app._switching = True
     w2.close()
     pump(qapp, 200)
+
+
+def test_pan_option_is_shared_and_auto_fit_results_with_paths_are_applied(qapp, win):
+    """'컷 안에서 인물 따라가기' 체크는 STORY/REELS 가 함께 쓰고 설정에 남는다. 자동 맞춤 결과의 경로가 컷에 들어간다."""
+    s_cb = win.story_panel.layout_editor.pan_check
+    r_cb = win.reels_panel.layout_editor.pan_check
+    s_cb.setChecked(False)
+    assert not r_cb.isChecked() and win.settings.get("reframe_pan") is False and not win.pan_enabled()
+    r_cb.setChecked(True)
+    assert s_cb.isChecked() and win.pan_enabled()
+    win.project.import_cuts([(0, 120, "a", {}), (120, 240, "b", {})], {"file": "x.xml"})
+    path = [[0, 0.1], [60, 0.5], [119, 0.9]]
+    win._reframe_finished("story", ({0: 0.5, 120: 0.4}, {0: path}), "", None)
+    assert win.project.state.reels.cut_path == {0: path}
+    assert abs(win.project.pos_x_at("story", 60) - 0.5) < 1e-9 and win.project.pos_x_at("story", 130) == 0.4
+    info = win._cut_reframe_info(0, 120)
+    assert len(info) == 4 and info[1] < info[3]  # 처음 창 -> 끝 창 (오른쪽으로)
+
+
+def test_cover_suggestion_shows_choices_and_sets_the_cover(qapp, win, monkeypatch):
+    from ics.core import cover
+    from ics.ui import cover_picker
+
+    c = cover.CoverCandidate(77, 0.9, 1.0, 0.02, 0.3, (0, 0, 10, 10))
+    monkeypatch.setattr(cover, "recommend", lambda *a, **k: [c])
+    shown = []
+
+    def fake_exec(dlg):
+        shown.append([b.text() for b in dlg.buttons])
+        dlg.buttons[0].click()
+        return 1
+
+    monkeypatch.setattr(cover_picker.CoverPickerDialog, "exec", fake_exec)
+    win.set_tab("reels")
+    win.reels_panel.cover_suggest_btn.click()
+    assert _wait(qapp, lambda: shown, 20)
+    assert "정면" in shown[0][0]
+    assert win.project.state.cover.frame == 77 and win.playhead == 77
+    assert win.reels_panel.cover_suggest_btn.text() == "커버 추천"
