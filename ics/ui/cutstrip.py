@@ -38,6 +38,25 @@ def representative_frame(start: int, end: int) -> int:
     return start + max(0, (end - start - 1) // 2)
 
 
+_paint_error_logged = False
+
+
+def _log_paint_error() -> None:
+    global _paint_error_logged
+    if _paint_error_logged:
+        return
+    _paint_error_logged = True
+    import traceback
+
+    try:
+        from .. import paths
+
+        with (paths.logs_dir() / "crash.log").open("a", encoding="utf-8") as f:
+            f.write("[컷 목록 그리기 오류]\n" + traceback.format_exc() + "\n")
+    except OSError:
+        pass
+
+
 class _TileDelegate(QStyledItemDelegate):
     def __init__(self, strip: "CutStrip"):
         super().__init__(strip)
@@ -52,6 +71,16 @@ class _TileDelegate(QStyledItemDelegate):
         return QSize(TILE_W, TILE_H)
 
     def paint(self, p: QPainter, option, index) -> None:
+        """그리다 오류가 나도 앱이 오류 창을 반복해 띄우며 멈추지 않게: 기록만 남기고 그 칸은 건너뛴다."""
+        p.save()
+        try:
+            self._paint(p, option, index)
+        except Exception:  # noqa: BLE001
+            _log_paint_error()
+        finally:
+            p.restore()
+
+    def _paint(self, p: QPainter, option, index) -> None:
         d = index.data(DATA)
         if not d:
             return
@@ -94,9 +123,9 @@ class _TileDelegate(QStyledItemDelegate):
                     y = ir.bottom() - 6
                     a, b = win.center().x(), end.center().x()
                     p.drawLine(QPointF(a, y), QPointF(b, y))
-                    d = 4 if b >= a else -4
-                    p.drawLine(QPointF(b, y), QPointF(b - d, y - 3))
-                    p.drawLine(QPointF(b, y), QPointF(b - d, y + 3))
+                    head = 4 if b >= a else -4  # (d 는 컷 데이터라 다른 이름)
+                    p.drawLine(QPointF(b, y), QPointF(b - head, y - 3))
+                    p.drawLine(QPointF(b, y), QPointF(b - head, y + 3))
                 else:
                     p.setPen(QPen(QColor(255, 255, 255, 200), 1))
                     p.drawRect(win.adjusted(0.5, 0.5, -0.5, -0.5))
@@ -111,12 +140,16 @@ class _TileDelegate(QStyledItemDelegate):
         p.drawRoundedRect(badge, 4, 4)
         p.setPen(QColor("#ffffff") if selected else theme.C["TEXT"])
         p.drawText(badge, Qt.AlignmentFlag.AlignCenter, label)
-        # 가로 위치: 예외만 작은 점으로 (자동은 표시 없음 = 기본). 수동 = 살구색 점, 인물 없음 = 빈 동그라미
+        # 가로 위치 표시: 자동 = 초록 점, 수동 = 살구색 점, 인물 없음 = 빈 동그라미 (맞추지 않은 컷은 표시 없음)
         src = rf[0] if rf is not None else None
-        if src in ("manual", "none"):
+        if src in ("auto", "manual", "none"):
             c = QPointF(th.right() - 8, th.y() + 8)
             p.setPen(QPen(QColor(0, 0, 0, 160), 2))
-            p.setBrush(QColor(theme.ACCENT2) if src == "manual" else QColor(0, 0, 0, 120))
+            p.setBrush(
+                QColor(theme.OK)
+                if src == "auto"
+                else (QColor(theme.ACCENT2) if src == "manual" else QColor(0, 0, 0, 120))
+            )
             p.drawEllipse(c, 4, 4)
             if src == "none":
                 p.setPen(QPen(QColor(255, 255, 255, 170), 1.2))
@@ -189,7 +222,8 @@ class CutStrip(QListWidget):
         self.setSpacing(0)
         self.setToolTip(
             "컷 목록 (길이와 무관하게 같은 크기). 클릭: 선택 / Shift+클릭: 범위 / Ctrl+클릭: 추가·해제 / 오른쪽 클릭: 메뉴 (병합 등)\n"
-            "Fill 9:16 의 잘릴 창은 밝게, 오른쪽 위 점: 살구색 = 손으로 옮김, 빈 동그라미 = 인물을 못 찾음"
+            "Fill 9:16 의 잘릴 창은 밝게, 오른쪽 위 점: 초록 = 인물 자동 맞춤, 살구색 = 손으로 옮김, "
+            "빈 동그라미 = 인물을 못 찾음 (점선 → 실선 창 = 컷 안에서 인물 따라가기)"
         )
         self.itemSelectionChanged.connect(self._on_selection)
         self.clicked.connect(self._on_clicked)

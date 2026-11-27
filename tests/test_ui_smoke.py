@@ -1947,3 +1947,72 @@ def test_cover_suggestion_shows_choices_and_sets_the_cover(qapp, win, monkeypatc
     assert "정면" in shown[0][0]
     assert win.project.state.cover.frame == 77 and win.playhead == 77
     assert win.reels_panel.cover_suggest_btn.text() == "커버 추천"
+
+
+def test_reels_defaults_to_fill_and_story_auto_fit_survives_fit_fill_switches(qapp, win):
+    """새 프로젝트의 REELS 는 Fill 이 기본. STORY 에서 한 전체 컷 자동 맞춤은 REELS 에도 그대로이고,
+    Fit 으로 바꿨다 Fill 로 돌아와도(어느 쪽에서든) 지워지지 않는다. 컷 목록에는 자동 표시(초록 점)."""
+    from dataclasses import replace
+
+    from ics.core.model import EditState
+
+    assert EditState().reels.layout.mode == "fill"
+    p = win.project
+    p.import_cuts([(0, 120, "a", {}), (120, 240, "b", {})], {"file": "x.xml"})
+    win.set_tab("story")
+    win._reframe_finished("story", ({0: 0.2, 120: 0.8}, {}), "", None)
+    for which in ("reels", "story"):
+        sel = getattr(p.state, which)
+        p.set_selection_layout(which, replace(sel.layout, mode="fit"))
+        p.set_selection_layout(which, replace(getattr(p.state, which).layout, mode="fill"))
+    assert p.state.story.cut_x == {0: 0.2, 120: 0.8} == p.state.reels.cut_x
+    win.set_tab("reels")
+    pump(qapp, 50)
+    assert win._cut_reframe_info(0, 120)[0] == "auto"
+    # 썸네일 오른쪽 위에 초록 점이 그려진다
+    from PySide6.QtGui import QColor
+
+    from ics.ui import theme
+
+    win.cut_strip.viewport().update()
+    pump(qapp, 100)
+    img = win.cut_strip.viewport().grab().toImage()
+    r = win.cut_strip.visualItemRect(win.cut_strip.item(0))
+    ok = QColor(theme.OK)
+    near = [
+        QColor(img.pixel(x, y))
+        for x in range(r.right() - 20, r.right() - 2)
+        for y in range(r.top() + 2, r.top() + 20)
+        if 0 <= x < img.width() and 0 <= y < img.height()
+    ]
+    assert any(
+        abs(c.red() - ok.red()) < 30 and abs(c.green() - ok.green()) < 30 and abs(c.blue() - ok.blue()) < 30
+        for c in near
+    )
+
+
+def test_cut_strip_draws_panning_cuts_without_errors(qapp, win, monkeypatch):
+    """따라가기(패닝) 컷의 썸네일 그리기 오류: 화살표 방향 변수가 컷 데이터(d)를 덮어써 앱이 오류 창을 띄우며 멈췄다."""
+    import sys
+
+    from ics.ui import cutstrip
+
+    errs = []
+    monkeypatch.setattr(sys, "excepthook", lambda *a: errs.append(a))
+    monkeypatch.setattr(cutstrip, "_log_paint_error", lambda: errs.append("paint"))
+    from PySide6.QtGui import QImage
+
+    img = QImage(160, 90, QImage.Format.Format_RGB32)
+    img.fill(0x404040)
+    monkeypatch.setattr(win.cut_strip, "thumb", lambda _f: img)  # 썸네일이 있어야 창/화살표를 그린다
+    win.project.import_cuts([(0, 120, "a", {}), (120, 240, "b", {})], {"file": "x.xml"})
+    win.set_tab("story")
+    win._reframe_finished(
+        "story", ({0: 0.5, 120: 0.4}, {0: [[0, 0.1], [119, 0.9]], 120: [[0, 0.9], [119, 0.1]]}), "", None
+    )
+    pump(qapp, 50)
+    win.cut_strip.viewport().grab()  # 실제로 그린다
+    win.set_tab("reels")
+    pump(qapp, 50)
+    win.cut_strip.viewport().grab()
+    assert not errs
