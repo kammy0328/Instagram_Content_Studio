@@ -77,10 +77,10 @@ def _reframe(info, project, which: str, sel):
     from ..core import reframe
 
     geo = compute_geometry(info.display_w, info.display_h, "916", sel.layout)
-    if sel.layout.mode != "fill" or not sel.cut_x:
+    if sel.layout.mode != "fill" or not (sel.cut_x or sel.cut_path):
         return geo, None
     segs = reframe.segments(sel.start, sel.end, project.state.cuts)
-    steps = reframe.crop_steps(info.display_w, info.display_h, sel.layout, segs, sel.cut_x)
+    steps = reframe.crop_steps(info.display_w, info.display_h, sel.layout, segs, sel.cut_x, sel.cut_path)
     if not steps:
         return geo, None
     if len(steps) == 1:

@@ -34,6 +34,8 @@ class Selection:
     cut_x: dict[int, float] = field(default_factory=dict)
     # 컷별 위치가 어떻게 정해졌는지 {컷 키: 'auto'(인물 자동) | 'manual'(드래그) | 'none'(자동 분석했지만 인물 없음)}
     cut_x_src: dict[int, str] = field(default_factory=dict)
+    # 컷 안에서 인물 따라가기: 인물이 크게 움직인 컷의 부드러운 패닝 경로 {컷 키: [[컷 시작 기준 프레임, pos_x], ...]}
+    cut_path: dict[int, list] = field(default_factory=dict)
 
     @property
     def length(self) -> int:
@@ -48,6 +50,7 @@ class Selection:
             "layout": self.layout.to_dict(),
             "cut_x": {str(k): v for k, v in self.cut_x.items()},
             "cut_x_src": {str(k): v for k, v in self.cut_x_src.items()},
+            "cut_path": {str(k): [list(p) for p in v] for k, v in self.cut_path.items()},
         }
 
     @classmethod
@@ -66,6 +69,14 @@ class Selection:
                     src[int(k)] = v
             except (TypeError, ValueError):
                 continue
+        paths = {}
+        for k, v in (d.get("cut_path") or {}).items():
+            try:
+                pts = [[int(a), min(1.0, max(0.0, float(b)))] for a, b in v]
+                if len(pts) > 1:
+                    paths[int(k)] = pts
+            except (TypeError, ValueError):
+                continue
         return cls(
             d.get("enabled", False),
             d.get("start", 0),
@@ -74,6 +85,7 @@ class Selection:
             LayoutParams.from_dict(d.get("layout")),
             cut_x,
             src,
+            paths,
         )
 
 

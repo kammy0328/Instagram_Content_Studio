@@ -80,7 +80,8 @@ class ReframeService(QObject):
     - 검출 결과는 프로젝트 캐시 폴더에 저장해 STORY/REELS, 다시 누르기, 컷 하나만 맞추기가 함께 쓴다"""
 
     progress = Signal(str, float)
-    finished = Signal(str, object, str, object)  # (which, {컷 키: pos_x}, 오류, 분석한 컷 키 목록 또는 None=전체)
+    # (which, ({컷 키: pos_x}, {컷 키: 패닝 경로}), 오류, 분석한 컷 키 목록 또는 None=전체)
+    finished = Signal(str, object, str, object)
 
     def __init__(self, info: MediaInfo, index: FrameIndex, parent=None, cache_dir: Path | None = None):
         super().__init__(parent)
@@ -97,13 +98,13 @@ class ReframeService(QObject):
         if index.count == self.index.count:  # 프레임이 1:1 로 맞을 때만
             self.proxy_path, self.proxy_index = path, index
 
-    def start(self, which: str, layout, segs, keys: list[int] | None = None) -> bool:
+    def start(self, which: str, layout, segs, keys: list[int] | None = None, pan: bool = False) -> bool:
         if self.busy:
             return False
         self.busy = True
         self._cancel.clear()
         threading.Thread(
-            target=self._run, args=(which, layout, list(segs), keys), name="ics-reframe", daemon=True
+            target=self._run, args=(which, layout, list(segs), keys, pan), name="ics-reframe", daemon=True
         ).start()
         return True
 
@@ -139,10 +140,11 @@ class ReframeService(QObject):
         k = min(keys, key=lambda x: abs(x - frame))
         return k, list(cache.get(k, []))
 
-    def _run(self, which, layout, segs, keys) -> None:
+    def _run(self, which, layout, segs, keys, pan: bool = False) -> None:
         from ..core import reframe
 
         res, error = {}, ""
+        paths: dict = {}
         with self._lock:
             if self._cache is None:
                 self._cache = reframe.load_cache(self.cache_path) if self.cache_path else {}
@@ -158,6 +160,8 @@ class ReframeService(QObject):
                 self._cancel,
                 lambda f: self.progress.emit(which, f),
                 cache=cache,
+                pan=pan,
+                paths_out=paths,
             )
         except InterruptedError:
             error = "취소했습니다."
@@ -169,7 +173,7 @@ class ReframeService(QObject):
             except OSError:
                 pass
         self.busy = False
-        self.finished.emit(which, res, error, keys)
+        self.finished.emit(which, (res, paths), error, keys)
 
 
 # ======================================================================= 프록시

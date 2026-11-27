@@ -31,16 +31,37 @@ def crop_filter(info: MediaInfo, geo: Geometry, x_steps: list[tuple[int, int]] |
     sx = gw / info.display_w
     cw = max(2, int(round(geo.crop_w * sx)))
 
+    moving_steps = bool(x_steps) and any(len(s) > 2 and s[2] for s in x_steps)
+
     def code_x(x: int) -> int:
         cx = int(round(x * sx))
-        cx -= cx % 2
+        if not moving_steps:
+            cx -= cx % 2
         return max(0, min(cx, gw - cw))
 
     if x_steps and len(x_steps) > 1:
-        expr = str(code_x(x_steps[-1][1]))
-        for (_n_from, _x), (n_next, _) in reversed(list(zip(x_steps[:-1], x_steps[1:]))):
-            expr = f"if(lt(n,{n_next}),{code_x(_x)},{expr})"
-        return f"crop={cw}:{geo.crop_h}:'{expr}':{geo.crop_y}"
+        moving = any(len(s) > 2 and s[2] for s in x_steps)
+
+        def leaf(i: int) -> str:
+            s = x_steps[i]
+            a = code_x(s[1])
+            if len(s) > 2 and s[2] and i + 1 < len(x_steps):  # 다음 단계까지 직선으로 (패닝)
+                n0, n1 = int(s[0]), int(x_steps[i + 1][0])
+                b = code_x(x_steps[i + 1][1])
+                if b != a and n1 > n0:
+                    return f"{a}+{b - a}*(n-{n0})/{n1 - n0}"
+            return str(a)
+
+        def tree(i: int, j: int) -> str:
+            """단계 i..j 를 이진 탐색 꼴로 (단계가 수백 개여도 식이 깊어지지 않게)."""
+            if i == j:
+                return leaf(i)
+            m = (i + j + 1) // 2
+            return f"if(lt(n,{int(x_steps[m][0])}),{tree(i, m - 1)},{tree(m, j)})"
+
+        expr = tree(0, len(x_steps) - 1)
+        # 패닝은 1픽셀 단위로 움직여야 부드럽다 (exact: 크로마 때문에 2픽셀씩 끊기지 않게)
+        return f"crop={cw}:{geo.crop_h}:'{expr}':{geo.crop_y}" + (":exact=1" if moving else "")
     cx = int(round(geo.crop_x * sx))
     if cx + cw > gw:
         cw = gw - cx

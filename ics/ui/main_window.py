@@ -386,6 +386,8 @@ class EditorWindow(QMainWindow):
             )
             panel.layout_editor.reframeReset.connect(lambda w=which: self.project.clear_cut_x(w))
             panel.layout_editor.reframeCancel.connect(self._cancel_reframe)
+            panel.layout_editor.pan_check.setChecked(bool(self.settings.get("reframe_pan", True)))
+            panel.layout_editor.panToggled.connect(self._pan_toggled)
             panel.layoutLive.connect(lambda lp, w=which: self._layout_live(w, lp))
             panel.layoutCommit.connect(lambda _lp: self._layout_commit())
             panel.layout_editor.cropRequested.connect(lambda again, w=which: self._request_letterbox(w, again))
@@ -666,10 +668,17 @@ class EditorWindow(QMainWindow):
             return None
         m = self.project.media
         key = start if any(c.start == start for c in self.project.state.cuts) else -1
-        g = compute_geometry(
-            m.display_w, m.display_h, "916", replace(sel.layout, pos_x=sel.cut_x.get(key, sel.layout.pos_x))
-        )
-        return sel.cut_x_src.get(key), g.crop_x / m.display_w, g.crop_w / m.display_w
+
+        def xfrac(px: float) -> tuple[float, float]:
+            g = compute_geometry(m.display_w, m.display_h, "916", replace(sel.layout, pos_x=px))
+            return g.crop_x / m.display_w, g.crop_w / m.display_w
+
+        path = sel.cut_path.get(key)
+        if path:  # 인물 따라가기: 처음 창과 끝 창
+            (x0, w), (x1, _w) = xfrac(path[0][1]), xfrac(path[-1][1])
+            return sel.cut_x_src.get(key), x0, w, x1
+        x, w = xfrac(sel.cut_x.get(key, sel.layout.pos_x))
+        return sel.cut_x_src.get(key), x, w
 
     def _segment_key_at(self, which: str, frame: int) -> int:
         for s in self.project.reframe_segments(which):
@@ -717,8 +726,21 @@ class EditorWindow(QMainWindow):
                 self.toast("자동으로 맞출 컷을 고르세요.")
                 return
         panel = self.story_panel if which == "story" else self.reels_panel
-        if self.reframer.start(which, sel.layout, segs, keys):
+        if self.reframer.start(which, sel.layout, segs, keys, pan=self.pan_enabled()):
             panel.layout_editor.set_reframe_status("인물을 찾는 중… 0%", busy=True)
+
+    def _pan_toggled(self, on: bool) -> None:
+        """'컷 안에서 인물 따라가기' 는 STORY/REELS 공통 설정 (두 탭 체크 상자를 함께 맞춘다)."""
+        self.settings.set("reframe_pan", bool(on))
+        for panel in (self.story_panel, self.reels_panel):
+            cb = panel.layout_editor.pan_check
+            if cb.isChecked() != on:
+                cb.blockSignals(True)
+                cb.setChecked(on)
+                cb.blockSignals(False)
+
+    def pan_enabled(self) -> bool:
+        return bool(self.settings.get("reframe_pan", True))
 
     def _cancel_reframe(self) -> None:
         self._reframe_queue = []
@@ -728,7 +750,10 @@ class EditorWindow(QMainWindow):
         panel = self.story_panel if which == "story" else self.reels_panel
         panel.layout_editor.set_reframe_status(f"인물을 찾는 중… {int(f * 100)}%", busy=True)
 
-    def _reframe_finished(self, which: str, res: dict, error: str, keys) -> None:
+    def _reframe_finished(self, which: str, res, error: str, keys) -> None:
+        paths: dict = {}
+        if isinstance(res, tuple):  # (컷별 위치, 패닝 경로)
+            res, paths = res
         panel = self.story_panel if which == "story" else self.reels_panel
         if error:
             panel.layout_editor.set_reframe_status(error)
@@ -746,10 +771,12 @@ class EditorWindow(QMainWindow):
             label="인물 기준 자동 맞춤" if keys is None else "선택 컷 자동 맞춤",
             src="auto",
             analyzed=analyzed,
+            paths=paths,
         )
         n = len(analyzed)
         msg = (
             f"컷 {n}개 중 {len(res)}개를 인물 기준으로 맞췄습니다"
+            + (f" (그중 {len(paths)}개는 인물을 따라 움직임)" if paths else "")
             if res
             else "인물을 찾지 못해 위치를 바꾸지 않았습니다"
         )
