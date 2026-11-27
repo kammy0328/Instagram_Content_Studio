@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QPointF, QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QEvent, QObject, QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QIcon, QLinearGradient, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractButton,
+    QApplication,
     QButtonGroup,
     QFrame,
     QHBoxLayout,
@@ -345,7 +346,8 @@ class _SectionHead(QAbstractButton):
             self._hover = t == QEvent.Type.HoverEnter
             self.update()
         elif t == QEvent.Type.ToolTip:
-            if self.help_text and self._help_rect().adjusted(-4, -4, 4, 4).contains(e.position()):
+            # 도움말 이벤트(QHelpEvent)에는 position() 이 없다 (pos() 만)
+            if self.help_text and self._help_rect().adjusted(-4, -4, 4, 4).contains(QPointF(e.pos())):
                 QToolTip.showText(e.globalPos(), self.help_text, self)
             else:
                 QToolTip.hideText()
@@ -485,3 +487,60 @@ def control_icon(widget, standard, color: str = theme.TEXT) -> QIcon:
     painter.fillRect(pixmap.rect(), QColor(color))
     painter.end()
     return QIcon(pixmap)
+
+
+_TEXT_INPUTS = None
+
+
+def _is_text_input(w) -> bool:
+    global _TEXT_INPUTS
+    if _TEXT_INPUTS is None:
+        from PySide6.QtWidgets import QAbstractSpinBox, QLineEdit, QPlainTextEdit, QTextEdit
+
+        _TEXT_INPUTS = (QLineEdit, QTextEdit, QPlainTextEdit, QAbstractSpinBox)
+    while w is not None:
+        if isinstance(w, _TEXT_INPUTS):
+            return True
+        if w.isWindow():
+            return False
+        w = w.parentWidget()
+    return False
+
+
+class FocusGuard(QObject):
+    """입력칸 밖을 누르면 입력칸에서 포커스를 뺀다. 그래야 제목을 고친 뒤 미리보기/빈 곳을 누르고 Space 를 누르면
+    글자 대신 재생이 된다 (예전: 포커스가 입력칸에 남아 Space 가 글자로 들어감).
+    Esc 는 입력칸에서 빠져나오고, 한 줄 입력칸의 Enter 도 입력을 마친다."""
+
+    def __init__(self, window):
+        super().__init__(window)
+        self.win = window
+
+    def eventFilter(self, obj, ev):  # noqa: N802
+        try:
+            return self._filter(obj, ev)
+        except (AttributeError, RuntimeError):  # 창이 닫히며 지워지는 중
+            return False
+
+    def _filter(self, obj, ev):
+        t = ev.type()
+        if t == QEvent.Type.MouseButtonPress and isinstance(obj, QWidget):
+            app = QApplication.instance()
+            fw = app.focusWidget()
+            if fw is None or not _is_text_input(fw) or fw.window() is not self.win:
+                return False
+            if obj.window() is not self.win or _is_text_input(obj):
+                return False  # 다른 창(메뉴, 목록 펼침)이나 입력칸끼리의 이동은 그대로
+            fw.clearFocus()
+        elif t == QEvent.Type.KeyPress and isinstance(obj, QWidget) and _is_text_input(obj):
+            from PySide6.QtWidgets import QLineEdit
+
+            k = ev.key()
+            if k == Qt.Key.Key_Escape or (
+                k in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and isinstance(obj, QLineEdit) and obj.window() is self.win
+            ):
+                if obj.window() is self.win:
+                    obj.clearFocus()
+                    if k == Qt.Key.Key_Escape:
+                        return True
+        return False

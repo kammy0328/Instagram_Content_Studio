@@ -111,6 +111,10 @@ ROLE_CANON = {
 _HEADERS = {"credit", "credits", "크레딧", "staff", "스태프", "스탭", "cast", "출연", "credit list", "크레딧 정리"}
 # 크레딧 맨 끝의 저작권 문구 (역할 구분자가 없어도 오류가 아니다)
 _COPYRIGHT_RE = re.compile(r"^\s*(?:\(c\)|©|copyright\b)|all rights reserved", re.I)
+# 인스타그램이 빈 줄을 지우므로 묶음 사이에 넣는 한두 글자 구분 줄 ('_', '.', 'ㅡ' 등). 원문 그대로 둔다
+_SPACER_RE = re.compile(r"^[_.\-–—ㅡ·•]{1,2}$")
+# 역할 이름의 소문자 단어 중 대문자로 시작하지 않는 단어 (Director of Photography)
+_ROLE_SMALL_WORDS = {"of", "and", "the", "for", "in", "on", "by", "a", "an", "to", "at", "with"}
 _PEOPLE_SPLIT = re.compile(r"\s*(?:,|;|、|&|·|ㆍ|\+|/|\band\b|\s+및\s+)\s*", re.I)
 
 
@@ -171,7 +175,21 @@ def canon_role(role: str) -> tuple[str, bool]:
     k = _norm_role_key(r)
     if k in ROLE_CANON:
         return ROLE_CANON[k], True
-    return r, False
+    return _title_role(r), False
+
+
+def _title_role(r: str) -> str:
+    """사전에 없는 영문 역할의 대소문자를 사전 역할과 맞춘다 ('Art team' -> 'Art Team').
+    모두 대문자이거나(PRODUCTION DESIGN) 대문자가 섞인 단어(VFX, iPhone)는 그대로 둔다."""
+    if not re.search(r"[A-Za-z]", r) or r.upper() == r:
+        return r
+    words = r.split(" ")
+    out = []
+    for i, w in enumerate(words):
+        if w.islower() and w.isascii() and w[:1].isalpha() and (i == 0 or w not in _ROLE_SMALL_WORDS):
+            w = w[:1].upper() + w[1:]
+        out.append(w)
+    return " ".join(out)
 
 
 # '|' 와 모양이 같아 구분자 대신 쓰이는 문자들 (한글 자모 ㅣ, 전각/박스 세로줄 등). 글자 자체가 구분자로만 쓰이므로 무조건 '|' 로 본다.
@@ -351,7 +369,27 @@ def parse_credits(
             continue
         if _norm_role_key(line.strip("[]():-=*# ")) in _HEADERS or re.fullmatch(r"[-=_*~#\s]{3,}", line):
             continue
+        if _SPACER_RE.fullmatch(line):
+            gid += 1
+            if rows and rows[-1].role == "" and _SPACER_RE.fullmatch(rows[-1].text):
+                continue  # 구분 줄이 이어지면 하나만
+            rows.append(
+                CreditRow(role="", status="ok", raw_lines=[original], text=line, reasons=["묶음 구분 줄 (그대로 유지)"])
+            )
+            continue
         line, sep_note = _fix_lookalike_separator(line)
+        if _split_role(line) is None and _is_group_title(lines, idx, line):
+            gid += 1
+            rows.append(
+                CreditRow(
+                    role="",
+                    status="ok",
+                    raw_lines=[original],
+                    text=original.strip(),
+                    reasons=["묶음 제목으로 인식했습니다 (원문 그대로 유지)"],
+                )
+            )
+            continue
         if _split_role(line) is None and _next_line_is_ordinal(lines, idx):
             gid += 1
             rows.append(
@@ -392,6 +430,10 @@ def parse_credits(
                 continue
             by_role[key] = row
         rows.append(row)
+    while rows and rows[-1].role == "" and _SPACER_RE.fullmatch(rows[-1].text):
+        rows.pop()  # 맨 끝 구분 줄은 의미가 없다
+    while rows and rows[0].role == "" and _SPACER_RE.fullmatch(rows[0].text):
+        rows.pop(0)
     for r in rows:
         if lookup is not None:
             _apply_dictionary(r, lookup, auto_apply_unique)
@@ -417,6 +459,22 @@ def _join_wrapped_lines(lines: list[str]) -> list[str]:
         else:
             out.append(ln)
     return out
+
+
+def _is_group_title(lines: list[str], idx: int, line: str) -> bool:
+    """묶음 첫 줄의 짧은 제목 (예: 구분 줄 '_' 다음의 'Post Production' 뒤에 'Producer | ...' 가 이어짐).
+    앞이 빈 줄/구분 줄이고, 바로 다음 줄이 역할 줄일 때만 인정한다 (역할 줄 사이에 끼인 줄은 추측하지 않는다)."""
+    if len(line) > 40 or "@" in line or URL_RE.search(line) or len(line.split()) > 5:
+        return False
+    if idx == 0:
+        return False  # 맨 첫 줄은 기존 '크레딧 앞 제목' 규칙이 맡는다
+    prev = _normalize_line(lines[idx - 1])
+    if prev and not _SPACER_RE.fullmatch(prev):
+        return False
+    if idx + 1 >= len(lines):
+        return False
+    nxt, _ = _fix_lookalike_separator(_normalize_line(lines[idx + 1]))
+    return bool(nxt) and _split_role(nxt) is not None
 
 
 def _next_line_is_ordinal(lines: list[str], idx: int) -> bool:

@@ -1763,3 +1763,130 @@ def test_source_view_overlays_detections_of_the_current_cut(qapp, win):
     win.transport.view_btn.setChecked(True)
     pump(qapp, 300)
     assert win.preview.debug_dets[1] == []  # 출력 보기에서는 숨김
+
+
+def test_space_plays_after_editing_the_title_and_clicking_elsewhere(qapp, win):
+    """제목 입력칸을 고친 뒤 미리보기/타임라인을 누르고 Space 를 누르면 글자가 아니라 재생이어야 한다."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    win.set_tab("story")
+    pump(qapp, 50)
+    from ics.ui.overlay_editor import OverlayEditor
+
+    ov = win.findChildren(OverlayEditor)[0]
+    for target in (win.preview, win.timeline):
+        win.playback.pause()
+        ov.text.setFocus()
+        pump(qapp, 20)
+        QTest.keyClicks(ov.text, "ABC")
+        before = ov.text.text()
+        QTest.mousePress(target, Qt.MouseButton.LeftButton, pos=target.rect().center())
+        QTest.mouseRelease(target, Qt.MouseButton.LeftButton, pos=target.rect().center())
+        pump(qapp, 20)
+        assert not ov.text.hasFocus()
+        QTest.keyClick(qapp.focusWidget() or win, Qt.Key.Key_Space)
+        pump(qapp, 30)
+        assert ov.text.text() == before  # 공백이 글자로 들어가지 않음
+        assert win.playback.playing
+        win.playback.pause()
+    # Esc / Enter 로도 입력칸에서 빠져나온다
+    ov.text.setFocus()
+    pump(qapp, 20)
+    QTest.keyClick(ov.text, Qt.Key.Key_Escape)
+    assert not ov.text.hasFocus()
+    ov.text.setFocus()
+    pump(qapp, 20)
+    QTest.keyClick(ov.text, Qt.Key.Key_Return)
+    assert not ov.text.hasFocus()
+
+
+def test_section_help_tooltip_does_not_crash(qapp):
+    """묶음 제목의 '?' 위에서 도움말이 뜰 때 오류가 나지 않는다 (QHelpEvent 에는 position() 이 없음)."""
+    from PySide6.QtCore import QEvent, QPoint
+    from PySide6.QtGui import QHelpEvent
+
+    from ics.ui.widgets import Section
+
+    s = Section("제목", None, None, help_text="도움말")
+    s.resize(300, 40)
+    head = s.head
+    r = head._help_rect()
+    for p in (QPoint(int(r.center().x()), int(r.center().y())), QPoint(2, 2)):
+        ev = QHelpEvent(QEvent.Type.ToolTip, p, head.mapToGlobal(p))
+        assert head.event(ev) is True
+
+
+def test_replace_master_keeps_edits_and_reopens(qapp, win, prores_2398, h264_2997, tmp_path, monkeypatch):
+    """··· > 마스터링 영상 교체: 차이를 보여 주고, 교체하면 경로만 바꿔 다시 열기를 요청한다 (컷/구간은 그대로)."""
+    import shutil
+
+    from PySide6.QtWidgets import QMenu, QMessageBox
+
+    acts = [a.text() for a in win._topbar_frame.findChildren(QMenu)[0].actions()]
+    assert "마스터링 영상 교체…" in acts
+    same = tmp_path / "same_master.mov"
+    shutil.copy(prores_2398, same)
+    shown: list[str] = []
+
+    def fake_exec(box):
+        shown.append(box.informativeText())
+        for b in box.buttons():
+            if b.text() == "교체":
+                b.click()
+        return 0
+
+    monkeypatch.setattr(QMessageBox, "exec", fake_exec)
+    reopened = []
+    win.requestReopen.connect(lambda: reopened.append(True))
+    cuts_before = list(win.project.state.cuts)
+    win.replace_master(str(same))
+    pump(qapp, 100)
+    assert reopened and win.project.rec.master_path == str(same)
+    assert "그대로 맞습니다" in shown[0]
+    assert win.project.state.cuts == cuts_before
+    # FPS 가 다른 파일은 어긋남을 경고한다
+    shown.clear()
+    win.replace_master(str(h264_2997))
+    assert "FPS 가 다릅니다" in shown[0]
+
+
+def test_app_reopens_the_project_on_the_new_master(qapp, prores_2398, tmp_path, monkeypatch):
+    """교체를 누르면 저장 후 닫고, 원본 좌표의 인물 검출 결과를 지운 뒤 새 영상으로 다시 연다."""
+    import shutil
+
+    from PySide6.QtWidgets import QMessageBox
+
+    from ics import paths
+    from ics.app import App
+
+    monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: 0))
+    app = App()
+    rec = app.library.create("REPLACE", "A", "T", str(prores_2398), str(tmp_path / "out"))
+    app.open_record(rec)
+    pump(qapp, 300)
+    w1 = app.window
+    assert w1 is not None
+    w1.project.state.cuts = list(w1.project.state.cuts)
+    dets = paths.cache_dir(rec.id) / "reframe_dets.json"
+    dets.write_text("{}", encoding="utf-8")
+    new = tmp_path / "remaster.mov"
+    shutil.copy(prores_2398, new)
+
+    def fake_exec(box):
+        for b in box.buttons():
+            if b.text() == "교체":
+                b.click()
+        return 0
+
+    monkeypatch.setattr(QMessageBox, "exec", fake_exec)
+    w1.replace_master(str(new))
+    pump(qapp, 800)
+    w2 = app.window
+    assert w2 is not None and w2 is not w1
+    assert w2.project.rec.master_path == str(new) and w2.project.media.path == str(new)
+    assert app.library.get(rec.id).master_path == str(new)
+    assert not dets.exists()
+    app._switching = True
+    w2.close()
+    pump(qapp, 200)

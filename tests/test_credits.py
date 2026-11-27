@@ -176,10 +176,74 @@ def test_role_and_is_unified_to_ampersand_with_spaces():
     for raw, role in (
         ("Beauty and Cleanup Supervisor | A B", "Beauty & Cleanup Supervisor"),
         ("Beauty & Cleanup Studio | DIAP", "Beauty & Cleanup Studio"),
-        ("Hair&Make up for Casting | JISOO CHOI", "Hair & Make up for Casting"),
+        ("Hair&Make up for Casting | JISOO CHOI", "Hair & Make Up for Casting"),
         ("R&D | A B", "R&D"),
     ):
         r = parse(raw)[0]
         assert r.status == "ok" and r.role == role and r.text.startswith(role + " | "), raw
     # 이름 쪽의 and/& 는 바꾸지 않는다
     assert parse("Studio | Smith and Sons")[0].people[0].name in ("Smith and Sons", "Smith")
+
+
+# ---- 묶음 구분 줄('_')과 묶음 제목 (실제 크레딧: TONE AEND MANOR 제작 MV) ----
+REAL_UNDERSCORE = """Director | KIM HYUNSOO @hyunxu_1ll7
+1st Assistant Director | LEE JUEHYUNG, JEONG JAEHOON
+2nd Assistant Director | LEE YESEUL
+Production | TONE AEND MANOR @toneaendmanor
+_
+Director of Photography | SEO GIUNG [Line of Sight] @seogiung_dp
+Focus Puller | LEE SEUNG JONG
+2nd | CHA JUN SUNG
+DIT | YANG HYUK JAE
+3rd | LEE DO HOON
+_
+Gaffer | PARK BYUNGJU @b.think_light
+Lighting Assistant | JEONG WOOHYEONG, CHOI HOJUN, HAM JEONG PYO, LEE GYUNGMAN, EUN SEUNGSU, SON JIWON
+_
+PRODUCTION DESIGN | RAMI
+Art director | JIWON KIM
+Art team | HYUNJOON SHIM, YUJEONG LEE, SEULGI LEE
+_
+Production Assistant | YANG MIN GEOL @realize_erik
+Crew | YUN DAEYOUNG, OH GWANGMIN
+_
+Post Production
+Producer | KIM HYUNSOO
+Edit | KIM HYUNSOO
+_
+D.I | CAPRA @capra.official.colour
+_
+Beauty & Cleanup Artist / Lead | JUNG YEON JAE @xxeonzae [UNSURFACEWORKS]
+Beauty | DIAP @digital_apgujeong
+Cleanup | ROTOVERSE STUDIO @rotoversestudio
+"""
+
+
+def test_underscore_spacers_and_group_titles_need_no_review():
+    rows = parse(REAL_UNDERSCORE)
+    assert C.count_review(rows) == 0
+    lines = C.rows_to_lines(rows)
+    assert lines.count("_") == 7  # 묶음 구분 줄은 그대로 (인스타그램은 빈 줄을 지운다)
+    assert "Post Production" in lines  # '_' 다음, 역할 줄 앞의 짧은 줄은 묶음 제목
+    assert "Art Team | HYUNJOON SHIM, YUJEONG LEE, SEULGI LEE" in lines  # 역할 대소문자를 사전 역할과 맞춤
+    assert "PRODUCTION DESIGN | RAMI" in lines and "D.I | CAPRA (@capra.official.colour)" in lines
+    assert "Beauty & Cleanup Artist / Lead | JUNG YEON JAE [UNSURFACEWORKS] (@xxeonzae)" in lines
+    assert lines[0] == "Director | KIM HYUNSOO (@hyunxu_1ll7)" and lines[-1].startswith("Cleanup | ROTOVERSE")
+    # 같은 역할이라도 '_' 로 나뉜 묶음끼리는 합치지 않는다
+    assert lines.count("Producer | KIM HYUNSOO") == 1 and "Edit | KIM HYUNSOO" in lines
+
+
+def test_spacer_lines_are_not_doubled_or_left_at_the_edges():
+    rows = parse("_\nDirector | A\n_\n.\nEditor | B\n_")
+    assert C.rows_to_lines(rows) == ["Director | A", "_", "Editor | B"]
+
+
+def test_caption_and_comments_do_not_start_or_end_with_a_spacer():
+    from ics.core.caption import split_caption
+
+    lines = C.rows_to_lines(parse(REAL_UNDERSCORE))
+    res = split_caption("본문", lines, limit=300)
+    assert res.comments
+    for part in [res.caption, *res.comments]:
+        rows = part.split("\n")
+        assert rows[0].strip() != "_" and rows[-1].strip() != "_"

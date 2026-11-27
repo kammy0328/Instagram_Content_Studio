@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import os
 import time
 from contextlib import contextmanager
 from fractions import Fraction
@@ -66,6 +67,13 @@ class Project:
             info = payload.get("info", {})
             for k in ("name", "artist", "title", "master_path", "output_dir"):
                 if k in info:
+                    if (
+                        k == "master_path"
+                        and self.rec.master_path
+                        and os.path.isfile(self.rec.master_path)
+                        and not os.path.isfile(info[k] or "")
+                    ):
+                        continue  # 다시 연결한 경로(목록 기록)를 저장본의 끊긴 옛 경로로 되돌리지 않는다
                     setattr(self.rec, k, info[k])
             self.state = EditState.from_dict(payload.get("state", {}))
             self._link_cut_x()

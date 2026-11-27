@@ -97,7 +97,7 @@ class App:
             MediaReportDialog(dlg.info).exec()
         self.open_record(rec)
 
-    def open_record(self, rec: ProjectRecord) -> None:
+    def open_record(self, rec: ProjectRecord, replaced: bool = False) -> None:
         # 원본 연결 확인 / 재연결
         while not os.path.isfile(rec.master_path):
             m = QMessageBox.question(
@@ -161,6 +161,7 @@ class App:
         win = EditorWindow(project, self.settings, self.iddict, cache, progress=prog.pulse)
         self.window = win
         win.requestProjects.connect(self._back_to_projects)
+        win.requestReopen.connect(self._reopen_after_master_change)
         win.closed.connect(self._on_window_closed)
         win.show()
         self.qt.processEvents()
@@ -180,10 +181,14 @@ class App:
             )
         if res["skipped"] and res.get("db_recovered") is None:
             msgs.append(f"손상된 저장본 {res['skipped']}개를 건너뛰고 이전 정상 저장본으로 복구했습니다.")
-        if summ and (
-            abs(summ.get("duration", 0) - info.duration) > 0.05
-            or summ.get("w") != info.width
-            or summ.get("fps") != info.fps
+        if (
+            summ
+            and not replaced  # 마스터를 직접 바꾼 경우는 바꾸기 전에 차이를 이미 보여 줬다
+            and (
+                abs(summ.get("duration", 0) - info.duration) > 0.05
+                or summ.get("w") != info.width
+                or summ.get("fps") != info.fps
+            )
         ):
             msgs.append("마스터링 파일이 이전과 다릅니다 (길이/해상도/FPS). 컷·구간 위치를 확인하세요.")
         for w in info.warnings:
@@ -206,6 +211,24 @@ class App:
         self.window = None
         w.deleteLater()
         QTimer.singleShot(0, self.show_projects)
+
+    def _reopen_after_master_change(self) -> None:
+        """마스터링 영상 교체: 저장하고 닫은 뒤, 원본 기준 분석 결과(인물 검출)를 지우고 새 영상으로 다시 연다."""
+        w = self.window
+        if w is None:
+            return
+        rec = w.project.rec
+        self._switching = True
+        if not w.close():
+            self._switching = False
+            return
+        self.window = None
+        w.deleteLater()
+        try:  # 인물 검출 결과는 원본 화면 좌표라 새 영상에 맞지 않는다 (프레임 인덱스/썸네일은 파일별로 따로 저장)
+            (paths.cache_dir(rec.id) / "reframe_dets.json").unlink(missing_ok=True)
+        except OSError:
+            pass
+        QTimer.singleShot(0, lambda: self.open_record(rec, replaced=True))
 
 
 def main(argv: list[str] | None = None) -> int:
