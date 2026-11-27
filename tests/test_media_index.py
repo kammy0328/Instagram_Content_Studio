@@ -79,3 +79,35 @@ def test_media_info_dict_roundtrip(h264_2997):
     info = analyze(str(h264_2997))
     again = media.MediaInfo.from_dict(info.to_dict())
     assert again.fps_frac == info.fps_frac and [i.code for i in again.issues] == [i.code for i in info.issues]
+
+
+def test_cfr_master_is_indexed_without_reading_the_whole_file(prores_2398, h264_2997, monkeypatch):
+    """CFR 파일은 앞/끝 패킷만 읽어 인덱스를 만든다. NAS 의 15GB 4K ProRes 마스터에서 전체 패킷을 읽느라
+    '프레임 인덱스 구성 중' 에서 몇 분씩 멈춘 것처럼 보이던 문제."""
+
+    def no_full_scan(*_a, **_k):
+        raise AssertionError("CFR 파일에서 전체 패킷을 읽음")
+
+    expected = {}
+    for p in (prores_2398, h264_2997):
+        expected[p] = frameindex.build_frame_index(analyze(str(p)))  # 비교용 (이때는 어느 쪽이든)
+    monkeypatch.setattr(frameindex, "_scan_ticks", no_full_scan)
+    for p, ref in expected.items():
+        idx = frameindex.build_frame_index(analyze(str(p)))
+        assert idx.is_cfr and idx.count == ref.count
+        assert all(idx.time_of(n) == ref.time_of(n) for n in (0, 1, ref.count // 2, ref.count - 1))
+
+
+def test_vfr_still_reads_every_packet_and_reports_progress(vfr_h264, monkeypatch):
+    info = analyze(str(vfr_h264))
+    msgs = []
+    idx = frameindex.build_frame_index(info, progress=msgs.append)
+    assert idx.vfr and idx.count == 80
+    assert msgs and msgs[0].startswith("프레임 인덱스 구성 중")
+
+
+def test_fast_index_rejects_a_frame_count_that_does_not_match(prores_2398):
+    info = analyze(str(prores_2398))
+    info.nb_frames += 3  # 컨테이너 프레임 수와 끝 패킷 번호가 다르면 빠른 길을 쓰지 않는다
+    tb = frameindex.parse_rational(info.time_base)
+    assert frameindex._fast_cfr_index(info, tb, Fraction(0)) is None
