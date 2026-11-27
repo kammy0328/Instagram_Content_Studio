@@ -112,7 +112,13 @@ class OverlayEditor(QGroupBox):
         outer = v
         # ---- 제목
         self.sec_title = Section(
-            "제목", "overlay_section_title", settings, help_text="비워 두면 프로젝트의 아티스트 / 곡 제목을 씁니다."
+            "제목",
+            "overlay_section_title",
+            settings,
+            help_text=(
+                "비워 두면 프로젝트의 아티스트 / 곡 제목을 씁니다.\n"
+                "한 줄에 안 들어가면 두 줄로 나눕니다 (괄호 부제 앞에서 먼저). '|' 를 넣으면 그 자리에서 나눕니다."
+            ),
         )
         outer.addWidget(self.sec_title)
         v = self.sec_title.lay
@@ -124,7 +130,7 @@ class OverlayEditor(QGroupBox):
         self.f_artist.textEdited.connect(self._edited_slider)
         v.addWidget(self.f_artist)
         self.text = QLineEdit()
-        self.text.setPlaceholderText("제목 (비우면 프로젝트 곡 제목)")
+        self.text.setPlaceholderText("제목 (비우면 프로젝트 곡 제목, | 로 줄 나눔)")
         self.text.textEdited.connect(self._edited_slider)
         v.addWidget(self.text)
         self.upper = QCheckBox("항상 대문자")

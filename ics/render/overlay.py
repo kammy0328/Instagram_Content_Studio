@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import re
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -98,6 +99,57 @@ def fill_lines(ov: StoryOverlay, title: str, artist: str) -> tuple[str, str]:
     return a, t
 
 
+FILL_MARGIN = 72  # 꽉 참 화면 제목의 왼쪽/오른쪽 여백 (1080 폭 기준)
+FILL_LINE_STEP = 52  # 꽉 참 화면 제목 줄 간격 (1080 폭 기준)
+FILL_TOO_LONG = "제목이 두 줄로도 화면에 들어가지 않습니다. 제목을 줄이거나 '|' 로 직접 나눠 주세요."
+# 부제 앞에서 먼저 나눈다: 'HEARTS ON FIRE (PERFORMANCE VER.)' -> 'HEARTS ON FIRE' / '(PERFORMANCE VER.)'
+_SUBTITLE_AT = re.compile(r"\s+(?=[(\[]|(?:feat|ft|with)\.?\s)", re.I)
+
+
+def wrap_two_lines(text: str, width, max_w: float) -> tuple[list[str], bool]:
+    """한 줄에 안 들어가는 제목을 두 줄로 나눈다. width(s) 는 글자 폭. 반환: (줄 목록, 화면에 다 들어가는지).
+    1) '|' 가 있으면 그 자리에서 (사용자가 직접 나눔)  2) 부제 '(…)' '[…]' 'feat.' 앞  3) 두 줄 길이가 가장 비슷한 단어 사이.
+    두 줄로도 안 들어가면 가장 고른 두 줄과 False (말줄임으로 자르지 않는다: 잘린 제목이 나가면 안 된다)."""
+    text = re.sub(r"\s+", " ", text).strip()
+    if "|" in text:
+        parts = [s.strip() for s in text.split("|") if s.strip()]
+        lines = parts[:1] + ([" ".join(parts[1:])] if len(parts) > 1 else [])
+        return lines, all(width(s) <= max_w for s in lines)
+    if not text or width(text) <= max_w:
+        return ([text] if text else []), True
+    for m in _SUBTITLE_AT.finditer(text):
+        a, b = text[: m.start()].strip(), text[m.end() :].strip()
+        if a and b and width(a) <= max_w and width(b) <= max_w:
+            return [a, b], True
+    words = text.split(" ")
+    best: tuple[float, list[str]] | None = None
+    for i in range(1, len(words)):
+        a, b = " ".join(words[:i]), " ".join(words[i:])
+        score = max(width(a), width(b))
+        if best is None or score < best[0]:
+            best = (score, [a, b])
+    if best is None:  # 띄어쓰기 없는 한 단어
+        return [text], False
+    return best[1], best[0] <= max_w
+
+
+def fill_text_lines(ov: StoryOverlay, W: int, title: str, artist: str) -> tuple[list[tuple[str, bool]], bool]:
+    """꽉 참 화면 좌상단 글자 줄: [(줄, 굵게)], 모두 화면 안에 들어가는지."""
+    s = W / 1080.0
+    l1, l2 = fill_lines(ov, title, artist)
+    max_w = W - 2 * FILL_MARGIN * s
+    out: list[tuple[str, bool]] = []
+    fits = True
+    for text, bold in ((l1, True), (l2, False)):
+        if not text:
+            continue
+        fm = QFontMetricsF(_fill_font("Syncopate", 40 * s, bold, 2 * s))
+        lines, ok = wrap_two_lines(text, fm.horizontalAdvance, max_w)
+        fits = fits and ok
+        out.extend((ln, bold) for ln in lines)
+    return out, fits
+
+
 def _scrim_gradient(h: float, top: bool, strength: float) -> QLinearGradient:
     """위/아래 어두운 그라데이션 (시안과 같은 곡선: 위 0~26% 구간 최대 55%, 아래 62~92% 구간 최대 90%)."""
     g = QLinearGradient(0, 0, 0, h)
@@ -147,15 +199,13 @@ def render_fill(ov: StoryOverlay, geo: Geometry, title: str, artist: str) -> QIm
     p.setOpacity(ov.opacity / 100.0)
     white = QColor(255, 255, 255)
     p.setPen(white)
-    x = 72 * s
-    y1 = H * ov.title_y / 1000.0
+    x = FILL_MARGIN * s
+    y = H * ov.title_y / 1000.0
     if show_text:
-        if l1:
-            p.setFont(_fill_font("Syncopate", 40 * s, True, 2 * s))
-            p.drawText(QPointF(x, y1), l1)
-        if l2:
-            p.setFont(_fill_font("Syncopate", 40 * s, False, 2 * s))
-            p.drawText(QPointF(x, y1 + (52 * s if l1 else 0)), l2)
+        for line, bold in fill_text_lines(ov, W, title, artist)[0]:  # 길면 두 줄로
+            p.setFont(_fill_font("Syncopate", 40 * s, bold, 2 * s))
+            p.drawText(QPointF(x, y), line)
+            y += FILL_LINE_STEP * s
     if show_logo:
         w = min(W * 0.9, W * ov.logo_size / 100.0)
         h = w * logo.height() / logo.width()
@@ -171,6 +221,13 @@ def render_fill(ov: StoryOverlay, geo: Geometry, title: str, artist: str) -> QIm
             p.drawText(QPointF((W - tw) / 2, cy - 0.041 * H), cap)
     p.end()
     return img
+
+
+def _fill_warnings(ov: StoryOverlay, geo: Geometry, title: str, artist: str) -> list[str]:
+    if not ov.text_on:
+        return []
+    ensure_fonts()
+    return [] if fill_text_lines(ov, geo.canvas_w, title, artist)[1] else [FILL_TOO_LONG]
 
 
 def _logo_size(path: str) -> tuple[int, int] | None:
@@ -199,7 +256,9 @@ def _fit_text(text: str, family: str, bold: bool, px: float, box_w: float, box_h
 def layout(ov: StoryOverlay, geo: Geometry, title: str, artist: str = "") -> OverlayResult:
     ensure_fonts()
     if geo.mode == "fill":  # 영상 위에 직접 올리는 레이아웃은 여백 계산이 필요 없다
-        return OverlayResult([Placed("fill", QRectF(0, 0, geo.canvas_w, geo.canvas_h))], [])
+        return OverlayResult(
+            [Placed("fill", QRectF(0, 0, geo.canvas_w, geo.canvas_h))], _fill_warnings(ov, geo, title, artist)
+        )
     items: list[Placed] = []
     warns: list[str] = []
     scale = geo.canvas_w / 1080.0
@@ -208,7 +267,7 @@ def layout(ov: StoryOverlay, geo: Geometry, title: str, artist: str = "") -> Ove
     want = []
     if ov.logo_on and ov.logo_path:
         want.append(("logo", ov.logo_pos))
-    text = (ov.text or title or "").strip()
+    text = re.sub(r"\s*\|\s*", "\n", (ov.text or title or "").strip())  # '|' 는 직접 줄 나눔
     if ov.text_on and text:
         want.append(("text", ov.text_pos))
     for pos in ("top", "bottom"):
@@ -252,7 +311,10 @@ def render(ov: StoryOverlay, geo: Geometry, title: str, artist: str = "") -> tup
     """캔버스 크기의 투명 ARGB 이미지 (그릴 것이 없으면 None)."""
     if geo.mode == "fill":
         img = render_fill(ov, geo, title, artist)
-        return img, OverlayResult([] if img is None else [Placed("fill", QRectF(0, 0, geo.canvas_w, geo.canvas_h))], [])
+        return img, OverlayResult(
+            [] if img is None else [Placed("fill", QRectF(0, 0, geo.canvas_w, geo.canvas_h))],
+            _fill_warnings(ov, geo, title, artist),
+        )
     res = layout(ov, geo, title)
     if res.empty:
         return None, res

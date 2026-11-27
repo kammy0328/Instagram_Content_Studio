@@ -104,6 +104,98 @@ def _cache_key(info: MediaInfo) -> str:
     return h
 
 
+def _parse_ticks(lines) -> list[int]:
+    out: list[int] = []
+    for ln in lines:
+        parts = ln.strip().split(",")
+        if not parts or not parts[0] or parts[0] == "N/A":
+            continue
+        if len(parts) > 1 and "D" in parts[1]:
+            continue  # 버리는 패킷(편집 목록 앞부분 등)
+        try:
+            out.append(int(parts[0]))
+        except ValueError:
+            continue
+    return out
+
+
+def _probe_ticks(path: str, intervals: str) -> list[int] | None:
+    """영상의 일부 패킷 PTS (read_intervals 로 앞/끝만 읽음). 실패하면 None."""
+    p = ffbin.run(
+        [ffbin.ffprobe(), "-v", "error", "-select_streams", "v:0", "-read_intervals", intervals,
+         "-show_entries", "packet=pts,flags", "-of", "csv=p=0", path],
+        timeout=120,
+    )  # fmt: skip
+    if p.returncode != 0:
+        return None
+    return _parse_ticks(p.stdout.decode("utf-8", "replace").splitlines())
+
+
+FAST_HEAD = 12  # 앞에서 읽는 패킷 수 (B 프레임 순서가 뒤섞여도 첫 표시 시각을 찾을 만큼)
+FAST_TAIL_SEC = 2.0  # 끝에서 읽는 길이
+
+
+def _fast_cfr_index(info: MediaInfo, tb: Fraction, fmt_start: Fraction) -> FrameIndex | None:
+    """CFR 로 보이는 파일은 앞/끝 패킷만 읽어 확인한다 (파일 전체를 읽지 않음).
+    NAS 의 수십 GB ProRes 마스터는 전체 패킷을 읽으면 몇 분씩 걸렸다 ('프레임 인덱스 구성 중' 에서 멈춘 것처럼 보임).
+    앞의 첫 표시 시각과 끝 패킷들이 '처음 + n/fps' 격자에 정확히 맞고, 마지막 프레임 번호가 컨테이너의 프레임 수와
+    같을 때만 쓴다. 하나라도 어긋나면 None (전체를 읽는 정확한 방법으로)."""
+    fps = info.fps_frac
+    n = info.nb_frames
+    if info.is_vfr or n < 2 or fps <= 0 or info.duration <= 0:
+        return None
+    head = _probe_ticks(info.path, f"%+#{FAST_HEAD}")
+    start = max(0.0, info.start_time) + max(0.0, info.duration - FAST_TAIL_SEC)  # read_intervals 는 스트림 시각 기준
+    tail = _probe_ticks(info.path, f"{start:.3f}%")
+    if not head or not tail:
+        return None
+    to_t = [Fraction(x) * tb - fmt_start for x in sorted(set(head) | set(tail))]
+    origin = Fraction(min(head)) * tb - fmt_start
+    tol = Fraction(1, 10)
+    ks = []
+    for tt in to_t:
+        k = (tt - origin) * fps
+        r = round(k)
+        if abs(k - r) > tol:
+            return None  # 격자에서 벗어난 시각: VFR 이거나 시간 기록이 고르지 않음
+        ks.append(int(r))
+    tail_ks = sorted(k for k in ks if k >= ks[-1] - 8)
+    if ks[-1] != n - 1 or any(b - a != 1 for a, b in zip(tail_ks, tail_ks[1:])):
+        return None  # 끝 프레임 번호가 프레임 수와 다르거나, 끝 부분에 빠진 프레임이 있음
+    return FrameIndex(n, fps, origin)
+
+
+def _scan_ticks(info: MediaInfo, progress: Callable[[str], None] | None) -> list[int]:
+    """모든 패킷 PTS 를 읽는다 (파일 전체를 읽음). 읽는 동안 진행률을 알린다."""
+    import subprocess
+    import tempfile
+    import time
+
+    cmd = [ffbin.ffprobe(), "-v", "error", "-select_streams", "v:0", "-show_entries", "packet=pts,flags",
+           "-of", "csv=p=0", info.path]  # fmt: skip
+    tb = parse_rational(info.time_base) or Fraction(1, 1000)
+    dur = max(info.duration, 1e-6)
+    ticks: list[int] = []
+    last = 0.0
+    with tempfile.TemporaryFile() as err:
+        proc = ffbin.popen(cmd, stdout=subprocess.PIPE, stderr=err)
+        assert proc.stdout is not None
+        for raw in proc.stdout:
+            got = _parse_ticks([raw.decode("utf-8", "replace")])
+            if got:
+                ticks.extend(got)
+                now = time.monotonic()
+                if progress and now - last > 0.3:
+                    last = now
+                    pct = min(99, int(float(Fraction(got[0]) * tb) / dur * 100))
+                    progress(f"프레임 인덱스 구성 중 {max(0, pct)}%")
+        proc.wait()
+        if proc.returncode != 0:
+            err.seek(0)
+            raise RuntimeError(err.read().decode("utf-8", "replace").strip() or "프레임 인덱스 구성 실패")
+    return ticks
+
+
 def build_frame_index(
     info: MediaInfo, cache_dir: Path | None = None, progress: Callable[[str], None] | None = None
 ) -> FrameIndex:
@@ -119,33 +211,16 @@ def build_frame_index(
     if progress:
         progress("프레임 인덱스 구성 중…")
     tb = parse_rational(info.time_base) or Fraction(1, 1000)
-    p = ffbin.run(
-        [
-            ffbin.ffprobe(),
-            "-v",
-            "error",
-            "-select_streams",
-            "v:0",
-            "-show_entries",
-            "packet=pts,flags",
-            "-of",
-            "csv=p=0",
-            info.path,
-        ]
-    )
-    if p.returncode != 0:
-        raise RuntimeError(p.stderr.decode("utf-8", "replace").strip() or "프레임 인덱스 구성 실패")
-    ticks: list[int] = []
-    for ln in p.stdout.decode("utf-8", "replace").splitlines():
-        parts = ln.strip().split(",")
-        if not parts or not parts[0] or parts[0] == "N/A":
-            continue
-        if len(parts) > 1 and "D" in parts[1]:
-            continue
-        try:
-            ticks.append(int(parts[0]))
-        except ValueError:
-            continue
+    fmt_start = Fraction(info.start_time).limit_denominator(1_000_000)
+    fast = None
+    try:
+        fast = _fast_cfr_index(info, tb, fmt_start)
+    except Exception:  # noqa: BLE001 (빠른 확인이 실패하면 전체를 읽는다)
+        fast = None
+    if fast is not None:
+        _save(fast, cache_file)
+        return fast
+    ticks = _scan_ticks(info, progress)
     ticks.sort()
     if not ticks:
         # 디코딩 기반 대체 경로 (매우 드문 경우)
@@ -153,7 +228,6 @@ def build_frame_index(
         idx = FrameIndex(n, info.fps_frac, Fraction(0))
     else:
         times = [Fraction(t) * tb for t in ticks]
-        fmt_start = Fraction(info.start_time).limit_denominator(1_000_000)
         # 파일 시작 기준(-ss 와 동일 기준)으로 변환
         times = [t - fmt_start for t in times]
         origin = times[0]
@@ -170,11 +244,16 @@ def build_frame_index(
             span = times[-1] - times[0]
             avg = snap_fps(Fraction(len(times) - 1) / span) if span > 0 and len(times) > 1 else fps
             idx = FrameIndex(len(times), avg, origin, times, vfr=True)
-    if cache_file is not None:
-        try:
-            tmp = cache_file.with_suffix(".tmp")
-            tmp.write_text(json.dumps(idx.to_json()), "utf-8")
-            os.replace(tmp, cache_file)
-        except OSError:
-            pass
+    _save(idx, cache_file)
     return idx
+
+
+def _save(idx: FrameIndex, cache_file: Path | None) -> None:
+    if cache_file is None:
+        return
+    try:
+        tmp = cache_file.with_suffix(".tmp")
+        tmp.write_text(json.dumps(idx.to_json()), "utf-8")
+        os.replace(tmp, cache_file)
+    except OSError:
+        pass

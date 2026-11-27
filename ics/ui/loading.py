@@ -43,6 +43,10 @@ class LoadingDialog(QDialog):
         self.repaint()
         QApplication.processEvents()
 
+    def set_step_later(self, text: str) -> None:
+        """다른 스레드에서 불러도 되는 단계 문구 바꾸기 (16ms 마다 다시 그리는 타이머가 반영한다)."""
+        self._step = text
+
     def pulse(self) -> None:
         """무거운 UI 작업 사이에 불러 애니메이션을 한 번 더 그린다 (사용자 입력은 처리하지 않음)."""
         from PySide6.QtCore import QEventLoop

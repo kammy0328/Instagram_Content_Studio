@@ -127,7 +127,7 @@ class App:
                 return
             cache = paths.cache_dir(rec.id)
             prog.set_step("프레임 인덱스 구성 중")
-            index = run_in_thread(build_frame_index, info, cache)
+            index = run_in_thread(build_frame_index, info, cache, prog.set_step_later)
         except Exception as e:  # noqa: BLE001
             prog.close()
             QMessageBox.critical(None, "영상 분석 실패", f"파일을 읽을 수 없습니다.\n{e}")

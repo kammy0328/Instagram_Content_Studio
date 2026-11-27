@@ -351,3 +351,54 @@ def test_new_story_defaults_to_fill_and_old_saves_keep_overlay_off(qapp):
     assert st.story.layout.mode == "fill" and st.story_overlay.logo_on and st.story_overlay.text_on
     old = EditState.from_dict({"story": {"enabled": True, "start": 0, "end": 10}})
     assert not old.story_overlay.logo_on and not old.story_overlay.text_on
+
+
+# ---- 긴 제목: 꽉 참 화면에서 두 줄로 나누기 ----
+def _fill_geo():
+    from ics.core.layout import LayoutParams, compute_geometry
+
+    return compute_geometry(3840, 2160, "916", LayoutParams(mode="fill"))
+
+
+def test_long_fill_title_wraps_to_two_lines_and_prefers_the_subtitle(qapp):
+    from ics.render import overlay
+
+    g = _fill_geo()
+    ov = StoryOverlay(text_on=True, logo_on=False)
+    lines, fits = overlay.fill_text_lines(ov, g.canvas_w, "HEARTS ON FIRE (PERFORMANCE VER.)", "LNGSHOT")
+    assert fits and lines == [("LNGSHOT", True), ("HEARTS ON FIRE", False), ("(PERFORMANCE VER.)", False)]
+    lines, fits = overlay.fill_text_lines(ov, g.canvas_w, "IWALY", "IZNA")  # 짧으면 그대로 한 줄
+    assert fits and lines == [("IZNA", True), ("IWALY", False)]
+    # '|' 는 직접 나눈 자리
+    lines, fits = overlay.fill_text_lines(ov, g.canvas_w, "How It's Done | HUNTR X x 1MILLION Dance Remix", "1M")
+    assert fits and [t for t, _ in lines[1:]] == ["HOW IT'S DONE", "HUNTR X X 1MILLION DANCE REMIX"]
+
+
+def test_word_wrap_is_balanced_and_never_truncates():
+    from ics.render.overlay import wrap_two_lines
+
+    width = len  # 글자 수를 폭으로
+    lines, fits = wrap_two_lines("ONE TWO THREE FOUR FIVE SIX", width, 15)
+    assert fits and lines == ["ONE TWO THREE", "FOUR FIVE SIX"]
+    lines, fits = wrap_two_lines("A" * 40, width, 15)  # 나눌 곳이 없으면 자르지 않고 알린다
+    assert not fits and lines == ["A" * 40]
+    lines, fits = wrap_two_lines("WORD " * 10, width, 15)  # 두 줄로도 안 들어감
+    assert not fits and len(lines) == 2 and " ".join(lines) == ("WORD " * 10).strip()
+
+
+def test_fill_title_that_does_not_fit_is_warned_and_drawn_inside_the_margin(qapp):
+    from PySide6.QtGui import QColor
+
+    from ics.render import overlay
+
+    g = _fill_geo()
+    ov = StoryOverlay(text_on=True, logo_on=False, scrim=0)
+    img, res = overlay.render(ov, g, "I WANNA LIVE A YOUNG FOREVER AND EVER AND EVER", "IZNA")
+    assert not res.warnings  # 두 줄이면 들어간다
+    s = g.canvas_w / 1080
+    right = int(g.canvas_w - overlay.FILL_MARGIN * s) + 4
+    band = range(int(g.canvas_h * ov.title_y / 1000 - 60 * s), int(g.canvas_h * ov.title_y / 1000 + 3 * 52 * s))
+    drawn = [x for x in range(0, g.canvas_w, 2) if any(QColor.fromRgba(img.pixel(x, y)).alpha() > 0 for y in band[::3])]
+    assert drawn and max(drawn) < right  # 글자는 오른쪽 여백 안에서 끝난다
+    res = overlay.layout(ov, g, "SUPERCALIFRAGILISTICEXPIALIDOCIOUSLYLONGTITLEXX", "X")
+    assert res.warnings == [overlay.FILL_TOO_LONG]
