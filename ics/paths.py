@@ -38,11 +38,15 @@ def project_db_path(project_id: str) -> Path:
     return project_dir(project_id) / "project.sqlite"
 
 
+def cache_root() -> Path:
+    """프로젝트별 캐시 폴더들이 있는 곳."""
+    override = os.environ.get("ICS_CACHE_DIR")
+    return Path(override) if override else app_data_dir() / "cache"
+
+
 def cache_dir(project_id: str) -> Path:
     """썸네일/프록시/프레임 인덱스 캐시. 출력 폴더와 완전히 분리."""
-    override = os.environ.get("ICS_CACHE_DIR")
-    base = Path(override) if override else app_data_dir() / "cache"
-    p = base / project_id
+    p = cache_root() / project_id
     p.mkdir(parents=True, exist_ok=True)
     return p
 

@@ -65,7 +65,18 @@ class App:
         QTimer.singleShot(1200, report_last_update)  # 지난 업데이트가 성공/실패했는지 한 번 알려 준다
         self._auto_update = AutoUpdate(self.settings)
         QTimer.singleShot(3000, self._auto_update.start)
-        return self.qt.exec()
+        code = self.qt.exec()
+        self.cleanup()
+        return code
+
+    def cleanup(self) -> None:
+        """닫을 때 쓸모없어진 캐시/임시 파일 정리 (실패해도 종료는 그대로)."""
+        try:
+            from .cleanup import clean_all
+
+            clean_all(self.library, getattr(self, "_current_id", None))
+        except Exception:  # noqa: BLE001
+            pass
 
     def _quit(self) -> None:
         self.qt.quit()
@@ -98,6 +109,7 @@ class App:
         self.open_record(rec)
 
     def open_record(self, rec: ProjectRecord, replaced: bool = False) -> None:
+        self._current_id = rec.id
         # 원본 연결 확인 / 재연결
         while not os.path.isfile(rec.master_path):
             m = QMessageBox.question(
